@@ -1,0 +1,20 @@
+# Core HTTP & Network
+httpx>=0.27.0
+beautifulsoup4>=4.12.0
+
+# Data Validation & Modeling
+pydantic>=2.7.0
+python-dotenv>=1.0.0
+
+# LLM SDK
+google-genai>=0.1.0
+
+# Export Formats
+openpyxl>=3.1.0
+
+# CLI & Utilities
+rich>=13.7.0
+
+# Testing
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
