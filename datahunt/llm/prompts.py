@@ -258,6 +258,52 @@ Generate a structured, strategic Markdown Intelligence Report adhering to this s
 """
 
 
+DIRECT_ANSWER_SYNTHESIS_TEMPLATE = """You are the Principal Research Analyst for DataHunt.
+Synthesize a comprehensive, authoritative, and direct answer to the user's research query from the verified sources and evidence below.
+
+<user_query>
+{query_text}
+</user_query>
+
+<run_metadata>
+{run_metadata_json}
+</run_metadata>
+
+<verified_records>
+{verified_records_json}
+</verified_records>
+
+<source_document_excerpts>
+{source_texts}
+</source_document_excerpts>
+
+Generate a structured, evidence-backed Markdown response answering the user's prompt directly:
+
+# 🧭 Research Intelligence: {query_text}
+
+## 1. Executive Answer & Overview
+- Clear, direct, high-level answer to the user's query upfront.
+- Key takeaways and current state.
+
+## 2. Core Pathways / Steps / Mechanisms
+- Comprehensive, step-by-step breakdown or available pathways/options.
+- Explanation of how each pathway works in practice.
+
+## 3. Requirements, Qualifications & Costs
+- Concrete prerequisites, eligibility, physical/technical qualifications, and cost estimates (if applicable).
+
+## 4. Key Entities, Providers & Programs
+- Verified organizations, programs, vehicles, or platforms relevant to this topic.
+- Structured Markdown summary table comparing the options/pathways.
+
+## 5. Summary & Key Recommendations
+- Strategic summary and practical next steps for the user.
+
+## 6. Verified Sources & Citation Index
+- Consulted source URLs and reference materials with direct provenance.
+"""
+
+
 REFUSAL_SAFETY_TEMPLATE = """I can help with public, permitted research and structured extraction, but I cannot help bypass access controls, defeat CAPTCHAs, collect credentials, harvest personal contact details in bulk, or send unsolicited messages.
 
 I can narrow this to public business information, cite the source for each field, and return a bounded CSV/Excel/JSON export.

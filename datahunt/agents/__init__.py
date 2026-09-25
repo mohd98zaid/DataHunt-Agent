@@ -14,6 +14,7 @@ from datahunt.agents.company_research import CompanyResearchAgent, CompanyProfil
 from datahunt.agents.interview_prep import InterviewPrepAgent, InterviewPrepPack, InterviewQuestion
 from datahunt.agents.learning_engine import LearningEngine
 from datahunt.agents.job_monitor import JobMonitor
+from datahunt.agents.intent_router import IntentRouter
 
 __all__ = [
     "QueryUnderstandingAgent", "JobSearchRequest", "ClarificationQuestion",
@@ -27,4 +28,5 @@ __all__ = [
     "InterviewPrepAgent", "InterviewPrepPack", "InterviewQuestion",
     "LearningEngine",
     "JobMonitor",
+    "IntentRouter",
 ]

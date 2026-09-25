@@ -3,6 +3,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 import uuid
+from datahunt.models.intent import ResearchIntentSpec
 
 class TaskStatus(str, Enum):
     ACCEPTED = "accepted"
@@ -40,12 +41,14 @@ class ResearchSpec(BaseModel):
     assumptions: List[str] = Field(default_factory=list)
     clarifying_questions: List[str] = Field(default_factory=list)
     refusal_reason: Optional[str] = None
+    intent_spec: Optional[ResearchIntentSpec] = None
 
 class ResearchTask(BaseModel):
     id: str = Field(default_factory=lambda: f"task_{uuid.uuid4().hex[:12]}")
     request_text: str
     normalized_spec: ResearchSpec
     agent_mode: str = "auto"
+    intent_spec: Optional[ResearchIntentSpec] = None
     policy_version: str = "v1.0"
     prompt_version: str = "planner.v1"
     requested_output_format: str = "json"

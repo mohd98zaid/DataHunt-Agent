@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 from datahunt.errors import DataHuntError, ErrorCode
 from datahunt.logger import logger
 from datahunt.models import ExtractedRecord, RecordEvidence, ResearchSpec, SourceDocument
+from datahunt.models.intent import ResearchIntent, ResearchOutputType
 from datahunt.tools.base import ToolResult
 from datahunt.llm.gemini_client import GeminiClient
 
@@ -824,11 +825,13 @@ def extract_technical_knowledge_records(
             sections.append((first_line, p))
 
     noise_words = (
-        "cookie", "privacy policy", "terms of use", "sign in", "subscribe", 
+        "cookie", "privacy policy", "terms of use", "terms of service", "terms", "sign in", "subscribe", 
         "all rights reserved", "navigation", "footer", "menu", "search", 
-        "skip to content", "agree & join", "user agreement", "log in", "sign up",
-        "advertisement", "newsletter", "linkedin", "share this", "leave a reply",
-        "table of contents", "author", "related articles", "categories", "trending posts"
+        "skip to content", "skip navigation", "agree & join", "user agreement", "log in", "sign up",
+        "advertisement", "newsletter", "linkedin", "share this", "share on", "leave a reply",
+        "table of contents", "author", "related articles", "related posts", "categories", "trending posts",
+        "structured page metadata", "end page metadata", "page metadata", "metadata", "breadcrumb",
+        "sidebar", "comments", "copyright", "back to top"
     )
     marketing_words = (
         "course", "curriculum", "certification", "enroll", "enrollment", "discount", 
@@ -864,11 +867,14 @@ def extract_technical_knowledge_records(
             continue
         if clean_name.lower().endswith((" for", " with", " in", " of", " to", " and", " is", " are")):
             continue
+        if clean_name.lower() in ("leo", "xl", "metadata"):
+            continue
 
         meta_labels = (
             "last indexed", "last updated", "last modified", "active community",
             "published on", "posted on", "written by", "read time", "table of contents",
-            "author", "share on", "related articles", "quick links"
+            "author", "share on", "related articles", "quick links", "structured page metadata",
+            "end page metadata", "page metadata", "metadata", "navigation", "footer", "header"
         )
         if clean_name.lower() in meta_labels or any(clean_name.lower().startswith(ml) for ml in meta_labels):
             continue
@@ -999,7 +1005,9 @@ def extract_market_competitor_records(
         "cookie", "privacy", "terms", "sign in", "login", "subscribe",
         "footer", "header", "navigation", "search", "table of contents",
         "faq", "frequently asked", "resources", "related posts", "about us",
-        "contact us", "author", "categories", "user agreement", "disclaimer"
+        "contact us", "author", "categories", "user agreement", "disclaimer",
+        "structured page metadata", "end page metadata", "page metadata", "metadata",
+        "breadcrumb", "sidebar", "advertisement", "share on", "share this", "comments"
     )
 
     found_candidates = []
@@ -1010,7 +1018,9 @@ def extract_market_competitor_records(
         if len(heading) < 3 or len(heading) > 50:
             continue
         clean_name = re.sub(r"^[0-9\.\-\s]+", "", heading).strip()
-        if not clean_name:
+        if not clean_name or clean_name.lower() in ("leo", "xl", "metadata"):
+            continue
+        if any(clean_name.lower().startswith(nh) for nh in noise_headers):
             continue
         found_candidates.append((clean_name, body))
 
@@ -1107,6 +1117,117 @@ def extract_market_competitor_records(
 
     return records
 
+def extract_answer_knowledge_records(
+    doc_text: str,
+    doc_metadata: Dict[str, Any],
+    topic: str = "",
+    intent_spec: Optional[Any] = None
+) -> List[Dict[str, Any]]:
+    """
+    Deterministic knowledge extractor for general research questions (HOW_TO, EXPLANATION, FACTUAL_RESEARCH, COMPARISON).
+    Extracts substantive factual answer sections, steps, requirements, options, and findings.
+    Filters out metadata tags, navigation noise, and boilerplate.
+    """
+    if not doc_text:
+        return []
+
+    doc_url = doc_metadata.get("url") or ""
+    doc_title = doc_metadata.get("title") or ""
+    doc_domain = doc_metadata.get("domain") or ""
+
+    noise_headers = (
+        "cookie", "privacy", "terms", "sign in", "login", "subscribe",
+        "footer", "header", "navigation", "search", "table of contents",
+        "faq", "frequently asked", "resources", "related posts", "about us",
+        "contact us", "author", "categories", "user agreement", "disclaimer",
+        "structured page metadata", "end page metadata", "page metadata", "metadata",
+        "advertisement", "share on", "share this", "comments", "leave a reply",
+        "breadcrumb", "sidebar", "copyright", "back to top"
+    )
+
+    lines = [line for line in doc_text.splitlines()]
+    sections = []
+    current_heading = ""
+    current_body = []
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            h = re.sub(r"^#+\s*", "", stripped).strip()
+            if h and len(h) < 90:
+                if current_heading and current_body:
+                    sections.append((current_heading, "\n".join(current_body)))
+                current_heading = h
+                current_body = []
+                continue
+        if stripped:
+            current_body.append(stripped)
+
+    if current_heading and current_body:
+        sections.append((current_heading, "\n".join(current_body)))
+
+    if not sections:
+        paras = [p.strip() for p in doc_text.split("\n\n") if len(p.strip()) > 80]
+        for i, p in enumerate(paras[:6]):
+            first_line = p.splitlines()[0][:60]
+            sections.append((first_line, p))
+
+    records = []
+    seen_headings = set()
+
+    for heading, body in sections:
+        h_low = heading.lower()
+        if any(nh in h_low for nh in noise_headers):
+            continue
+        clean_heading = re.sub(r"^[0-9\.\-\s]+", "", heading).strip()
+        if not clean_heading or len(clean_heading) < 3 or len(clean_heading) > 80:
+            continue
+        if clean_heading.lower() in seen_headings or clean_heading.lower() in ("leo", "xl", "metadata"):
+            continue
+        if any(clean_heading.lower().startswith(nh) for nh in noise_headers):
+            continue
+        if len(body.strip()) < 30:
+            continue
+
+        seen_headings.add(clean_heading.lower())
+
+        bullets = re.findall(r"(?:^|\n)\s*[-*•]\s*(.+)", body)
+        clean_bullets = [b.strip() for b in bullets if 15 < len(b.strip()) < 180 and not any(nh in b.lower() for nh in noise_headers)]
+
+        body_sentences = [s.strip() for s in re.split(r"[.\n]", body) if len(s.strip()) > 20]
+        summary_text = body_sentences[0] if body_sentences else body[:200]
+        if len(summary_text) > 300:
+            summary_text = summary_text[:297] + "..."
+
+        rec_fields = {
+            "topic": topic or clean_heading,
+            "section_title": clean_heading,
+            "summary": summary_text,
+            "key_points": clean_bullets[:5] or body_sentences[1:4] or [summary_text],
+            "source_url": doc_url,
+            "source_title": doc_title or doc_domain,
+            "domain": doc_domain
+        }
+
+        field_evidence = [
+            {"field_name": "topic", "evidence_text": topic or clean_heading, "locator": {"heading": clean_heading}},
+            {"field_name": "section_title", "evidence_text": clean_heading, "locator": {"heading": clean_heading}},
+            {"field_name": "summary", "evidence_text": summary_text[:200], "locator": {"url": doc_url}},
+            {"field_name": "source_url", "evidence_text": doc_url, "locator": {"url": doc_url}},
+        ]
+
+        records.append({
+            "fields": rec_fields,
+            "field_evidence": field_evidence,
+            "record_confidence": 0.92,
+            "warnings": []
+        })
+
+        if len(records) >= 8:
+            break
+
+    return records
+
 class ExtractTool:
     name = "extract_records"
     description = "Extract evidence-backed records conforming to schema from a document."
@@ -1138,33 +1259,21 @@ class ExtractTool:
             "rules": spec.quality_bar
         }
 
-        # Market mode takes priority — explicitly set means it's NEVER a job search
-        if spec.agent_mode == "market" or any(f in spec.requested_fields for f in ["pricing_model", "product_name", "company_name", "target_audience"]):
-            is_market_directive = True
+        # Canonical intent routing
+        intent_spec = getattr(spec, "intent_spec", None)
+        if not intent_spec:
+            from datahunt.agents.intent_router import IntentRouter
+            intent_spec = IntentRouter().classify(spec.topic or "", spec.agent_mode)
+
+        if spec.agent_mode == "jobs":
+            is_job_directive = True
+            is_market_directive = False
+        elif spec.agent_mode in ("market", "research"):
             is_job_directive = False
-        elif spec.agent_mode == "research":
-            has_strong_job_signals = any(k in (spec.topic or "").lower() for k in ("job", "jobs", "hiring", "careers", "engineer jobs", "developer jobs"))
-            if has_strong_job_signals:
-                is_market_directive = False
-                is_job_directive = True
-            else:
-                is_market_directive = False
-                is_job_directive = False
+            is_market_directive = (spec.agent_mode == "market")
         else:
-            # Keyword-based auto-detection for auto/jobs/unspecified mode
-            is_market_directive = any(k in (spec.topic or "").lower() for k in ("pricing", "competitor", "market", "saas", "vs ", "alternative"))
-            is_job_directive = (
-                spec.agent_mode == "jobs"
-                or any(f in spec.requested_fields for f in ["salary", "jobLocation", "company", "application_url"])
-                or any(ats in (document.domain or "").lower() for ats in ("greenhouse", "lever", "ashby", "workable", "smartrecruiters", "breezy"))
-                or (
-                    not is_market_directive
-                    and any(k in (spec.topic or "").lower() for k in ("job", "jobs", "hiring", "careers", "engineer", "developer", "intern", "role"))
-                )
-            )
-            # Market signals override ambiguous keyword job detection
-            if is_market_directive:
-                is_job_directive = False
+            is_job_directive = (intent_spec.intent == ResearchIntent.JOB_SEARCH)
+            is_market_directive = (intent_spec.intent == ResearchIntent.MARKET_RESEARCH)
 
         try:
             # 1. Fast-path deterministic Schema.org JSON-LD extraction (ONLY for confirmed job mode)
@@ -1209,9 +1318,23 @@ class ExtractTool:
                         if raw_records:
                             logger.info(f"Extracted {len(raw_records)} verified market competitor records from document {document.id}")
                     elif not is_job_directive:
-                        raw_records = extract_technical_knowledge_records(document.extracted_text, doc_meta, spec.topic or "")
-                        if raw_records:
-                            logger.info(f"Extracted {len(raw_records)} technical knowledge anchors from document {document.id}")
+                        is_answer_intent = (
+                            intent_spec.requested_output == ResearchOutputType.ANSWER
+                            or intent_spec.intent in (
+                                ResearchIntent.HOW_TO,
+                                ResearchIntent.EXPLANATION,
+                                ResearchIntent.FACTUAL_RESEARCH,
+                                ResearchIntent.COMPARISON
+                            )
+                        )
+                        if is_answer_intent:
+                            raw_records = extract_answer_knowledge_records(document.extracted_text, doc_meta, spec.topic or "", intent_spec)
+                            if raw_records:
+                                logger.info(f"Extracted {len(raw_records)} answer knowledge records from document {document.id}")
+                        if not raw_records:
+                            raw_records = extract_technical_knowledge_records(document.extracted_text, doc_meta, spec.topic or "")
+                            if raw_records:
+                                logger.info(f"Extracted {len(raw_records)} technical knowledge anchors from document {document.id}")
 
             extracted_objs = []
 

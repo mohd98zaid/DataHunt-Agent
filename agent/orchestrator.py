@@ -17,6 +17,7 @@ from datahunt.models import (
     RunBudget, RunCounters, TaskStatus, VerificationStatus,
     ExportRecord
 )
+from datahunt.models.intent import ResearchIntent, ResearchOutputType
 from datahunt.llm import GeminiClient
 from datahunt.tools import (
     SearchTool, FetchTool, ExtractTool,
@@ -99,6 +100,7 @@ class ResearchOrchestrator:
             request_text=request_text,
             normalized_spec=spec,
             agent_mode=agent_mode or getattr(spec, "agent_mode", "auto"),
+            intent_spec=getattr(spec, "intent_spec", None),
             requested_output_format=effective_format,
             max_records=max_records,
             status=TaskStatus.ACCEPTED
@@ -106,12 +108,11 @@ class ResearchOrchestrator:
         self.task_repo.create_task(task)
 
         # Determine if this is a job search for tighter query planning
-        req_lower = f"{request_text or ''} {getattr(spec, 'topic', '')}".lower()
         _is_job_mode = (
-            (agent_mode or "").lower() in ("jobs", "job")
-            or getattr(spec, "agent_mode", "auto") == "jobs"
-            or any(k in req_lower for k in ("job", "jobs", "hiring", "career", "careers", "vacancy", "vacancies", "internship", "open role", "open positions", "engineer", "developer"))
-        ) and (agent_mode or "").lower() not in ("market", "research")
+            getattr(spec, "intent_spec", None) is not None
+            and spec.intent_spec.intent == ResearchIntent.JOB_SEARCH
+            and (agent_mode or "").lower() != "research"
+        )
         # For job searches: exhaust all available search-query and page budget to maximise ATS coverage.
         # For research/market: use a generous but bounded formula.
         if _is_job_mode:
@@ -197,22 +198,16 @@ class ResearchOrchestrator:
                 "counters": counters.__dict__
             })
             
-            # Determine if this run is specifically for job scraping or general knowledge research
+            # Determine canonical intent for this run
             task_mode = getattr(task, "agent_mode", None) or getattr(task.normalized_spec, "agent_mode", None) or "auto"
-            is_job_fields = any(f in task.normalized_spec.requested_fields for f in ("company", "application_url"))
-            # Explicit market/research mode is never a job search
-            if task_mode in ("market", "research"):
-                is_job_search = False
-            elif task_mode == "jobs":
-                is_job_search = True
-            else:
-                # Only use keywords for auto-mode, and require stronger signals (avoid "role" / "engineer" false positives)
-                has_job_keyword = any(k in task.request_text.lower() for k in (
-                    "job", "jobs", "hiring", "career", "careers", "internship",
-                    "vacancy", "vacancies", "apply for", "open role", "job opening",
-                    "job listing", "job posting"
-                ))
-                is_job_search = (is_job_fields and has_job_keyword) or ("job" in task.request_text.lower() and "market" not in task.request_text.lower())
+            intent_spec = getattr(task, "intent_spec", None) or getattr(task.normalized_spec, "intent_spec", None)
+            if not intent_spec:
+                from datahunt.agents.intent_router import IntentRouter
+                intent_spec = IntentRouter(gemini_client=self.client).classify(task.request_text, task_mode)
+                task.intent_spec = intent_spec
+                task.normalized_spec.intent_spec = intent_spec
+
+            is_job_search = (intent_spec.intent == ResearchIntent.JOB_SEARCH) and (task_mode != "research")
             is_zero_sec = is_job_search and (task_mode == "jobs" or any(k in task.request_text.lower() for k in ("0sec", "0-sec", "latest", "recent", "fresh", "today", "just now", "newest")))
 
             plan = self.client.plan_research(task.normalized_spec, run.budget)
@@ -695,9 +690,9 @@ class ResearchOrchestrator:
                 counters.records_duplicate = dedupe_res.data.get("duplicates_count", 0)
 
                 # ----------------------------------------------------
-                # 6.5 Job Analysis & Multidimensional Relevance Scoring (research/market)
+                # 6.5 Job Analysis & Multidimensional Relevance Scoring (job search mode only)
                 # ----------------------------------------------------
-                if final_records:
+                if final_records and is_job_search:
                     emit_event("phase.change", {
                         "phase": "ANALYZING",
                         "message": f"Analyzing {len(final_records)} results...",
@@ -806,6 +801,23 @@ class ResearchOrchestrator:
                         run_metadata=export_meta,
                         verified_records=[r.fields for r in final_records],
                         source_texts=combined_source_texts
+                    )
+                elif intent_spec and (
+                    intent_spec.requested_output == ResearchOutputType.ANSWER
+                    or intent_spec.intent in (
+                        ResearchIntent.HOW_TO,
+                        ResearchIntent.EXPLANATION,
+                        ResearchIntent.FACTUAL_RESEARCH,
+                        ResearchIntent.COMPARISON
+                    )
+                ):
+                    from datahunt.llm.gemini_client import synthesize_direct_answer
+                    summary_text = synthesize_direct_answer(
+                        query=task.request_text,
+                        run_metadata=export_meta,
+                        verified_records=[r.fields for r in final_records],
+                        source_texts=combined_source_texts,
+                        intent_spec=intent_spec
                     )
                 else:
                     from datahunt.llm.gemini_client import synthesize_local_research_dossier
