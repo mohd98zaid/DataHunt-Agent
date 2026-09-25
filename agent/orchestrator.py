@@ -178,7 +178,7 @@ class ResearchOrchestrator:
 
         model_mode = getattr(self.client, "mode", "auto")
         model_name = getattr(self.client, "model", "gemini-3.8-flash")
-        model_label = "Auto Multi-Model (Lite + 3.8 Flash)" if model_mode == "auto" else ("Gemini Flash Lite" if model_mode == "lite" else "Gemini 3.8 Flash")
+        model_label = f"Gemini ({model_name})"
         emit_event("model.active", {
             "model": model_name,
             "mode": model_mode,
@@ -192,7 +192,7 @@ class ResearchOrchestrator:
             logger.info("Starting planning phase", extra={"run_id": run.id, "event": "phase.planning"})
             emit_event("phase.change", {
                 "phase": "PLANNING",
-                "message": "AI Robot analyzing query and formulating search parameters...",
+                "message": "Analyzing query and planning search...",
                 "thought": f"Normalizing research objective: '{task.request_text}'",
                 "counters": counters.__dict__
             })
@@ -264,425 +264,460 @@ class ResearchOrchestrator:
                 "count": len(queries),
                 "is_job_search": is_job_search,
                 "is_zero_sec": is_zero_sec,
-                "thought": f"Formulated {len(queries)} high-yield search queries targeting authoritative ATS portals." if is_job_search else f"Generated {len(queries)} deterministic search queries targeting verified sources."
+                "thought": f"Formulated {len(queries)} search queries for ATS sources." if is_job_search else f"Generated {len(queries)} search queries.",
             })
 
             # ----------------------------------------------------
-            # 2. Searching Phase
+            # NEW: Job-mode runs use the AgentRuntime decision loop.
+            # Research/market modes continue with the existing linear pipeline.
             # ----------------------------------------------------
-            self.run_repo.update_run_status(run.id, RunStatus.SEARCHING)
-            emit_event("phase.change", {
-                "phase": "SEARCHING",
-                "message": "Harvesting live career platforms and index endpoints..." if is_job_search else "Scanning web corpora and index servers...",
-                "thought": "Querying search endpoints and analyzing SERP candidate links.",
-                "counters": counters.__dict__
-            })
-            candidate_urls = []
-            seen_urls = set()
+            fetched_docs = []
+            verified_records = []
+            combined_source_texts = ""
+            _use_runtime = is_job_search
 
-            spec_freshness = getattr(task.normalized_spec, "freshness_days", None)
-            # For job searches: general freshness baseline is 7 days (not 1 day) to avoid empty results.
-            # ATS site: queries don't need freshness filter — the ATS itself returns only live jobs.
-            base_freshness = 7 if is_job_search else spec_freshness
+            if _use_runtime:
+                from datahunt.agent import AgentRuntime, AgentState
 
-            blocked_domains = list(task.normalized_spec.source_policy.blocked_domains or [])
-            if not is_job_search:
+                agent_state = AgentState(
+                    request=task.request_text,
+                    run_id=run.id,
+                    task_id=task.id,
+                    mode="jobs",
+                    target_results=task.max_records,
+                    max_search_calls=run.budget.max_search_queries,
+                    max_fetch_calls=run.budget.max_pages,
+                    deadline=deadline,
+                    max_iterations=20,
+                )
+                # Inject the pre-computed search plan so we don't re-plan
+                agent_state.search_plan = [
+                    {
+                        "query": q.get("query") if isinstance(q, dict) else str(q),
+                        "tier": 1 if (isinstance(q, dict) and q.get("purpose") == "direct_ats_harvest") else 2,
+                        "purpose": q.get("purpose", "general") if isinstance(q, dict) else "general",
+                    }
+                    for q in queries
+                ]
+                # search_plan_index starts at 0 — the decision loop iterates through all queries
+
+                def _runtime_emit(event_type: str, data: dict):
+                    if event_type == "status":
+                        emit_event("phase.change", {
+                            "phase": data.get("phase", "RUNNING"),
+                            "message": data.get("message", ""),
+                            "thought": "",
+                            "counters": counters.__dict__,
+                        })
+                    elif event_type == "decision":
+                        emit_event("agent.decision", {
+                            "iteration": data.get("iteration"),
+                            "action": data.get("action"),
+                            "reason": data.get("reason"),
+                        })
+                    else:
+                        emit_event(event_type, data)
+
+                _runtime = AgentRuntime(
+                    client=self.client,
+                    search=self.search_tool,
+                    fetch=self.fetch_tool,
+                    extract=self.extract_tool,
+                    verify=self.verify_tool,
+                    dedupe=self.dedupe_tool,
+                    export=self.export_tool,
+                )
+                _result = _runtime.run(agent_state, _runtime_emit)
+
+                # Bridge runtime results into synthesis variables
+                verified_records = _result.get("records", [])
+                final_records = verified_records
+                fetched_docs = agent_state.fetched_docs
+                warnings.extend(_result.get("warnings", []))
+                counters.pages_fetched = _result.get("pages_fetched", 0)
+                counters.pages_failed = _result.get("pages_failed", 0)
+                counters.records_verified = _result.get("records_verified", 0)
+                counters.records_rejected = _result.get("records_rejected", 0)
+                counters.search_queries = _result.get("search_iterations", 0)
+
+                for doc in fetched_docs[:8]:
+                    snippet = (doc.extracted_text or "").strip()
+                    if snippet:
+                        combined_source_texts += f"Source URL: {doc.requested_url}\n{snippet[:2000]}\n\n---\n\n"
+
+                logger.info(
+                    f"AgentRuntime: {len(final_records)} verified records "
+                    f"(reason: {_result.get('completion_reason', 'unknown')})",
+                    extra={"run_id": run.id},
+                )
+
+            # ----------------------------------------------------
+            # 2. Searching Phase (skipped for job-mode — AgentRuntime handles it)
+            # ----------------------------------------------------
+            if not _use_runtime:
+                self.run_repo.update_run_status(run.id, RunStatus.SEARCHING)
+                emit_event("phase.change", {
+                    "phase": "SEARCHING",
+                    "message": "Running search queries",
+                    "thought": "Running search queries",
+                    "counters": counters.__dict__
+                })
+                candidate_urls = []
+                seen_urls = set()
+
+                spec_freshness = getattr(task.normalized_spec, "freshness_days", None)
+                base_freshness = spec_freshness
+
+                blocked_domains = list(task.normalized_spec.source_policy.blocked_domains or [])
                 from datahunt.tools.search import LOW_QUALITY_RESEARCH_DOMAINS
                 for bad_d in LOW_QUALITY_RESEARCH_DOMAINS:
                     if bad_d not in blocked_domains:
                         blocked_domains.append(bad_d)
 
-            queries_to_run = queries[:run.budget.max_search_queries]
+                queries_to_run = queries[:run.budget.max_search_queries]
 
-            def _execute_single_query(q_obj):
-                q_text = q_obj.get("query") if isinstance(q_obj, dict) else str(q_obj)
-                is_ats_site_query = bool(re.search(
-                    r"site:("
-                    r"boards\.greenhouse\.io|job-boards(?:\.eu)?\.greenhouse\.io|jobs\.lever\.co|"
-                    r"jobs\.ashbyhq\.com|apply\.workable\.com|jobs\.smartrecruiters\.com|"
-                    r"bayt\.com|naukrigulf\.com|gulftalent\.com|gulfjobs\.com|laimoon\.com|"
-                    r"akhtaboot\.com|foundit\.ae|monstergulf\.com|mihnati\.com|tanqeeb\.com|"
-                    r"naukri\.com|foundit\.in|instahyre\.com|cutshort\.io|shine\.com|"
-                    r"wellfound\.com|builtin\.com|dice\.com|himalayas\.app|"
-                    r"weworkremotely\.com|remoteok\.com|arc\.dev|"
-                    r"reed\.co\.uk|totaljobs\.com|"
-                    r"jobsdb\.com|jobstreet\.com"
-                    r")",
-                    q_text, re.IGNORECASE
-                )) or (isinstance(q_obj, dict) and q_obj.get("purpose") == "broad_internet_sweep")
-                q_freshness = None if is_ats_site_query else base_freshness
-
-                t_start = time.time()
-                res = self.search_tool.execute(
-                    query=q_text,
-                    limit=20 if is_job_search else 15,
-                    freshness_days=q_freshness,
-                    allowed_domains=task.normalized_spec.source_policy.allowed_domains,
-                    blocked_domains=blocked_domains,
-                )
-                t_dur = int((time.time() - t_start) * 1000)
-                return q_obj, q_text, res, t_dur
-
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            with ThreadPoolExecutor(max_workers=5) as search_executor:
-                future_to_q = {search_executor.submit(_execute_single_query, q): q for q in queries_to_run}
-                for future in as_completed(future_to_q):
-                    if time.time() > deadline:
-                        warnings.append("Search stopped early: deadline reached.")
-                        for f in future_to_q:
-                            f.cancel()
-                        break
-                    try:
-                        q_obj, query_text, search_res, dur = future.result()
-                    except Exception as se:
-                        logger.warning(f"Concurrent search worker exception: {se}")
-                        continue
-
-                    step_count += 1
-                    evt = self.tool_repo.record_start(run.id, step_count, "search_web", {"query": query_text})
-
-                    if search_res.success:
-                        self.tool_repo.record_finish(evt.id, evt.status.SUCCEEDED, {"count": len(search_res.data)}, dur)
-                        counters.search_queries += 1
-                        emit_event("search.result", {
-                            "query": query_text,
-                            "results_count": len(search_res.data),
-                            "duration_ms": dur,
-                            "hits": [{"title": h.get("title"), "url": h.get("url")} for h in search_res.data[:3]],
-                            "counters": counters.__dict__
-                        })
-                        added_from_query = 0
-                        max_per_query = 15 if is_job_search else 10
-                        for hit in search_res.data:
-                            u = hit.get("url")
-                            if u and u not in seen_urls:
-                                if is_job_search:
-                                    from datahunt.tools.search import is_valid_job_url
-                                    if not is_valid_job_url(u):
-                                        continue
-                                seen_urls.add(u)
-                                candidate_urls.append(hit)
-                                added_from_query += 1
-                                if added_from_query >= max_per_query:
-                                    break
-
-                        # Ensure diverse query coverage (at least 10 queries) before early termination
-                        if counters.search_queries >= min(len(queries_to_run), 10) and len(candidate_urls) >= max(run.budget.max_pages, 75):
-                            logger.info(f"Target candidate harvest reached ({len(candidate_urls)} URLs from {counters.search_queries} queries), proceeding to fetch phase.")
-                            break
-                    else:
-                        self.tool_repo.record_finish(evt.id, evt.status.FAILED, {}, dur, search_res.error_code)
-
-            # ----------------------------------------------------
-            # 3. Collecting (Fetching) Phase
-            # ----------------------------------------------------
-            self.run_repo.update_run_status(run.id, RunStatus.COLLECTING)
-
-            # Prioritize candidate URLs targeting the user's requested region
-            geo_loc = ""
-            if getattr(task, "normalized_spec", None) and getattr(task.normalized_spec, "geography", None):
-                geo_loc = task.normalized_spec.geography.name or task.normalized_spec.geography.country or ""
-            if not geo_loc and getattr(task, "request_text", None):
-                geo_loc = task.request_text
-
-            if is_job_search and geo_loc:
-                loc_tokens = [k.lower() for k in geo_loc.replace(",", " ").split() if len(k) > 2]
-                def _loc_prio(h):
-                    h_text = f"{h.get('url', '')} {h.get('title', '')} {h.get('snippet', '')}".lower()
-                    if any(k in h_text for k in ("gulftalent", "bayt", "naukri", "dubai", "riyadh", "saudi", "uae", "abu dhabi", "jeddah")):
-                        return 0
-                    if any(t in h_text for t in loc_tokens):
-                        return 0
-                    return 1
-                candidate_urls.sort(key=_loc_prio)
-
-            target_pages = min(run.budget.max_pages, 45 if is_job_search else 25)
-            pages_to_fetch = candidate_urls[:target_pages]
-
-            emit_event("phase.change", {
-                "phase": "COLLECTING",
-                "message": f"Establishing high-speed concurrent connections to {len(pages_to_fetch)} candidate sources...",
-                "thought": "Ingesting raw HTML and ATS endpoints via parallel I/O workers.",
-                "counters": counters.__dict__
-            })
-            fetched_docs = []
-
-            def _do_fetch(hit_item):
-                t_url = hit_item.get("url")
-                t_start = time.time()
-                res = self.fetch_tool.execute(
-                    url=t_url,
-                    run_id=run.id,
-                    allowed_domains=task.normalized_spec.source_policy.allowed_domains,
-                    blocked_domains=task.normalized_spec.source_policy.blocked_domains,
-                )
-                t_dur = int((time.time() - t_start) * 1000)
-                return t_url, res, t_dur
-
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            with ThreadPoolExecutor(max_workers=8) as executor:
-                future_map = {executor.submit(_do_fetch, hit): hit for hit in pages_to_fetch}
-                for future in as_completed(future_map):
-                    if time.time() > deadline:
-                        warnings.append("Fetching stopped early: deadline reached.")
-                        for f in future_map:
-                            f.cancel()
-                        break
-                    try:
-                        target_url, fetch_res, dur = future.result()
-                    except Exception as fe:
-                        logger.warning(f"Concurrent fetch error on target: {fe}")
-                        continue
-
-                    step_count += 1
-                    evt = self.tool_repo.record_start(run.id, step_count, "fetch_page", {"url": target_url})
-
-                    if fetch_res.success and fetch_res.data:
-                        doc = fetch_res.data
-                        self.doc_repo.upsert_document(doc)
-                        fetched_docs.append(doc)
-                        counters.pages_fetched += 1
-                        self.tool_repo.record_finish(evt.id, evt.status.SUCCEEDED, {"doc_id": doc.id, "status_code": doc.http_status}, dur)
-                        emit_event("page.fetched", {
-                            "url": target_url,
-                            "status_code": doc.http_status,
-                            "size_bytes": len(doc.extracted_text or ""),
-                            "duration_ms": dur,
-                            "counters": counters.__dict__
-                        })
-                    else:
-                        counters.pages_failed += 1
-                        if fetch_res.error_code == ErrorCode.FETCH_BLOCKED.value:
-                            counters.pages_blocked += 1
-                        self.tool_repo.record_finish(evt.id, evt.status.BLOCKED if fetch_res.error_code == ErrorCode.FETCH_BLOCKED.value else evt.status.FAILED, {}, dur, fetch_res.error_code)
-                        emit_event("page.failed", {
-                            "url": target_url,
-                            "error_code": fetch_res.error_code,
-                            "counters": counters.__dict__
-                        })
-
-            # ----------------------------------------------------
-            # 4. Extracting Phase
-            # ----------------------------------------------------
-            self.run_repo.update_run_status(run.id, RunStatus.EXTRACTING)
-            emit_event("phase.change", {
-                "phase": "EXTRACTING",
-                "message": f"Neural parsing and entity extraction across {len(fetched_docs)} documents...",
-                "thought": "Extracting structured research schema fields and raw citation anchors.",
-                "counters": counters.__dict__
-            })
-            raw_records = []
-            target_harvest_count = max(run.budget.max_output_records * 2, 20)
-
-            for doc in fetched_docs:
-                if time.time() > deadline:
-                    warnings.append("Extraction stopped early: deadline reached.")
-                    break
-                if len(raw_records) >= target_harvest_count:
-                    logger.info(f"Target record harvest reached ({len(raw_records)} records), proceeding to verification.")
-                    break
-
-                step_count += 1
-                evt = self.tool_repo.record_start(run.id, step_count, "extract_records", {"doc_id": doc.id})
-                t0 = time.time()
-                extract_res = self.extract_tool.execute(doc, task.normalized_spec, run.id)
-                dur = int((time.time() - t0) * 1000)
-
-                if extract_res.success:
-                    self.tool_repo.record_finish(evt.id, evt.status.SUCCEEDED, {"extracted": len(extract_res.data)}, dur)
-                    for rec in extract_res.data:
-                        self.record_repo.insert_record(rec)
-                        raw_records.append(rec)
-                        counters.records_extracted += 1
-                        emit_event("record.extracted", {
-                            "record_id": rec.id,
-                            "fields": rec.fields,
-                            "source_url": doc.requested_url,
-                            "counters": counters.__dict__
-                        })
-                else:
-                    self.tool_repo.record_finish(evt.id, evt.status.FAILED, {}, dur, extract_res.error_code)
-
-            # ----------------------------------------------------
-            # 5. Verifying Phase
-            # ----------------------------------------------------
-            self.run_repo.update_run_status(run.id, RunStatus.VERIFYING)
-            emit_event("phase.change", {
-                "phase": "VERIFYING",
-                "message": f"Running multi-predicate cross-examination on {len(raw_records)} candidates...",
-                "thought": "Verifying entity facts, validating schema compliance, and checking contact policy.",
-                "counters": counters.__dict__
-            })
-            verified_records = []
-
-            for rec in raw_records:
-                if time.time() > deadline:
-                    warnings.append("Verification stopped early: time budget exceeded.")
-                    break
-                step_count += 1
-                evt = self.tool_repo.record_start(run.id, step_count, "verify_record", {"record_id": rec.id})
-                t0 = time.time()
-                spec_geo = getattr(task.normalized_spec, "geography", None)
-                geo_name = getattr(spec_geo, "name", None) if spec_geo else None
-
-                # Select required fields based on the actual record type (not just the spec)
-                if rec.record_type == "market_intel":
-                    verify_required = ["company_name", "product_name"]
-                elif rec.record_type == "job_listing":
-                    verify_required = ["title", "company"]
-                elif rec.record_type == "research_finding":
-                    verify_required = ["name", "category"] if "name" in task.normalized_spec.requested_fields else task.normalized_spec.requested_fields[:2]
-                else:
-                    verify_required = task.normalized_spec.requested_fields[:2]
-
-                v_res = self.verify_tool.execute(
-                    record=rec,
-                    required_fields=verify_required,
-                    contact_policy=task.normalized_spec.contact_policy,
-                    geography_rule=geo_name
-                )
-                dur = int((time.time() - t0) * 1000)
-
-                self.record_repo.update_record_status(rec.id, rec.verification_status, rec.confidence)
-                self.tool_repo.record_finish(evt.id, evt.status.SUCCEEDED, {"status": rec.verification_status.value}, dur)
-
-                if rec.verification_status == VerificationStatus.VERIFIED:
-                    counters.records_verified += 1
-                    verified_records.append(rec)
-                elif rec.verification_status == VerificationStatus.NEEDS_REVIEW:
-                    counters.records_review += 1
-                    has_geo_conflict = any("does not match requested geography" in w for w in rec.warnings)
-                    has_title_conflict = any("Job title" in w for w in rec.warnings)
-                    has_key_job_fields = is_job_search and bool(rec.fields.get("title") or rec.fields.get("name")) and bool(rec.fields.get("company") or rec.fields.get("source"))
-                    if not has_geo_conflict and not has_title_conflict and (rec.confidence >= 0.75 or has_key_job_fields):
-                        counters.records_verified += 1
-                        rec.verification_status = VerificationStatus.VERIFIED
-                        verified_records.append(rec)
-                elif rec.verification_status == VerificationStatus.REJECTED:
-                    counters.records_rejected += 1
-
-                emit_event("record.verified", {
-                    "record_id": rec.id,
-                    "status": rec.verification_status.value,
-                    "confidence": rec.confidence,
-                    "fields": rec.fields,
-                    "warnings": rec.warnings,
-                    "counters": counters.__dict__
-                })
-
-            # ----------------------------------------------------
-            # 6. Deduplicating Phase
-            # ----------------------------------------------------
-            self.run_repo.update_run_status(run.id, RunStatus.DEDUPLICATING)
-            emit_event("phase.change", {
-                "phase": "DEDUPLICATING",
-                "message": "Eliminating semantic and entity duplicates...",
-                "thought": "Calculating text similarity and clustering matched entities.",
-                "counters": counters.__dict__
-            })
-            step_count += 1
-            evt = self.tool_repo.record_start(run.id, step_count, "deduplicate_records", {"count": len(verified_records)})
-            t0 = time.time()
-            dedupe_res = self.dedupe_tool.execute(verified_records)
-            dur = int((time.time() - t0) * 1000)
-            self.tool_repo.record_finish(evt.id, evt.status.SUCCEEDED, {"unique": len(dedupe_res.data.get("unique_records", []))}, dur)
-
-            final_records = dedupe_res.data.get("unique_records", [])
-            counters.records_duplicate = dedupe_res.data.get("duplicates_count", 0)
-
-            # ----------------------------------------------------
-            # 6.5 Job Analysis & Multidimensional Relevance Scoring
-            # ----------------------------------------------------
-            if is_job_search and final_records:
-                emit_event("phase.change", {
-                    "phase": "ANALYZING",
-                    "message": f"Analyzing {len(final_records)} candidates against requirements & calculating relevance scores...",
-                    "thought": "Running Query Matcher, checking requirements, and generating explainability scorecards.",
-                    "counters": counters.__dict__
-                })
-                try:
-                    from datahunt.agents import DataNormalizer, HardFilter, JobAnalysisAgent, LearningEngine, QueryUnderstandingAgent
-                    normalizer = DataNormalizer()
-                    hard_filter = HardFilter()
-                    analyzer = JobAnalysisAgent(gemini_client=self.client)
-                    learning_engine = LearningEngine()
-
-                    normalized_jobs = [normalizer.normalize(r.fields, record_id=r.id, canonical_url=r.canonical_url or "") for r in final_records]
-                    active_job_req = job_req if 'job_req' in locals() and hasattr(job_req, "job_title") else QueryUnderstandingAgent(self.client).understand(task.request_text)
-                    active_expanded = expanded if 'expanded' in locals() else None
-
-                    if hasattr(active_job_req, "job_title"):
-                        passed_jobs, rejected_jobs = hard_filter.apply(normalized_jobs, active_job_req)
-                        eval_jobs = passed_jobs if passed_jobs else normalized_jobs
-
-                        matched_results = analyzer.analyze_and_rank(eval_jobs, active_job_req, active_expanded)
-                        scored_map = {}
-                        for m_res in matched_results:
-                            boost = learning_engine.calculate_preference_boost(m_res.job)
-                            m_res.relevance_score = round(min(max(m_res.relevance_score + boost, 0.05), 1.0), 2)
-                            scored_map[m_res.job.raw_id] = m_res
-
-                        new_final_records = []
-                        for r in final_records:
-                            if r.id in scored_map:
-                                m_res = scored_map[r.id]
-                                r.fields["relevance_score"] = m_res.relevance_score
-                                r.fields["match_level"] = m_res.match_level
-                                r.fields["matching_requirements"] = m_res.matching_requirements
-                                r.fields["missing_requirements"] = m_res.missing_requirements
-                                r.fields["unknown_requirements"] = m_res.unknown_requirements
-                                r.fields["match_explanation"] = m_res.match_explanation
-                                r.confidence = m_res.relevance_score
-                                new_final_records.append(r)
-
-                        if new_final_records:
-                            final_records = new_final_records
-                            # Sort by relevance score descending, using 0-sec freshness as secondary tiebreaker
-                            final_records.sort(
-                                key=lambda r: (
-                                    -(r.confidence or 0.0),
-                                    r.fields.get("posted_age_seconds", 999999) if isinstance(r.fields.get("posted_age_seconds"), (int, float)) else 999999
-                                )
-                            )
-                            emit_event("jobs.analyzed", {
-                                "total_scored": len(final_records),
-                                "top_match": final_records[0].fields.get("title"),
-                                "top_score": final_records[0].confidence,
-                                "top_explanation": final_records[0].fields.get("match_explanation")
-                            })
-                except Exception as ana_err:
-                    logger.warning(f"Job analysis & ranking phase encountered non-fatal error: {ana_err}")
-
-            elif is_zero_sec:
-                final_records.sort(
-                    key=lambda r: (
-                        r.fields.get("posted_age_seconds", 999999) if isinstance(r.fields.get("posted_age_seconds"), (int, float)) else 999999,
-                        -(r.confidence or 0.0)
+                def _execute_single_query(q_obj):
+                    q_text = q_obj.get("query") if isinstance(q_obj, dict) else str(q_obj)
+                    t_start = time.time()
+                    res = self.search_tool.execute(
+                        query=q_text,
+                        limit=15,
+                        freshness_days=spec_freshness,
+                        allowed_domains=task.normalized_spec.source_policy.allowed_domains,
+                        blocked_domains=blocked_domains,
                     )
-                )
+                    t_dur = int((time.time() - t_start) * 1000)
+                    return q_obj, q_text, res, t_dur
 
-            # Cap to requested max_records
-            if len(final_records) > task.max_records:
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                with ThreadPoolExecutor(max_workers=5) as search_executor:
+                    future_to_q = {search_executor.submit(_execute_single_query, q): q for q in queries_to_run}
+                    for future in as_completed(future_to_q):
+                        if time.time() > deadline:
+                            warnings.append("Search stopped early: deadline reached.")
+                            for f in future_to_q:
+                                f.cancel()
+                            break
+                        try:
+                            q_obj, query_text, search_res, dur = future.result()
+                        except Exception as se:
+                            logger.warning(f"Concurrent search worker exception: {se}")
+                            continue
+
+                        step_count += 1
+                        evt = self.tool_repo.record_start(run.id, step_count, "search_web", {"query": query_text})
+
+                        if search_res.success:
+                            self.tool_repo.record_finish(evt.id, evt.status.SUCCEEDED, {"count": len(search_res.data)}, dur)
+                            counters.search_queries += 1
+                            emit_event("search.result", {
+                                "query": query_text,
+                                "results_count": len(search_res.data),
+                                "duration_ms": dur,
+                                "hits": [{"title": h.get("title"), "url": h.get("url")} for h in search_res.data[:3]],
+                                "counters": counters.__dict__
+                            })
+                            added_from_query = 0
+                            for hit in search_res.data:
+                                u = hit.get("url")
+                                if u and u not in seen_urls:
+                                    seen_urls.add(u)
+                                    candidate_urls.append(hit)
+                                    added_from_query += 1
+                                    if added_from_query >= 10:
+                                        break
+
+                            if counters.search_queries >= min(len(queries_to_run), 10) and len(candidate_urls) >= max(run.budget.max_pages, 75):
+                                logger.info(f"Target candidate harvest reached ({len(candidate_urls)} URLs from {counters.search_queries} queries), proceeding to fetch phase.")
+                                break
+                        else:
+                            self.tool_repo.record_finish(evt.id, evt.status.FAILED, {}, dur, search_res.error_code)
+
+                # ----------------------------------------------------
+                # 3. Collecting (Fetching) Phase
+                # ----------------------------------------------------
+                self.run_repo.update_run_status(run.id, RunStatus.COLLECTING)
+
+                geo_loc = ""
+                if getattr(task, "normalized_spec", None) and getattr(task.normalized_spec, "geography", None):
+                    geo_loc = task.normalized_spec.geography.name or task.normalized_spec.geography.country or ""
+                if not geo_loc and getattr(task, "request_text", None):
+                    geo_loc = task.request_text
+
+                target_pages = min(run.budget.max_pages, 25)
+                pages_to_fetch = candidate_urls[:target_pages]
+
+                emit_event("phase.change", {
+                    "phase": "COLLECTING",
+                    "message": f"Fetching candidate pages ({len(pages_to_fetch)} targets)",
+                    "thought": "Fetching candidate pages",
+                    "counters": counters.__dict__
+                })
+
+                def _do_fetch(hit_item):
+                    t_url = hit_item.get("url")
+                    t_start = time.time()
+                    res = self.fetch_tool.execute(
+                        url=t_url,
+                        run_id=run.id,
+                        allowed_domains=task.normalized_spec.source_policy.allowed_domains,
+                        blocked_domains=task.normalized_spec.source_policy.blocked_domains,
+                    )
+                    t_dur = int((time.time() - t_start) * 1000)
+                    return t_url, res, t_dur
+
+                with ThreadPoolExecutor(max_workers=8) as executor:
+                    future_map = {executor.submit(_do_fetch, hit): hit for hit in pages_to_fetch}
+                    for future in as_completed(future_map):
+                        if time.time() > deadline:
+                            warnings.append("Fetching stopped early: deadline reached.")
+                            for f in future_map:
+                                f.cancel()
+                            break
+                        try:
+                            target_url, fetch_res, dur = future.result()
+                        except Exception as fe:
+                            logger.warning(f"Concurrent fetch error on target: {fe}")
+                            continue
+
+                        step_count += 1
+                        evt = self.tool_repo.record_start(run.id, step_count, "fetch_page", {"url": target_url})
+
+                        if fetch_res.success and fetch_res.data:
+                            doc = fetch_res.data
+                            self.doc_repo.upsert_document(doc)
+                            fetched_docs.append(doc)
+                            counters.pages_fetched += 1
+                            self.tool_repo.record_finish(evt.id, evt.status.SUCCEEDED, {"doc_id": doc.id, "status_code": doc.http_status}, dur)
+                            emit_event("page.fetched", {
+                                "url": target_url,
+                                "status_code": doc.http_status,
+                                "size_bytes": len(doc.extracted_text or ""),
+                                "duration_ms": dur,
+                                "counters": counters.__dict__
+                            })
+                        else:
+                            counters.pages_failed += 1
+                            if fetch_res.error_code == ErrorCode.FETCH_BLOCKED.value:
+                                counters.pages_blocked += 1
+                            self.tool_repo.record_finish(evt.id, evt.status.BLOCKED if fetch_res.error_code == ErrorCode.FETCH_BLOCKED.value else evt.status.FAILED, {}, dur, fetch_res.error_code)
+                            emit_event("page.failed", {
+                                "url": target_url,
+                                "error_code": fetch_res.error_code,
+                                "counters": counters.__dict__
+                            })
+
+                # ----------------------------------------------------
+                # 4. Extracting Phase
+                # ----------------------------------------------------
+                self.run_repo.update_run_status(run.id, RunStatus.EXTRACTING)
+                emit_event("phase.change", {
+                    "phase": "EXTRACTING",
+                    "message": f"Extracting records from {len(fetched_docs)} documents...",
+                    "thought": "Extracting structured fields from documents.",
+                    "counters": counters.__dict__
+                })
+                raw_records = []
+                target_harvest_count = max(run.budget.max_output_records * 2, 20)
+
+                for doc in fetched_docs:
+                    if time.time() > deadline:
+                        warnings.append("Extraction stopped early: deadline reached.")
+                        break
+                    if len(raw_records) >= target_harvest_count:
+                        logger.info(f"Target record harvest reached ({len(raw_records)} records), proceeding to verification.")
+                        break
+
+                    step_count += 1
+                    evt = self.tool_repo.record_start(run.id, step_count, "extract_records", {"doc_id": doc.id})
+                    t0 = time.time()
+                    extract_res = self.extract_tool.execute(doc, task.normalized_spec, run.id)
+                    dur = int((time.time() - t0) * 1000)
+
+                    if extract_res.success:
+                        self.tool_repo.record_finish(evt.id, evt.status.SUCCEEDED, {"extracted": len(extract_res.data)}, dur)
+                        for rec in extract_res.data:
+                            self.record_repo.insert_record(rec)
+                            raw_records.append(rec)
+                            counters.records_extracted += 1
+                            emit_event("record.extracted", {
+                                "record_id": rec.id,
+                                "fields": rec.fields,
+                                "source_url": doc.requested_url,
+                                "counters": counters.__dict__
+                            })
+                    else:
+                        self.tool_repo.record_finish(evt.id, evt.status.FAILED, {}, dur, extract_res.error_code)
+
+                # ----------------------------------------------------
+                # 5. Verifying Phase
+                # ----------------------------------------------------
+                self.run_repo.update_run_status(run.id, RunStatus.VERIFYING)
+                emit_event("phase.change", {
+                    "phase": "VERIFYING",
+                    "message": f"Verifying {len(raw_records)} extracted records...",
+                    "thought": "Verifying entity facts and schema compliance.",
+                    "counters": counters.__dict__
+                })
+
+                for rec in raw_records:
+                    if time.time() > deadline:
+                        warnings.append("Verification stopped early: time budget exceeded.")
+                        break
+                    step_count += 1
+                    evt = self.tool_repo.record_start(run.id, step_count, "verify_record", {"record_id": rec.id})
+                    t0 = time.time()
+                    spec_geo = getattr(task.normalized_spec, "geography", None)
+                    geo_name = getattr(spec_geo, "name", None) if spec_geo else None
+
+                    if rec.record_type == "market_intel":
+                        verify_required = ["company_name", "product_name"]
+                    elif rec.record_type == "job_listing":
+                        verify_required = ["title", "company"]
+                    elif rec.record_type == "research_finding":
+                        verify_required = ["name", "category"] if "name" in task.normalized_spec.requested_fields else task.normalized_spec.requested_fields[:2]
+                    else:
+                        verify_required = task.normalized_spec.requested_fields[:2]
+
+                    v_res = self.verify_tool.execute(
+                        record=rec,
+                        required_fields=verify_required,
+                        contact_policy=task.normalized_spec.contact_policy,
+                        geography_rule=geo_name
+                    )
+                    dur = int((time.time() - t0) * 1000)
+
+                    self.record_repo.update_record_status(rec.id, rec.verification_status, rec.confidence)
+                    self.tool_repo.record_finish(evt.id, evt.status.SUCCEEDED, {"status": rec.verification_status.value}, dur)
+
+                    if rec.verification_status == VerificationStatus.VERIFIED:
+                        counters.records_verified += 1
+                        verified_records.append(rec)
+                    elif rec.verification_status == VerificationStatus.NEEDS_REVIEW:
+                        counters.records_review += 1
+                        has_geo_conflict = any("does not match requested geography" in w for w in rec.warnings)
+                        has_title_conflict = any("Job title" in w for w in rec.warnings)
+                        if not has_geo_conflict and not has_title_conflict and rec.confidence >= 0.75:
+                            counters.records_verified += 1
+                            rec.verification_status = VerificationStatus.VERIFIED
+                            verified_records.append(rec)
+                    elif rec.verification_status == VerificationStatus.REJECTED:
+                        counters.records_rejected += 1
+
+                    emit_event("record.verified", {
+                        "record_id": rec.id,
+                        "status": rec.verification_status.value,
+                        "confidence": rec.confidence,
+                        "fields": rec.fields,
+                        "warnings": rec.warnings,
+                        "counters": counters.__dict__
+                    })
+
+                # ----------------------------------------------------
+                # 6. Deduplicating Phase
+                # ----------------------------------------------------
+                self.run_repo.update_run_status(run.id, RunStatus.DEDUPLICATING)
+                emit_event("phase.change", {
+                    "phase": "DEDUPLICATING",
+                    "message": "Removing duplicate records...",
+                    "thought": "Deduplicating by canonical URL and content.",
+                    "counters": counters.__dict__
+                })
+                step_count += 1
+                evt = self.tool_repo.record_start(run.id, step_count, "deduplicate_records", {"count": len(verified_records)})
+                t0 = time.time()
+                dedupe_res = self.dedupe_tool.execute(verified_records)
+                dur = int((time.time() - t0) * 1000)
+                self.tool_repo.record_finish(evt.id, evt.status.SUCCEEDED, {"unique": len(dedupe_res.data.get("unique_records", []))}, dur)
+
+                final_records = dedupe_res.data.get("unique_records", [])
+                counters.records_duplicate = dedupe_res.data.get("duplicates_count", 0)
+
+                # ----------------------------------------------------
+                # 6.5 Job Analysis & Multidimensional Relevance Scoring (research/market)
+                # ----------------------------------------------------
+                if final_records:
+                    emit_event("phase.change", {
+                        "phase": "ANALYZING",
+                        "message": f"Analyzing {len(final_records)} results...",
+                        "thought": "Analyzing results against requirements",
+                        "counters": counters.__dict__
+                    })
+                    try:
+                        from datahunt.agents import DataNormalizer, HardFilter, JobAnalysisAgent, LearningEngine, QueryUnderstandingAgent
+                        normalizer = DataNormalizer()
+                        hard_filter = HardFilter()
+                        analyzer = JobAnalysisAgent(gemini_client=self.client)
+                        learning_engine = LearningEngine()
+
+                        normalized_jobs = [normalizer.normalize(r.fields, record_id=r.id, canonical_url=r.canonical_url or "") for r in final_records]
+                        active_job_req = job_req if 'job_req' in locals() and hasattr(job_req, "job_title") else QueryUnderstandingAgent(self.client).understand(task.request_text)
+                        active_expanded = expanded if 'expanded' in locals() else None
+
+                        if hasattr(active_job_req, "job_title"):
+                            passed_jobs, rejected_jobs = hard_filter.apply(normalized_jobs, active_job_req)
+                            eval_jobs = passed_jobs if passed_jobs else normalized_jobs
+                            matched_results = analyzer.analyze_and_rank(eval_jobs, active_job_req, active_expanded)
+                            scored_map = {}
+                            for m_res in matched_results:
+                                boost = learning_engine.calculate_preference_boost(m_res.job)
+                                m_res.relevance_score = round(min(max(m_res.relevance_score + boost, 0.05), 1.0), 2)
+                                scored_map[m_res.job.raw_id] = m_res
+
+                            new_final_records = []
+                            for r in final_records:
+                                if r.id in scored_map:
+                                    m_res = scored_map[r.id]
+                                    r.fields["relevance_score"] = m_res.relevance_score
+                                    r.fields["match_level"] = m_res.match_level
+                                    r.fields["matching_requirements"] = m_res.matching_requirements
+                                    r.fields["missing_requirements"] = m_res.missing_requirements
+                                    r.fields["unknown_requirements"] = m_res.unknown_requirements
+                                    r.fields["match_explanation"] = m_res.match_explanation
+                                    r.confidence = m_res.relevance_score
+                                    new_final_records.append(r)
+
+                            if new_final_records:
+                                final_records = new_final_records
+                                final_records.sort(key=lambda r: -(r.confidence or 0.0))
+                                emit_event("jobs.analyzed", {
+                                    "total_scored": len(final_records),
+                                    "top_match": final_records[0].fields.get("title"),
+                                    "top_score": final_records[0].confidence,
+                                    "top_explanation": final_records[0].fields.get("match_explanation")
+                                })
+                    except Exception as ana_err:
+                        logger.warning(f"Job analysis & ranking phase encountered non-fatal error: {ana_err}")
+
+                # Cap to requested max_records
+                if len(final_records) > task.max_records:
+                    final_records = final_records[:task.max_records]
+
+            # End of if not _use_runtime block
+            # (job-mode already has final_records from AgentRuntime above)
+
+            # Cap runtime final_records to max_records as well
+            if _use_runtime and len(final_records) > task.max_records:
                 final_records = final_records[:task.max_records]
-
 
             # ----------------------------------------------------
             # 7. Synthesis & Intelligence Summary
             # ----------------------------------------------------
             emit_event("phase.change", {
                 "phase": "SYNTHESIZING",
-                "message": "Synthesizing executive intelligence dossier and citations...",
-                "thought": "Aggregating primary source excerpts, generating executive summary, and compiling technical analysis.",
+                "message": "Summarizing results...",
+                "thought": f"Building result summary from {len(fetched_docs)} sources",
                 "counters": counters.__dict__
             })
 
-            # Build combined source excerpts for comprehensive dossier synthesis
-            source_excerpts = []
-            for doc in fetched_docs[:8]:
-                text_snippet = (doc.extracted_text or "").strip()
-                if text_snippet:
-                    source_excerpts.append(f"Source URL: {doc.requested_url}\n{text_snippet[:2000]}")
-            combined_source_texts = "\n\n---\n\n".join(source_excerpts)
+            # Build combined source excerpts (only if runtime didn't already build them)
+            if not combined_source_texts:
+                source_excerpts = []
+                for doc in fetched_docs[:8]:
+                    text_snippet = (doc.extracted_text or "").strip()
+                    if text_snippet:
+                        source_excerpts.append(f"Source URL: {doc.requested_url}\n{text_snippet[:2000]}")
+                combined_source_texts = "\n\n---\n\n".join(source_excerpts)
 
             export_meta = {
                 "task_id": task.id,
@@ -728,7 +763,7 @@ class ResearchOrchestrator:
             emit_event("phase.change", {
                 "phase": "EXPORTING",
                 "message": f"Compiling final payload in format '{task.requested_output_format.upper()}'...",
-                "thought": "Serializing dataset, attaching cryptographic SHA256 signatures, and persisting file.",
+                "thought": "Exporting results",
                 "counters": counters.__dict__
             })
             step_count += 1

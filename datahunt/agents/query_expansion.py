@@ -10,12 +10,27 @@ from datahunt.logger import logger
 from datahunt.agents.query_understanding import JobSearchRequest
 
 
+class ExpandedTitle(BaseModel):
+    """A single expanded job title with provenance metadata."""
+    title: str
+    is_explicit: bool = False  # True only if the user typed this title themselves
+
+
 class ExpandedQuery(BaseModel):
     """Result of expanding a JobSearchRequest with synonyms and related skills."""
     primary_title: str
+    # Titles the user explicitly mentioned (from req.job_title / req.alternative_titles)
+    explicit_titles: List[str] = Field(default_factory=list)
+    # Titles inferred/expanded by taxonomy or LLM (is_explicit=False)
+    inferred_titles: List[str] = Field(default_factory=list)
+    # Flat merged list (explicit first) for backward-compatible consumers
     all_titles: List[str] = Field(default_factory=list)
+
+    # Skills explicitly mentioned by the user → must satisfy
     must_have_skills: List[str] = Field(default_factory=list)
+    # Skills inferred/expanded from context → nice to have but not required
     nice_to_have_skills: List[str] = Field(default_factory=list)
+
     search_keywords: List[str] = Field(default_factory=list)
     negative_keywords: List[str] = Field(default_factory=list)
 
@@ -75,17 +90,22 @@ _EXPANSION_PROMPT = """You are a technical recruiter and search query expansion 
 Analyze the user's job search request:
 Title: {title}
 Given alternative titles: {alt_titles}
-Skills: {skills}
+Skills explicitly mentioned by user: {explicit_skills}
 Location: {location}
 Remote: {remote}
 
 Generate related job titles, related search keywords, must-have vs nice-to-have skills, and negative keywords to exclude false positives.
 
+IMPORTANT RULES:
+- must_have_skills: ONLY include skills the user explicitly mentioned. Do NOT infer or add skills here.
+- nice_to_have_skills: expanded/inferred skills that would be beneficial but user did not mention.
+- all_titles: inferred/expanded titles only (do NOT repeat user's titles here).
+
 Return ONLY a JSON object:
 {{
-  "all_titles": ["primary title", "3 to 6 closely related professional titles"],
-  "must_have_skills": ["top core skills"],
-  "nice_to_have_skills": ["secondary helpful skills"],
+  "all_titles": ["3 to 6 closely related professional titles (inferred, not user's originals)"],
+  "must_have_skills": [],
+  "nice_to_have_skills": ["secondary helpful skills inferred from the role"],
   "search_keywords": ["specific search terms that appear on actual job postings"],
   "negative_keywords": ["irrelevant terms like intern, unpaid, sales, lead generator if not asked"]
 }}
@@ -101,26 +121,50 @@ class QueryExpansionAgent:
         self._client = gemini_client
 
     def expand(self, req: JobSearchRequest) -> ExpandedQuery:
-        """Expand user search request into broader query terms."""
+        """Expand user search request into broader query terms.
+
+        Separation contract
+        -------------------
+        explicit_titles  — titles the user typed (req.job_title + req.alternative_titles).
+        inferred_titles  — expansions added by taxonomy / LLM (is_explicit=False).
+        must_have_skills — ONLY skills the user explicitly provided in req.skills.
+                           NEVER populated with inferred skills.
+        nice_to_have_skills — inferred/expanded skills from taxonomy or LLM.
+        """
         primary_title = req.job_title or "Software Engineer"
-        
+
+        # Collect what the user explicitly stated
+        user_explicit_titles: List[str] = list(dict.fromkeys(
+            [primary_title] + list(req.alternative_titles)
+        ))
+        user_explicit_skills: List[str] = list(req.skills)  # exactly what the user said
+
         # Try LLM first if available
         if self._client and getattr(self._client, "is_live", False):
             try:
                 prompt = _EXPANSION_PROMPT.format(
                     title=primary_title,
                     alt_titles=", ".join(req.alternative_titles),
-                    skills=", ".join(req.skills),
+                    explicit_skills=", ".join(user_explicit_skills) or "none",
                     location=req.location or "Any",
                     remote=req.remote_status
                 )
                 res = self._client._call_gemini_json(prompt, schema_description="query expansion JSON", stage="expansion")
                 if isinstance(res, dict) and "all_titles" in res:
-                    titles = list(dict.fromkeys([primary_title] + req.alternative_titles + res.get("all_titles", [])))
+                    # LLM returns only inferred titles; deduplicate against explicit
+                    explicit_set_lower = {t.lower() for t in user_explicit_titles}
+                    inferred: List[str] = [
+                        t for t in res.get("all_titles", [])
+                        if t.lower() not in explicit_set_lower
+                    ]
+                    all_titles = list(dict.fromkeys(user_explicit_titles + inferred))
                     return ExpandedQuery(
                         primary_title=primary_title,
-                        all_titles=titles,
-                        must_have_skills=res.get("must_have_skills", req.skills),
+                        explicit_titles=user_explicit_titles,
+                        inferred_titles=inferred,
+                        all_titles=all_titles,
+                        # must_have = only what user explicitly said (LLM must not add here)
+                        must_have_skills=user_explicit_skills,
                         nice_to_have_skills=res.get("nice_to_have_skills", []),
                         search_keywords=res.get("search_keywords", [primary_title]),
                         negative_keywords=res.get("negative_keywords", ["unpaid", "internship"] if req.employment_type != "internship" else [])
@@ -128,7 +172,7 @@ class QueryExpansionAgent:
             except Exception as e:
                 logger.warning(f"QueryExpansionAgent LLM call failed ({e}), using taxonomy fallback")
 
-        # Deterministic taxonomy fallback
+        # ── Deterministic taxonomy fallback ──────────────────────────────────
         t_key = primary_title.lower().strip()
         matched_tax = None
         for k, v in TAXONOMY.items():
@@ -136,24 +180,32 @@ class QueryExpansionAgent:
                 matched_tax = v
                 break
 
-        expanded_titles = [primary_title] + req.alternative_titles
-        skills = list(req.skills)
+        inferred_titles: List[str] = []
+        inferred_skills: List[str] = []
         negatives = ["unpaid"]
 
         if matched_tax:
+            explicit_set_lower = {t.lower() for t in user_explicit_titles}
             for t in matched_tax["titles"]:
-                if t not in expanded_titles:
-                    expanded_titles.append(t)
+                if t.lower() not in explicit_set_lower:
+                    inferred_titles.append(t)
             for s in matched_tax["skills"]:
-                if s not in skills:
-                    skills.append(s)
+                # Only add to inferred if the user did NOT already mention it
+                if s not in user_explicit_skills:
+                    inferred_skills.append(s)
             negatives.extend(matched_tax.get("negatives", []))
+
+        all_titles = list(dict.fromkeys(user_explicit_titles + inferred_titles))
 
         return ExpandedQuery(
             primary_title=primary_title,
-            all_titles=list(dict.fromkeys(expanded_titles)),
-            must_have_skills=skills[:5],
-            nice_to_have_skills=skills[5:10],
-            search_keywords=[primary_title] + expanded_titles[:3],
+            explicit_titles=user_explicit_titles,
+            inferred_titles=inferred_titles,
+            all_titles=all_titles,
+            # must_have: ONLY what the user explicitly said — never inferred
+            must_have_skills=user_explicit_skills,
+            # nice_to_have: taxonomy-inferred skills (capped at 10)
+            nice_to_have_skills=inferred_skills[:10],
+            search_keywords=[primary_title] + all_titles[:3],
             negative_keywords=list(set(negatives))
         )

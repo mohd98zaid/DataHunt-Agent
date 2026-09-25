@@ -25,6 +25,9 @@ class JobMatchResult(BaseModel):
     unknown_requirements: List[str] = Field(default_factory=list)
     match_explanation: str = ""
 
+    # Per-dimension breakdown — values follow MATCH=1.0, PARTIAL=0.5, UNKNOWN=0.3, MISMATCH=0.0
+    score_breakdown: Dict[str, Any] = Field(default_factory=dict)
+
     # Multipliers & Weights applied
     title_match_score: float = 0.0
     skills_match_score: float = 0.0
@@ -209,6 +212,62 @@ class JobAnalysisAgent:
         elif any(b in domain_lower for b in ("linkedin.com", "indeed.com", "bayt.com", "naukri.com")):
             source_quality_weight = 0.98
 
+        # ── Score breakdown (per-dimension, transparent) ──────────────────────
+        # Dimension values follow: MATCH=1.0, PARTIAL=0.5, UNKNOWN=0.3, MISMATCH=0.0
+        score_breakdown: Dict[str, Any] = {
+            "title": {
+                "score": round(title_score, 2),
+                "weight": 0.35,
+                "status": (
+                    "match" if title_score >= 0.9
+                    else "partial" if title_score >= 0.4
+                    else "unknown" if title_score >= 0.2
+                    else "mismatch"
+                ),
+            },
+            "location": {
+                "score": round(loc_score, 2),
+                "weight": 0.25,
+                "status": (
+                    "match" if loc_score >= 0.9
+                    else "partial" if loc_score >= 0.5
+                    else "unknown" if loc_score >= 0.3
+                    else "mismatch"
+                ),
+            },
+            "skills": {
+                "score": round(skills_score, 2),
+                "weight": 0.25,
+                "status": (
+                    "match" if skills_score >= 0.8
+                    else "partial" if skills_score >= 0.4
+                    else "unknown" if skills_score == 0.5  # default when no target skills
+                    else "mismatch"
+                ),
+            },
+            "salary_experience": {
+                "score": round(sal_exp_score, 2),
+                "weight": 0.15,
+                "status": (
+                    "match" if sal_exp_score >= 0.75
+                    else "partial" if sal_exp_score >= 0.5
+                    else "unknown" if sal_exp_score == 0.6  # default when undisclosed
+                    else "mismatch"
+                ),
+            },
+        }
+
+        # Flag as estimated when key dimensions rely on defaults (no real evidence)
+        incomplete_dimensions = [
+            dim for dim, info in score_breakdown.items()
+            if info["status"] == "unknown"
+        ]
+        if incomplete_dimensions:
+            score_breakdown["confidence"] = "estimated"
+            score_breakdown["incomplete_dimensions"] = incomplete_dimensions
+        else:
+            score_breakdown["confidence"] = "measured"
+
         # Weighted Base
         raw_score = (
             (title_score * 0.35) +
@@ -242,9 +301,11 @@ class JobAnalysisAgent:
             missing_requirements=missing,
             unknown_requirements=unknown,
             match_explanation=explanation,
+            score_breakdown=score_breakdown,
             title_match_score=round(title_score, 2),
             skills_match_score=round(skills_score, 2),
             location_match_score=round(loc_score, 2),
             freshness_weight=round(freshness_weight, 2),
             source_quality_weight=round(source_quality_weight, 2)
         )
+

@@ -11,6 +11,75 @@ from datahunt.agents.normalizer import NormalizedJob
 from datahunt.logger import logger
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Geographic helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+GEO_GROUPS = {
+    "saudi": ["saudi", "ksa", "riyadh", "jeddah", "dammam", "mecca", "medina"],
+    "uae": ["uae", "emirates", "dubai", "abu dhabi", "sharjah", "ajman"],
+    "india": ["india", "bangalore", "bengaluru", "mumbai", "delhi", "hyderabad", "pune", "chennai"],
+    "uk": ["uk", "united kingdom", "england", "london", "manchester", "birmingham"],
+    "us": ["us", "usa", "united states", "new york", "san francisco", "seattle", "austin"],
+}
+
+
+def _location_status(req_location: str, job_location: str, job_remote: str) -> str:
+    """Returns 'match', 'mismatch', or 'unknown'.
+
+    Three-way classification replaces the old binary match/reject logic so that
+    jobs with ambiguous or unclassifiable locations are preserved rather than
+    silently dropped.
+
+    Supports multi-region requested locations (e.g. "Saudi or UAE") by checking
+    if the job belongs to ANY of the requested geo groups.
+    """
+    if not req_location or not job_location:
+        return "unknown"
+
+    req_l = req_location.lower().strip()
+    job_l = job_location.lower().strip()
+
+    # Direct substring match
+    if req_l in job_l or job_l in req_l:
+        return "match"
+
+    # Geo alias expansion — collect ALL groups the request mentions (multi-region support)
+    req_groups = {
+        g for g, aliases in GEO_GROUPS.items() if any(a in req_l for a in aliases)
+    }
+    job_group = next(
+        (g for g, aliases in GEO_GROUPS.items() if any(a in job_l for a in aliases)),
+        None,
+    )
+
+    # Remote wildcard — only for truly agnostic global remote jobs.
+    # A US-specific "Denver, CO (Remote)" is NOT a global remote — it targets US workers.
+    # Only fire the wildcard when the job location has no identifiable country group.
+    GLOBAL_REMOTE_INDICATORS = ["worldwide", "global", "anywhere"]
+    is_purely_agnostic_remote = (
+        job_remote == "remote"
+        and job_group is None  # no country context resolved
+        and (
+            # Plain/agnostic location string
+            job_l in ("remote", "remote / unspecified", "remote (worldwide)", "worldwide", "global", "anywhere")
+            # OR explicitly global wording
+            or any(t in job_l for t in GLOBAL_REMOTE_INDICATORS)
+        )
+    )
+    if is_purely_agnostic_remote:
+        return "match"
+
+    if req_groups and job_group:
+        return "match" if job_group in req_groups else "mismatch"
+
+    if req_groups and not job_group:
+        # Job location doesn't map to any known region → can't classify → keep it
+        return "unknown"
+
+    return "unknown"
+
+
 class HardFilter:
     """
     Step 26-27: Filter out jobs that violate explicit hard constraints.
@@ -28,7 +97,7 @@ class HardFilter:
         req_remote = (req.remote_status or "any").lower()
         req_loc = (req.location or "").lower()
         req_sal_min = req.salary_min
-        req_exp_min = req.experience_min
+        req_exp_max = req.experience_max  # upper bound the user declared
 
         for job in jobs:
             # 1. Active status
@@ -51,47 +120,23 @@ class HardFilter:
                     # Usually remote jobs are fine, but keep lenient
                     pass
 
-            # 3. Strict Geographic Mismatch & Foreign Remote Exclusion
+            # 3. Strict Geographic Mismatch
+            # Three-way: 'match' → pass, 'unknown' → pass with warning, 'mismatch' → reject
             if req_loc and job.location:
-                loc_lower = job.location.lower()
-                # Expand geographic aliases (e.g. Dubai matches UAE, Riyadh matches Saudi)
-                geo_tokens = set(t.strip() for t in req_loc.replace(",", " ").split() if len(t.strip()) > 2 and t.strip() not in ("and", "the", "for", "with", "jobs", "roles"))
-                GEO_CITY_MAP = {
-                    "saudi": ["saudi", "ksa", "riyadh", "jeddah", "dammam", "khobar", "neom", "mecca", "medina"],
-                    "uae": ["uae", "dubai", "abu dhabi", "sharjah", "ajman", "emirates"],
-                    "india": ["india", "bangalore", "bengaluru", "mumbai", "delhi", "hyderabad", "pune", "chennai", "gurgaon", "noida"],
-                    "uk": ["uk", "united kingdom", "london", "manchester", "birmingham", "england", "scotland"],
-                    "us": ["us", "usa", "united states", "san francisco", "new york", "seattle", "austin", "boston", "chicago", "denver"],
-                }
-                for group_key, aliases in GEO_CITY_MAP.items():
-                    if any(a in req_loc for a in aliases):
-                        geo_tokens.update(aliases)
+                status = _location_status(req.location or "", job.location, job.remote_status)
 
-                matched_geo = any(t in loc_lower for t in geo_tokens)
-
-                # Collect conflicting tokens from other country clusters
-                conflicting_tokens = set()
-                for group_key, aliases in GEO_CITY_MAP.items():
-                    if not any(a in req_loc for a in aliases):
-                        conflicting_tokens.update(aliases)
-
-                has_conflict = any(ct in loc_lower for ct in conflicting_tokens)
-                is_pure_global_remote = job.remote_status == "remote" and (
-                    loc_lower in ("remote", "worldwide", "global", "anywhere", "remote / unspecified", "remote (worldwide)")
-                    or "worldwide" in loc_lower
-                    or "global" in loc_lower
-                )
-
-                if matched_geo:
-                    pass  # Direct location match within requested geography
-                elif is_pure_global_remote and req_remote != "onsite":
-                    pass  # Truly agnostic global remote job
-                elif job.remote_status == "remote" and has_conflict:
-                    rejected.append((job, f"Remote location '{job.location}' is restricted to another country, does not match requested '{req.location}'"))
+                if status == "mismatch":
+                    rejected.append((
+                        job,
+                        f"Location '{job.location}' is a confirmed geographic mismatch for requested '{req.location}'"
+                    ))
                     continue
-                elif not matched_geo:
-                    rejected.append((job, f"Location '{job.location}' does not match requested '{req.location}'"))
-                    continue
+                elif status == "unknown":
+                    # Can't classify — let the job through; flag it for downstream
+                    logger.debug(
+                        f"HardFilter: location status unknown for '{job.location}' vs '{req.location}'; passing through"
+                    )
+                    # fall through to passed
 
             # 4. Salary Floor Filter (only if both query and job have salary in same currency)
             if req_sal_min and job.salary_min_annual is not None:
@@ -104,12 +149,15 @@ class HardFilter:
                         rejected.append((job, f"Disclosed min salary ({job.salary_currency} {job.salary_min_annual}) below minimum floor ({req_sal_min})"))
                         continue
 
-            # 5. Experience Filter (hard cutoff only if job requires substantially more experience)
-            if req_exp_min is not None and job.experience_min_years is not None:
-                # If user has 2 years exp, and job requires 7+ years (Staff/Director), reject
-                if job.experience_min_years > (req_exp_min + 3):
-                    rejected.append((job, f"Job requires {job.experience_min_years}+ years exp, user specified {req_exp_min}"))
+            # 5. Experience Mismatch (only reject clear mismatches, not unknowns)
+            # If job has no experience data → unknown → let it through.
+            # Only reject if job explicitly requires more years than user's declared maximum
+            # (with a 1-year grace allowance).
+            if req_exp_max is not None and job.experience_min_years is not None:
+                if job.experience_min_years > req_exp_max + 1:  # allow 1 year grace
+                    rejected.append((job, f"Job requires {job.experience_min_years}+ years, user max is {req_exp_max}"))
                     continue
+            # If job.experience_min_years is None → unknown → pass through silently
 
             # Passed all hard gates
             passed.append(job)

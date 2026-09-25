@@ -83,6 +83,15 @@ MODEL_FALLBACKS = {
     "gemini-3.1-pro-preview": ["gemini-pro-latest", "gemini-3.6-flash", "gemini-flash-latest", "gemini-3.8-flash"],
 }
 
+# ── Simplified Primary + Fallback Chain (used by runtime.py) ────────────────
+# The same run uses PRIMARY_MODEL, falls back to FALLBACK_CHAIN only on failure.
+PRIMARY_MODEL = "gemini-flash-latest"
+FALLBACK_CHAIN = [
+    "gemini-3.6-flash",
+    "gemini-flash-lite-latest",
+    "gemini-3.1-flash-lite",
+]
+
 # Module-level thread-safe cooldowns and round-robin state
 _model_cooldowns: Dict[str, float] = {}
 _cooldown_lock = threading.Lock()
@@ -241,6 +250,21 @@ class GeminiClient:
         top = candidates[0] if candidates else self.flash_model
         logger.info(f"[Multi-Model Router] Task '{stage}' -> Candidate '{top}'")
         return top
+
+    def get_fallback_model(self, current_model: str) -> Optional[str]:
+        """Get the next fallback model in the chain.
+
+        Used by the simplified primary+fallback routing in runtime.py.
+        PRIMARY_MODEL is tried first; on failure this returns the next
+        model in FALLBACK_CHAIN until the chain is exhausted (returns None).
+        """
+        if current_model == PRIMARY_MODEL:
+            return FALLBACK_CHAIN[0] if FALLBACK_CHAIN else None
+        try:
+            idx = FALLBACK_CHAIN.index(current_model)
+            return FALLBACK_CHAIN[idx + 1] if idx + 1 < len(FALLBACK_CHAIN) else None
+        except ValueError:
+            return FALLBACK_CHAIN[0]
 
     @traceable(run_type="llm", name="DataHunt.GeminiCall")
     def _call_gemini_json(self, prompt: str, schema_description: str = "json", stage: str = "general") -> Any:

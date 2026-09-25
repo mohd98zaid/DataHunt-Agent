@@ -88,7 +88,10 @@ def test_query_expansion_taxonomy():
     assert isinstance(expanded, ExpandedQuery)
     assert len(expanded.all_titles) >= 2
     assert any("machine learning" in t.lower() or "ml engineer" in t.lower() for t in expanded.all_titles)
-    assert len(expanded.must_have_skills) >= 2
+    # must_have_skills contains ONLY user-explicit skills (none here — user gave no skills)
+    # Inferred/taxonomy skills go to nice_to_have_skills
+    assert len(expanded.must_have_skills) == 0  # no explicit skills in the query
+    assert len(expanded.nice_to_have_skills) >= 2  # taxonomy expansion should produce inferred skills
 
 
 def test_search_planner_multi_tier():

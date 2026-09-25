@@ -1,11 +1,17 @@
 import hashlib
 import json
 import re
+import time
+import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse, urljoin
 import httpx
 from bs4 import BeautifulSoup
+
+_fetch_cache: dict = {}
+_fetch_cache_lock = threading.Lock()
+_CACHE_TTL = 300  # 5 minutes within a run
 
 
 from datahunt.config import settings
@@ -368,6 +374,14 @@ class FetchTool:
         redirect_count = 0
         policy_flags = []
 
+        # Check in-memory URL cache before making a live HTTP request
+        cache_key = url
+        with _fetch_cache_lock:
+            cached = _fetch_cache.get(cache_key)
+            if cached and time.time() - cached['ts'] < _CACHE_TTL:
+                logger.debug(f"Cache hit for {url}")
+                return cached['result']
+
         try:
             while redirect_count <= self.max_redirects:
                 # 1. Strict SSRF check before resolving or connecting to target
@@ -508,7 +522,13 @@ class FetchTool:
                         retrieval_status=RetrievalStatus.FETCHED,
                         retrieved_at=retrieved_at
                     )
-                    return ToolResult(success=True, data=doc)
+                    result = ToolResult(success=True, data=doc)
+                    with _fetch_cache_lock:
+                        _fetch_cache[cache_key] = {'result': result, 'ts': time.time()}
+                        if len(_fetch_cache) > 200:
+                            oldest = min(_fetch_cache.items(), key=lambda x: x[1]['ts'])
+                            del _fetch_cache[oldest[0]]
+                    return result
 
             return ToolResult(
                 success=False,
@@ -539,3 +559,10 @@ class FetchTool:
                 error_message=f"Failed to fetch source: {e}",
                 metadata={"url": url}
             )
+
+
+def clear_fetch_cache() -> None:
+    """Clear the in-run fetch cache (useful for testing and between runs)."""
+    global _fetch_cache
+    with _fetch_cache_lock:
+        _fetch_cache = {}

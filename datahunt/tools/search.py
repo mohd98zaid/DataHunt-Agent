@@ -13,6 +13,39 @@ from datahunt.logger import logger
 from datahunt.policy import check_domain_policy
 from datahunt.tools.base import ToolResult
 
+def calculate_search_yield(total_hits: int, new_candidates: int) -> float:
+    """
+    Calculate the yield rate of a search iteration.
+    Returns fraction of hits that became new candidates (0.0 to 1.0).
+    """
+    if total_hits <= 0:
+        return 0.0
+    return round(new_candidates / total_hits, 3)
+
+
+SEARCH_TIER_PRIORITY = {
+    1: "official_ats",      # Greenhouse, Lever, Ashby, Workable direct
+    2: "regional_boards",   # Bayt, GulfTalent, NaukriGulf, GulfJobs
+    3: "specialized",       # LinkedIn, Indeed (regional), Wellfound
+    4: "general",           # DuckDuckGo/Google general search
+    5: "secondary",         # Aggregators, other sources
+}
+
+
+def assign_source_tier(url: str) -> int:
+    """Classify a URL into a search source tier (1=best, 5=worst)."""
+    url_lower = url.lower()
+    if any(d in url_lower for d in ["greenhouse.io", "lever.co", "ashbyhq.com", "workable.com", "smartrecruiters.com"]):
+        return 1
+    if any(d in url_lower for d in ["bayt.com", "gulftalent.com", "naukrigulf.com", "gulfjobs.com", "laimoon.com", "akhtaboot.com", "foundit.ae"]):
+        return 2
+    if any(d in url_lower for d in ["linkedin.com", "indeed.com", "glassdoor.com", "wellfound.com"]):
+        return 3
+    if any(d in url_lower for d in ["remoteok.com", "weworkremotely.com", "himalayas.app"]):
+        return 3
+    return 4
+
+
 class SearchHit:
     def __init__(
         self,
