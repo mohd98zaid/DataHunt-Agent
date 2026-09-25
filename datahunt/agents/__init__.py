@@ -2,7 +2,7 @@
 datahunt.agents — Specialized sub-agents for the complete 70-step DataHunt job search pipeline.
 """
 from datahunt.agents.query_understanding import (
-    QueryUnderstandingAgent, JobSearchRequest, ClarificationQuestion,
+    QueryUnderstandingAgent, JobSearchRequest, JobSearchSpec, ClarificationQuestion,
     detect_local_currency, LOCATION_TO_CURRENCY
 )
 from datahunt.agents.query_expansion import QueryExpansionAgent, ExpandedQuery
@@ -17,7 +17,7 @@ from datahunt.agents.job_monitor import JobMonitor
 from datahunt.agents.intent_router import IntentRouter
 
 __all__ = [
-    "QueryUnderstandingAgent", "JobSearchRequest", "ClarificationQuestion",
+    "QueryUnderstandingAgent", "JobSearchRequest", "JobSearchSpec", "ClarificationQuestion",
     "detect_local_currency", "LOCATION_TO_CURRENCY",
     "QueryExpansionAgent", "ExpandedQuery",
     "SearchPlannerAgent", "SearchTask",

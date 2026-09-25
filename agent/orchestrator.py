@@ -270,6 +270,7 @@ class ResearchOrchestrator:
             verified_records = []
             combined_source_texts = ""
             _use_runtime = is_job_search
+            _result = {}
 
             if _use_runtime:
                 from datahunt.agent import AgentRuntime, AgentState
@@ -784,49 +785,52 @@ class ResearchOrchestrator:
                 "warnings": warnings,
             }
 
-            try:
-                summary_text = self.client.summarize_run(
-                    run_metadata=export_meta,
-                    verified_records=[r.fields for r in final_records],
-                    source_texts=combined_source_texts,
-                    query_text=task.request_text,
-                    agent_mode=task_mode
-                )
-            except Exception as se:
-                logger.warning(f"Summarize run failed with {se}, synthesizing local research dossier...")
-                if task_mode == "market":
-                    from datahunt.llm.gemini_client import synthesize_local_market_dossier
-                    summary_text = synthesize_local_market_dossier(
-                        query=task.request_text,
-                        run_metadata=export_meta,
-                        verified_records=[r.fields for r in final_records],
-                        source_texts=combined_source_texts
-                    )
-                elif intent_spec and (
-                    intent_spec.requested_output == ResearchOutputType.ANSWER
-                    or intent_spec.intent in (
-                        ResearchIntent.HOW_TO,
-                        ResearchIntent.EXPLANATION,
-                        ResearchIntent.FACTUAL_RESEARCH,
-                        ResearchIntent.COMPARISON
-                    )
-                ):
-                    from datahunt.llm.gemini_client import synthesize_direct_answer
-                    summary_text = synthesize_direct_answer(
-                        query=task.request_text,
+            if is_job_search and _use_runtime and _result.get("job_matches_markdown"):
+                summary_text = _result.get("job_matches_markdown")
+            else:
+                try:
+                    summary_text = self.client.summarize_run(
                         run_metadata=export_meta,
                         verified_records=[r.fields for r in final_records],
                         source_texts=combined_source_texts,
-                        intent_spec=intent_spec
+                        query_text=task.request_text,
+                        agent_mode=task_mode
                     )
-                else:
-                    from datahunt.llm.gemini_client import synthesize_local_research_dossier
-                    summary_text = synthesize_local_research_dossier(
-                        query=task.request_text,
-                        run_metadata=export_meta,
-                        verified_records=[r.fields for r in final_records],
-                        source_texts=combined_source_texts
-                    )
+                except Exception as se:
+                    logger.warning(f"Summarize run failed with {se}, synthesizing local research dossier...")
+                    if task_mode == "market":
+                        from datahunt.llm.gemini_client import synthesize_local_market_dossier
+                        summary_text = synthesize_local_market_dossier(
+                            query=task.request_text,
+                            run_metadata=export_meta,
+                            verified_records=[r.fields for r in final_records],
+                            source_texts=combined_source_texts
+                        )
+                    elif intent_spec and (
+                        intent_spec.requested_output == ResearchOutputType.ANSWER
+                        or intent_spec.intent in (
+                            ResearchIntent.HOW_TO,
+                            ResearchIntent.EXPLANATION,
+                            ResearchIntent.FACTUAL_RESEARCH,
+                            ResearchIntent.COMPARISON
+                        )
+                    ):
+                        from datahunt.llm.gemini_client import synthesize_direct_answer
+                        summary_text = synthesize_direct_answer(
+                            query=task.request_text,
+                            run_metadata=export_meta,
+                            verified_records=[r.fields for r in final_records],
+                            source_texts=combined_source_texts,
+                            intent_spec=intent_spec
+                        )
+                    else:
+                        from datahunt.llm.gemini_client import synthesize_local_research_dossier
+                        summary_text = synthesize_local_research_dossier(
+                            query=task.request_text,
+                            run_metadata=export_meta,
+                            verified_records=[r.fields for r in final_records],
+                            source_texts=combined_source_texts
+                        )
             export_meta["summary"] = summary_text
 
             # ----------------------------------------------------

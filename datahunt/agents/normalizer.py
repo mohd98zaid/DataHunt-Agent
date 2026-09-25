@@ -19,6 +19,8 @@ class NormalizedJob(BaseModel):
     canonical_url: str = ""
     source_url: Optional[str] = None
     source_domain: str = ""
+    source: str = ""
+    source_job_id: Optional[str] = None
 
     # Job Details
     title: str = ""
@@ -27,33 +29,103 @@ class NormalizedJob(BaseModel):
     normalized_company: str = ""
     location: str = ""
     normalized_location: str = ""
+    city: Optional[str] = None
+    country: Optional[str] = None
     remote_status: str = "onsite"  # remote | hybrid | onsite | unknown
+    remote: Optional[bool] = None
 
     # Compensation
     salary_raw: Optional[str] = None
+    salary_min: Optional[float] = None
+    salary_max: Optional[float] = None
     salary_min_annual: Optional[float] = None
     salary_max_annual: Optional[float] = None
     salary_currency: str = "USD"
     salary_period: str = "annual"  # annual | monthly | hourly
 
     # Requirements
+    experience_min: Optional[int] = None
+    experience_max: Optional[int] = None
     experience_min_years: Optional[int] = None
     experience_max_years: Optional[int] = None
     skills: List[str] = Field(default_factory=list)
     qualifications: List[str] = Field(default_factory=list)
     responsibilities: List[str] = Field(default_factory=list)
     employment_type: str = "full_time"
+    description: Optional[str] = None
+
+    # Links & Multi-source provenance
+    job_url: str = ""
+    apply_url: Optional[str] = None
+    company_url: Optional[str] = None
+    primary_application_url: Optional[str] = None
+    all_source_urls: List[str] = Field(default_factory=list)
+    sources: List[str] = Field(default_factory=list)
 
     # Freshness & Status
+    posted_at: Optional[str] = None
     posted_date: Optional[str] = None
     posted_age_seconds: Optional[int] = None
     freshness_label: str = "Recently"
     closing_date: Optional[str] = None
+    updated_at: Optional[str] = None
+    discovered_at: Optional[str] = None
     is_active: bool = True
+
+    # Match / Qualification info
+    match_reason: Optional[str] = None
+    matched_skills: List[str] = Field(default_factory=list)
+    match_level: Optional[str] = None
+    relevance_score: float = 0.0
 
     # Provenance
     confidence: float = 0.8
     raw_fields: Dict[str, Any] = Field(default_factory=dict)
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.experience_min is not None and self.experience_min_years is None:
+            self.experience_min_years = self.experience_min
+        elif self.experience_min_years is not None and self.experience_min is None:
+            self.experience_min = self.experience_min_years
+
+        if self.experience_max is not None and self.experience_max_years is None:
+            self.experience_max_years = self.experience_max
+        elif self.experience_max_years is not None and self.experience_max is None:
+            self.experience_max = self.experience_max_years
+
+        if self.salary_min is not None and self.salary_min_annual is None:
+            self.salary_min_annual = self.salary_min
+        elif self.salary_min_annual is not None and self.salary_min is None:
+            self.salary_min = self.salary_min_annual
+
+        if self.salary_max is not None and self.salary_max_annual is None:
+            self.salary_max_annual = self.salary_max
+        elif self.salary_max_annual is not None and self.salary_max is None:
+            self.salary_max = self.salary_max_annual
+
+        if not self.job_url and self.canonical_url:
+            self.job_url = self.canonical_url
+        elif not self.canonical_url and self.job_url:
+            self.canonical_url = self.job_url
+
+        if not self.posted_at and self.posted_date:
+            self.posted_at = self.posted_date
+        elif not self.posted_date and self.posted_at:
+            self.posted_date = self.posted_at
+
+        if not self.primary_application_url:
+            self.primary_application_url = self.apply_url or self.canonical_url or self.job_url or None
+
+        if self.remote is None and self.remote_status:
+            self.remote = self.remote_status in ("remote", "hybrid")
+
+        if not self.sources and self.source:
+            self.sources = [self.source]
+
+        if not self.all_source_urls and (self.canonical_url or self.job_url):
+            u = self.canonical_url or self.job_url
+            if u:
+                self.all_source_urls = [u]
 
 
 class DataNormalizer:
@@ -129,31 +201,72 @@ class DataNormalizer:
         except (ValueError, TypeError):
             confidence_val = 0.85
 
+        # Resolve source name and domain
+        src_name = raw_fields.get("source_name") or raw_fields.get("source") or ""
+        src_dom = raw_fields.get("domain") or raw_fields.get("source_domain") or ""
+        if not src_name:
+            if src_dom:
+                src_name = src_dom.split(".")[0].title()
+            else:
+                src_name = "Public Web"
+
+        job_u = canonical_url or raw_fields.get("job_url") or raw_fields.get("source_url") or ""
+        app_u = raw_fields.get("apply_url") or raw_fields.get("application_url") or None
+        comp_u = raw_fields.get("company_url") or raw_fields.get("website_url") or None
+        desc = raw_fields.get("description") or None
+
+        city = None
+        country = None
+        if norm_loc:
+            parts = [p.strip() for p in norm_loc.split(",") if p.strip()]
+            if len(parts) >= 2:
+                city = parts[0]
+                country = parts[-1]
+            elif len(parts) == 1:
+                city = parts[0]
+
         return NormalizedJob(
             raw_id=record_id,
             job_id=str(raw_fields.get("job_id") or ""),
-            canonical_url=canonical_url or raw_fields.get("application_url") or "",
-            source_url=raw_fields.get("source_url") or canonical_url,
-            source_domain=raw_fields.get("domain") or "",
+            source_job_id=str(raw_fields.get("source_job_id") or raw_fields.get("job_id") or ""),
+            canonical_url=job_u,
+            job_url=job_u,
+            source_url=raw_fields.get("source_url") or job_u,
+            source_domain=src_dom,
+            source=src_name,
+            apply_url=app_u,
+            company_url=comp_u,
+            description=desc,
             title=title,
             normalized_title=norm_title,
             company=company,
             normalized_company=norm_company,
             location=loc,
             normalized_location=norm_loc,
+            city=city,
+            country=country,
             remote_status=remote_status,
+            remote=remote_status in ("remote", "hybrid"),
             salary_raw=salary_raw or None,
+            salary_min=salary_min,
+            salary_max=salary_max,
             salary_min_annual=salary_min,
             salary_max_annual=salary_max,
             salary_currency=currency,
             salary_period=period,
+            experience_min=exp_min,
+            experience_max=exp_max,
             experience_min_years=exp_min,
             experience_max_years=exp_max,
             skills=clean_skills,
             employment_type=str(raw_fields.get("employment_type") or "full_time"),
             posted_date=posted_date,
+            posted_at=posted_date,
             posted_age_seconds=posted_age_seconds,
             freshness_label=freshness_label,
+            sources=[src_name] if src_name else [],
+            all_source_urls=[job_u] if job_u else [],
+            primary_application_url=app_u or job_u or None,
             confidence=confidence_val,
             raw_fields=raw_fields
         )

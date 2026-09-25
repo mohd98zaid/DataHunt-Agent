@@ -13,8 +13,8 @@ class MatchStatus(str, Enum):
 
 
 GEO_ALIAS_GROUPS = {
-    "saudi": ["saudi", "saudi arabia", "ksa", "riyadh", "jeddah", "dammam", "khobar", "neom", "mecca", "medina", "makkah"],
-    "uae": ["uae", "united arab emirates", "emirates", "dubai", "abu dhabi", "abu-dhabi", "sharjah", "ajman", "ras al khaimah"],
+    "saudi": ["saudi", "saudi arabia", "ksa", "riyadh", "jeddah", "dammam", "khobar", "dhahran", "neom", "mecca", "medina", "makkah", "jubail", "yanbu"],
+    "uae": ["uae", "united arab emirates", "emirates", "dubai", "abu dhabi", "abu-dhabi", "sharjah", "ajman", "ras al khaimah", "fujairah", "umm al quwain", "al ain"],
     "egypt": ["egypt", "cairo", "alexandria", "giza"],
     "qatar": ["qatar", "doha"],
     "kuwait": ["kuwait", "kuwait city"],

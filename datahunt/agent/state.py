@@ -73,7 +73,9 @@ class AgentState:
     seen_canonical_urls: set = field(default_factory=set)
     seen_document_ids: set = field(default_factory=set)
     seen_application_urls: set = field(default_factory=set)
+    seen_source_job_ids: set = field(default_factory=set)
     seen_job_fingerprints: set = field(default_factory=set)
+    source_run_results: Dict[str, Any] = field(default_factory=dict)
 
     fetched_docs: List[Any] = field(default_factory=list)
     raw_records: List[Any] = field(default_factory=list)

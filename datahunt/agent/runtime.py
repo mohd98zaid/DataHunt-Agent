@@ -47,6 +47,8 @@ class AgentRuntime:
         self.export = export
         self.decision_engine = DecisionEngine()
         self.goal_evaluator = GoalEvaluator()
+        from datahunt.sources.registry import JobSourceRegistry
+        self.source_registry = JobSourceRegistry()
 
     def run(self, state: AgentState, emit: Callable[[str, Dict], None]) -> Dict[str, Any]:
         """
@@ -57,24 +59,26 @@ class AgentRuntime:
         state.status = AgentStatus.PLANNING
 
         # Initialize canonical job request if in jobs mode
-        if state.mode in ("jobs", "job") and not state.canonical_job_request:
-            try:
-                from datahunt.agents import QueryUnderstandingAgent, JobSearchRequest
-                qu_agent = QueryUnderstandingAgent(gemini_client=self.client)
-                job_req = qu_agent.understand(state.request)
-                if isinstance(job_req, JobSearchRequest):
-                    state.canonical_job_request = job_req
-                    state.explicit_titles = [job_req.job_title] if job_req.job_title else []
-                    state.explicit_skills = job_req.explicit_skills
-                    state.inferred_skills = job_req.inferred_skills
-                    state.locations = job_req.locations
-                    state.location_operator = job_req.location_operator
-                    state.explicit_location = job_req.location
-                    state.explicit_experience_min = job_req.experience_min
-                    state.explicit_experience_max = job_req.experience_max
-                    state.remote_allowed = job_req.remote_allowed
-            except Exception as e:
-                logger.warning(f"Could not build canonical job request: {e}")
+        if state.mode in ("jobs", "job"):
+            emit("status", {"message": "Intent: JOB_SEARCH", "phase": "PLANNING"})
+            if not state.canonical_job_request:
+                try:
+                    from datahunt.agents import QueryUnderstandingAgent, JobSearchRequest
+                    qu_agent = QueryUnderstandingAgent(gemini_client=self.client)
+                    job_req = qu_agent.understand(state.request)
+                    if isinstance(job_req, JobSearchRequest):
+                        state.canonical_job_request = job_req
+                        state.explicit_titles = [job_req.job_title] if job_req.job_title else []
+                        state.explicit_skills = job_req.explicit_skills
+                        state.inferred_skills = job_req.inferred_skills
+                        state.locations = job_req.locations
+                        state.location_operator = job_req.location_operator
+                        state.explicit_location = job_req.location
+                        state.explicit_experience_min = job_req.experience_min
+                        state.explicit_experience_max = job_req.experience_max
+                        state.remote_allowed = job_req.remote_allowed
+                except Exception as e:
+                    logger.warning(f"Could not build canonical job request: {e}")
 
         if state.search_plan:
             # Caller pre-injected a plan (e.g. orchestrator after LLM planning)
@@ -132,9 +136,57 @@ class AgentRuntime:
                 state.canonical_job_request = qu_agent.understand(state.request)
 
             job_req = state.canonical_job_request if isinstance(state.canonical_job_request, JobSearchRequest) else qu_agent.understand(state.request)
+
+            # 1. Select registered sources matching job spec
+            from datahunt.sources.models import SourceRunResult, SourceStatus
+            from datahunt.sources.adapters import get_adapter_for_source
+            sources = self.source_registry.get_sources_for_spec(job_req)
+
+            for s in sources:
+                if s.id not in state.source_run_results:
+                    state.source_run_results[s.id] = SourceRunResult(
+                        source_id=s.id,
+                        source_name=s.name,
+                        source_type=s.source_type.value,
+                        status=SourceStatus.PENDING,
+                    )
+
+            emit("status", {
+                "message": f"Sources selected: {len(sources)} across ATS, Regional, Major, Tech, and Remote boards",
+                "phase": "PLANNING"
+            })
+
+            # 2. Build adapter-targeted queries for all selected sources
+            source_queries = []
+            for s in sources:
+                adapter = get_adapter_for_source(s)
+                for sq in adapter.build_search_queries(job_req):
+                    source_queries.append({
+                        "query": sq,
+                        "tier": s.priority,
+                        "purpose": f"{s.source_type.value}:{s.name}",
+                        "source_id": s.id
+                    })
+
+            # 3. Augment with search planner queries
             expanded = qe_agent.expand(job_req)
             tasks = sp_agent.plan(job_req, expanded)
-            plan = [{"query": t.query, "tier": t.priority, "purpose": t.purpose} for t in tasks]
+
+            seen_q = set()
+            combined_plan = []
+            for q_obj in source_queries:
+                q_txt = q_obj["query"].strip()
+                if q_txt not in seen_q:
+                    seen_q.add(q_txt)
+                    combined_plan.append(q_obj)
+
+            for t in tasks:
+                q_txt = t.query.strip()
+                if q_txt not in seen_q:
+                    seen_q.add(q_txt)
+                    combined_plan.append({"query": t.query, "tier": t.priority, "purpose": t.purpose})
+
+            plan = combined_plan if combined_plan else [{"query": state.request, "tier": 1, "purpose": "primary"}]
         else:
             from datahunt.models.run import RunBudget
             spec = self.client.normalize_request(state.request)
@@ -205,6 +257,7 @@ class AgentRuntime:
                 break
 
             query = q_obj["query"]
+            source_id = q_obj.get("source_id")
             emit("status", {"message": f"Searching: {query[:60]}", "phase": "SEARCHING"})
 
             try:
@@ -213,6 +266,7 @@ class AgentRuntime:
                 new_candidates = 0
 
                 if res.success:
+                    from datahunt.sources.models import SourceStatus
                     for hit in res.data:
                         url = hit.get("url")
                         if not url:
@@ -222,10 +276,31 @@ class AgentRuntime:
                             continue
                         if state.mode in ("jobs", "job") and not is_valid_job_url(url):
                             continue
+
+                        # Identify source
+                        detected_source = self.source_registry.identify_source_for_url(url)
+                        hit_source_id = detected_source.id if detected_source else (source_id or "search_engine_index")
+                        hit_source_name = detected_source.name if detected_source else "Public Web"
+                        hit["source_id"] = hit_source_id
+                        hit["source"] = hit_source_name
+
                         state.seen_canonical_urls.add(canon)
                         state.seen_urls.add(url)
                         state.candidate_urls.append(hit)
                         new_candidates += 1
+
+                        if hit_source_id in state.source_run_results:
+                            s_rec = state.source_run_results[hit_source_id]
+                            s_rec.records_found += 1
+                            s_rec.status = SourceStatus.SUCCESS
+
+                    if source_id and source_id in state.source_run_results:
+                        if state.source_run_results[source_id].records_found == 0 and state.source_run_results[source_id].status == SourceStatus.PENDING:
+                            state.source_run_results[source_id].status = SourceStatus.NO_RESULTS
+                else:
+                    if source_id and source_id in state.source_run_results:
+                        from datahunt.sources.models import SourceStatus
+                        state.source_run_results[source_id].status = SourceStatus.UNAVAILABLE
 
                 self.decision_engine.record_search_iteration(
                     state, query, len(res.data) if res.success else 0, new_candidates
@@ -235,6 +310,9 @@ class AgentRuntime:
             except Exception as e:
                 logger.warning(f"Search error for '{query}': {e}")
                 state.add_warning(f"Search failed: {query[:40]}")
+                if source_id and source_id in state.source_run_results:
+                    from datahunt.sources.models import SourceStatus
+                    state.source_run_results[source_id].status = SourceStatus.ERROR
 
     def _act_fetch(self, state: AgentState, emit):
         """Fetch top candidates from the queue with candidate triage and deduplication."""
@@ -310,7 +388,15 @@ class AgentRuntime:
             try:
                 res = self.extract.execute(doc, spec, state.run_id)
                 if res.success:
+                    detected_source = self.source_registry.identify_source_for_url(doc.requested_url)
+                    src_name = detected_source.name if detected_source else "Public Web"
                     for rec in res.data:
+                        rec.fields.setdefault("source", src_name)
+                        rec.fields.setdefault("sources", [src_name])
+                        rec.fields.setdefault("job_url", doc.requested_url)
+                        rec.fields.setdefault("apply_url", doc.requested_url)
+                        rec.fields.setdefault("primary_application_url", doc.requested_url)
+                        rec.fields.setdefault("all_source_urls", [doc.requested_url])
                         state.raw_records.append(rec)
                         state.llm_calls += 1
                         emit("record.extracted", {
@@ -495,7 +581,29 @@ class AgentRuntime:
         if state.mode in ("jobs", "job") and final_records:
             final_records.sort(key=lambda r: -(getattr(r, "confidence", 0.0) or 0.0))
 
-        emit("status", {"message": f"Found {len(final_records)} qualified results", "phase": "COMPLETED"})
+        # Coverage evaluation and honest summary reporting
+        coverage_report_dict = None
+        coverage_summary = ""
+        job_matches_markdown = ""
+        if state.mode in ("jobs", "job"):
+            try:
+                from datahunt.agent.coverage import CoverageEvaluator, format_job_matches_markdown
+                from datahunt.models.job_spec import JobSearchSpec
+                evaluator = CoverageEvaluator()
+                spec = state.canonical_job_request if state.canonical_job_request else JobSearchSpec(raw_query=state.request)
+                cov_report = evaluator.evaluate(state, spec)
+                coverage_report_dict = cov_report.model_dump()
+                coverage_summary = evaluator.format_summary(cov_report, spec)
+                job_matches_markdown = format_job_matches_markdown(final_records, spec, cov_report)
+                emit("coverage_report", coverage_report_dict)
+                emit("status", {
+                    "message": f"Discovery complete: {cov_report.qualified_jobs_count} qualified jobs from {cov_report.sources_successful_count} sources",
+                    "phase": "COMPLETED"
+                })
+            except Exception as ce:
+                logger.warning(f"Error evaluating coverage report: {ce}")
+        else:
+            emit("status", {"message": f"Found {len(final_records)} qualified results", "phase": "COMPLETED"})
 
         result_status = "completed" if len(final_records) >= state.target_results else ("partial" if final_records else "failed")
 
@@ -513,6 +621,9 @@ class AgentRuntime:
             "warnings": state.warnings,
             "observations": state.observations[-20:],
             "actions_taken": state.actions_taken,
+            "coverage_report": coverage_report_dict,
+            "coverage_summary": coverage_summary,
+            "job_matches_markdown": job_matches_markdown,
         }
 
     def _extract_location(self, request: str) -> Optional[str]:

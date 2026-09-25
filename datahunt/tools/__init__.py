@@ -11,7 +11,7 @@ from datahunt.tools.extract import (
     extract_market_competitor_records
 )
 from datahunt.tools.verify import VerifyTool
-from datahunt.tools.dedupe import DedupeTool
+from datahunt.tools.dedupe import DedupeTool, deduplicate_normalized_jobs, is_preferred_application_url
 from datahunt.tools.export import ExportTool
 
 __all__ = [
@@ -25,5 +25,7 @@ __all__ = [
     "extract_market_competitor_records",
     "VerifyTool",
     "DedupeTool",
+    "deduplicate_normalized_jobs",
+    "is_preferred_application_url",
     "ExportTool"
 ]
