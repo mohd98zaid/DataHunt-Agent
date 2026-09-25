@@ -13,6 +13,56 @@ from datahunt.logger import logger
 from datahunt.policy import check_domain_policy
 from datahunt.tools.base import ToolResult
 
+def canonicalize_url(url: str) -> str:
+    """
+    Produce a canonical, normalized URL for deduplication.
+    - Strips fragments
+    - Strips marketing/tracking query parameters (utm_*, fbclid, gclid, etc.)
+    - Normalizes scheme and host to lowercase
+    - Normalizes trailing slashes for paths
+    - Preserves job IDs for known ATS (Greenhouse, Lever, Ashby, Workable, etc.)
+    """
+    if not url or not isinstance(url, str):
+        return ""
+    try:
+        from urllib.parse import urlparse, parse_qsl, urlencode
+        parsed = urlparse(url.strip())
+        scheme = "https" if parsed.scheme.lower() in ("http", "https") else (parsed.scheme.lower() or "https")
+        netloc = parsed.netloc.lower()
+        if netloc.startswith("www."):
+            netloc = netloc[4:]
+
+        path = parsed.path
+        if len(path) > 1 and path.endswith("/"):
+            path = path.rstrip("/")
+
+        TRACKING_PARAMS = {
+            "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+            "fbclid", "gclid", "ref", "ref_id", "source", "trk", "trackingid",
+            "gh_src", "lever-source", "ashby_jid", "utm", "from", "sp", "src"
+        }
+        query_parts = []
+        if parsed.query:
+            params = parse_qsl(parsed.query, keep_blank_values=False)
+            filtered = [(k, v) for k, v in params if k.lower() not in TRACKING_PARAMS]
+            if filtered:
+                filtered.sort(key=lambda x: x[0])
+                query_parts = urlencode(filtered)
+
+        query = ("?" + query_parts) if query_parts else ""
+        return f"{scheme}://{netloc}{path}{query}"
+    except Exception:
+        return url.strip().rstrip("/")
+
+
+def generate_job_fingerprint(company: str, title: str, location: str) -> str:
+    """Generate a content identity fingerprint for cross-source job deduplication."""
+    c = re.sub(r'[^a-z0-9]', '', (company or '').lower())
+    t = re.sub(r'[^a-z0-9]', '', (title or '').lower())
+    l = re.sub(r'[^a-z0-9]', '', (location or '').lower())
+    return f"{c}::{t}::{l}"
+
+
 def calculate_search_yield(total_hits: int, new_candidates: int) -> float:
     """
     Calculate the yield rate of a search iteration.

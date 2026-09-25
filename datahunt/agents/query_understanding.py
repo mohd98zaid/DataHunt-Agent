@@ -104,19 +104,39 @@ class ClarificationQuestion(BaseModel):
     assumed_defaults: Dict[str, Any] = Field(default_factory=dict)
 
 
+def _canonical_geo_name(name: str) -> str:
+    """Normalize geographical aliases to canonical country/region names."""
+    n = name.strip()
+    n_lower = n.lower()
+    if n_lower in ("saudi", "ksa", "saudi arabia"):
+        return "Saudi Arabia"
+    if n_lower in ("uae", "emirates", "united arab emirates"):
+        return "UAE"
+    if n_lower in ("uk", "united kingdom", "britain"):
+        return "UK"
+    if n_lower in ("us", "usa", "united states", "america"):
+        return "USA"
+    return n.title() if len(n) > 3 else n.upper()
+
+
 class JobSearchRequest(BaseModel):
-    """Fully structured representation of a user's job search intent."""
-    raw_query: str
+    """Fully structured canonical representation of a user's job search intent."""
+    raw_query: str = ""
 
     # Core requirements
     job_title: str = ""
     alternative_titles: List[str] = Field(default_factory=list)
     skills: List[str] = Field(default_factory=list)
+    explicit_skills: List[str] = Field(default_factory=list)
+    inferred_skills: List[str] = Field(default_factory=list)
 
     # Location
     location: Optional[str] = None
+    locations: List[str] = Field(default_factory=list)
+    location_operator: str = "OR"                  # "OR" | "AND"
     cities: List[str] = Field(default_factory=list)
     remote_status: Optional[str] = "any"           # "remote" | "hybrid" | "onsite" | "any"
+    remote_allowed: Optional[bool] = None
 
     # Experience & Salary
     experience_min: Optional[int] = None
@@ -127,6 +147,7 @@ class JobSearchRequest(BaseModel):
 
     # Job meta
     employment_type: Optional[str] = "full_time"   # "full_time" | "contract" | "part_time" | "internship" | "any"
+    employment_types: List[str] = Field(default_factory=list)
     industry: Optional[str] = None
     company_prefs: List[str] = Field(default_factory=list)
     freshness_days: Optional[int] = 30
@@ -156,7 +177,7 @@ class JobSearchRequest(BaseModel):
     def default_freshness(cls, v):
         return v if v is not None else 30
 
-    @field_validator("alternative_titles", "skills", "cities", "company_prefs", "missing_fields", mode="before")
+    @field_validator("alternative_titles", "skills", "explicit_skills", "inferred_skills", "locations", "employment_types", "cities", "company_prefs", "missing_fields", mode="before")
     @classmethod
     def ensure_list(cls, v):
         if v is None:
@@ -166,6 +187,42 @@ class JobSearchRequest(BaseModel):
         return [str(v)]
 
     def model_post_init(self, __context: Any) -> None:
+        """
+        Ensure salary_currency automatically defaults to regional currency,
+        synchronize locations list and location operator, and sync explicit skills.
+        """
+        # 1. Sync skills and explicit_skills
+        if self.skills and not self.explicit_skills:
+            self.explicit_skills = list(self.skills)
+        elif self.explicit_skills and not self.skills:
+            self.skills = list(self.explicit_skills)
+
+        # 2. Sync locations, location_operator, and location
+        if self.locations:
+            self.locations = [_canonical_geo_name(l) for l in self.locations if l]
+            if not self.location:
+                sep = " or " if self.location_operator.upper() == "OR" else ", "
+                self.location = sep.join(self.locations)
+        elif self.location:
+            loc_str = self.location.strip()
+            if " or " in loc_str.lower():
+                self.location_operator = "OR"
+                parts = [p.strip() for p in re.split(r'\s+or\s+', loc_str, flags=re.IGNORECASE) if p.strip()]
+                self.locations = [_canonical_geo_name(p) for p in parts]
+            elif " and " in loc_str.lower():
+                self.location_operator = "AND"
+                parts = [p.strip() for p in re.split(r'\s+and\s+', loc_str, flags=re.IGNORECASE) if p.strip()]
+                self.locations = [_canonical_geo_name(p) for p in parts]
+            else:
+                self.locations = [_canonical_geo_name(loc_str)]
+
+        # 3. Sync remote_allowed
+        if self.remote_allowed is None:
+            self.remote_allowed = (self.remote_status or "any").lower() in ("any", "remote", "hybrid")
+
+        # 4. Sync employment_types
+        if not self.employment_types and self.employment_type:
+            self.employment_types = [self.employment_type]
         """
         Ensure salary_currency automatically defaults to the regional local currency
         of the target location unless user query explicitly specified a different currency.
@@ -279,17 +336,35 @@ def _deterministic_parse(query: str) -> Dict[str, Any]:
     elif any(k in q_lower for k in ("onsite", "on-site", "on site", "office")):
         remote_status = "onsite"
 
-    # Location
+    # Location & Multi-Region parsing
     location = None
-    loc_match = re.search(r'\b(?:in|at|for)\s+([A-Z][a-zA-Z\s,]+?)(?:\s+with|\s+having|\s+and|\s*$)', query)
+    locations = []
+    location_operator = "OR"
+    loc_match = re.search(r'\b(?:in|at|for)\s+([A-Za-z\s,]+?)(?:\s+(?:with|having|paying|salary|\d+\+?\s*years?|\d+\s*[-–to]+)\b|\s*$)', query, re.IGNORECASE)
     if loc_match:
-        location = loc_match.group(1).strip().rstrip(",")
+        raw_loc = loc_match.group(1).strip().rstrip(",")
+        if " or " in raw_loc.lower():
+            location_operator = "OR"
+            parts = [p.strip() for p in re.split(r'\s+or\s+', raw_loc, flags=re.IGNORECASE) if p.strip()]
+            locations = [_canonical_geo_name(p) for p in parts]
+            location = " or ".join(locations)
+        elif " and " in raw_loc.lower():
+            location_operator = "AND"
+            parts = [p.strip() for p in re.split(r'\s+and\s+', raw_loc, flags=re.IGNORECASE) if p.strip()]
+            locations = [_canonical_geo_name(p) for p in parts]
+            location = " and ".join(locations)
+        else:
+            locations = [_canonical_geo_name(raw_loc)]
+            location = locations[0]
     else:
         # Check known location keys
+        found_keys = []
         for key in LOCATION_TO_CURRENCY:
             if re.search(rf'\b{re.escape(key)}\b', q_lower):
-                location = key.title()
-                break
+                found_keys.append(_canonical_geo_name(key))
+        if found_keys:
+            locations = found_keys
+            location = " or ".join(found_keys)
 
     # Experience
     exp_match = re.search(r'(\d+)\s*[-–to]+\s*(\d+)\s*(?:years?|yrs?)', q_lower)
@@ -341,18 +416,25 @@ def _deterministic_parse(query: str) -> Dict[str, Any]:
     title = re.sub(r'\s+', ' ', filler).strip()[:60] or query[:60]
 
     return {
+        "raw_query": query,
         "job_title": title,
         "alternative_titles": [],
         "skills": [],
+        "explicit_skills": [],
+        "inferred_skills": [],
         "location": location,
-        "cities": [location] if location else [],
+        "locations": locations,
+        "location_operator": location_operator,
+        "cities": locations if locations else ([location] if location else []),
         "remote_status": remote_status,
+        "remote_allowed": remote_status in ("any", "remote", "hybrid"),
         "experience_min": exp_min,
         "experience_max": exp_max,
         "salary_min": salary_min,
         "salary_max": None,
         "salary_currency": currency,
         "employment_type": emp_type,
+        "employment_types": [emp_type],
         "industry": None,
         "company_prefs": [],
         "freshness_days": 30,
@@ -375,6 +457,8 @@ class QueryUnderstandingAgent:
     def __init__(self, gemini_client=None):
         self._client = gemini_client
 
+    _deterministic_parse = staticmethod(_deterministic_parse)
+
     def understand(self, query: str) -> "JobSearchRequest | ClarificationQuestion":
         """
         Parse query → JobSearchRequest.
@@ -389,12 +473,14 @@ class QueryUnderstandingAgent:
                     continue
                 cleaned[k] = v
 
+        cleaned["raw_query"] = query
         try:
-            req = JobSearchRequest(raw_query=query, **cleaned)
+            req = JobSearchRequest(**cleaned)
         except Exception as ex:
             logger.warning(f"Error constructing JobSearchRequest: {ex}. Using deterministic fallback.")
             det = _deterministic_parse(query)
-            req = JobSearchRequest(raw_query=query, **det)
+            det["raw_query"] = query
+            req = JobSearchRequest(**det)
 
         # Only hard-block if we truly have no job title
         if not req.job_title.strip() and req.clarification_needed:

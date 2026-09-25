@@ -1,6 +1,15 @@
 from .state import AgentState, AgentStatus, SearchIterationStats
 from .decision import AgentAction, DecisionEngine
-from .policies import GoalEvaluator, MatchStatus, match_location, match_experience, match_skills
+from .policies import (
+    GoalEvaluator,
+    MatchStatus,
+    match_location,
+    match_experience,
+    match_skills,
+    match_title_relevance,
+    qualify_job,
+    QualificationResult,
+)
 from .runtime import AgentRuntime
 from agent import (
     BaseAgent,
@@ -23,5 +32,6 @@ __all__ = [
     "AgentState", "AgentStatus", "SearchIterationStats",
     "AgentAction", "DecisionEngine",
     "GoalEvaluator", "MatchStatus", "match_location", "match_experience", "match_skills",
+    "match_title_relevance", "qualify_job", "QualificationResult",
     "AgentRuntime",
 ]

@@ -2,6 +2,7 @@ from typing import Any, Dict, List
 from datahunt.logger import logger
 from datahunt.models import ExtractedRecord, VerificationStatus
 from datahunt.tools.base import ToolResult
+from datahunt.tools.search import canonicalize_url, generate_job_fingerprint
 
 class DedupeTool:
     name = "deduplicate_records"
@@ -19,10 +20,13 @@ class DedupeTool:
             # Prioritize composite entity identity key (company::title::location)
             # This prevents collapsing distinct jobs, products, or concepts discovered on the same page
             key = None
+            canon_url = canonicalize_url(record.canonical_url) if record.canonical_url else ""
             if record.identity_key and record.identity_key.strip():
                 key = f"ident::{record.identity_key.strip().lower()}"
-            elif record.canonical_url and record.canonical_url.strip():
-                key = f"url::{record.canonical_url.strip().lower()}"
+            elif canon_url:
+                key = f"url::{canon_url}"
+            elif record.fields.get("title") and record.fields.get("company"):
+                key = f"fp::{generate_job_fingerprint(record.fields.get('company'), record.fields.get('title'), record.fields.get('location'))}"
             else:
                 key = f"id::{record.id}"
 

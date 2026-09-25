@@ -60,60 +60,46 @@ class SearchPlannerAgent:
         )
 
         # 1. Tier 1: Direct ATS endpoints & Local Portals (Highest precision & 0-sec live accuracy)
+        # Pick top 3-4 ATS and top 2-3 regional board queries for primary title
         ats_raw = generate_ats_queries(f"{primary_title} in {loc}" if loc else primary_title)
+        tier1_ats = 0
+        tier1_reg = 0
         for q in ats_raw:
-            s_type = "regional_board" if any(b in q.lower() for b in ("bayt", "naukri", "gulftalent")) else "ats"
-            add_task(q, source_type=s_type, purpose="direct_ats_harvest", priority=1, freshness=None)
+            is_reg = any(b in q.lower() for b in ("bayt", "naukri", "gulftalent"))
+            if is_reg and tier1_reg < 3:
+                add_task(q, source_type="regional_board", purpose="direct_ats_harvest", priority=1, freshness=None)
+                tier1_reg += 1
+            elif not is_reg and tier1_ats < 3:
+                add_task(q, source_type="ats", purpose="direct_ats_harvest", priority=1, freshness=None)
+                tier1_ats += 1
 
-        # 2. Tier 2: Regional & Major Boards (Broad sweep)
+        # 2. Tier 2: Regional & Major Boards (Broad sweep) - select top 2-3
         broad_raw = generate_broad_job_queries(f"{primary_title} in {loc}" if loc else primary_title)
+        tier2_count = 0
         for q in broad_raw:
+            if tier2_count >= 3:
+                break
             q_low = q.lower()
             is_regional = any(b in q_low for b in regional_keywords) or any(lt in q_low for lt in loc_tokens)
             s_type = "regional_board" if is_regional else "job_board"
-            prio = 1 if (has_specific_loc and is_regional) else 2
-            add_task(q, source_type=s_type, purpose="broad_internet_sweep", priority=prio, freshness=None)
+            add_task(q, source_type=s_type, purpose="broad_internet_sweep", priority=2, freshness=None)
+            tier2_count += 1
 
-        # Top alternative title regional boost (e.g. "AI Engineer" if primary is "GenAI Engineer")
+        # 3. Tier 3: Top alternative title regional boost & ATS queries (e.g. "AI Engineer" if primary is "GenAI Engineer")
         if expanded.all_titles and len(expanded.all_titles) > 1 and has_specific_loc:
             alt_primary = expanded.all_titles[1]
             if any(k in loc.lower() for k in ("dubai", "uae", "saudi", "riyadh", "abu dhabi", "gulf", "ksa")):
-                add_task(f'"{alt_primary}" Dubai jobs', "regional_board", "broad_internet_sweep", 1, None)
-                add_task(f'"{alt_primary}" Saudi Arabia jobs', "regional_board", "broad_internet_sweep", 1, None)
-                add_task(f'"{alt_primary}" Riyadh jobs', "regional_board", "broad_internet_sweep", 1, None)
-                add_task(f'site:gulftalent.com "{alt_primary}"', "regional_board", "direct_ats_harvest", 1, None)
-                add_task(f'site:bayt.com "{alt_primary}"', "regional_board", "direct_ats_harvest", 1, None)
-                add_task(f'site:naukrigulf.com "{alt_primary}"', "regional_board", "direct_ats_harvest", 1, None)
-
-        # 3. Tier 3: ATS queries for top alternative titles
-        for alt_title in expanded.all_titles[1:3]:
-            alt_loc = f"{alt_title} in {loc}" if loc else alt_title
-            add_task(f"site:job-boards.greenhouse.io {alt_loc}", "ats", "ats_synonym_harvest", 2, None)
-            add_task(f"site:jobs.lever.co {alt_loc}", "ats", "ats_synonym_harvest", 2, None)
-            add_task(f"site:jobs.ashbyhq.com {alt_loc}", "ats", "ats_synonym_harvest", 2, None)
+                add_task(f'"{alt_primary}" (Dubai OR Riyadh OR Saudi OR UAE) jobs site:boards.greenhouse.io', "ats", "direct_ats_harvest", 2, None)
+                add_task(f'site:gulftalent.com "{alt_primary}"', "regional_board", "direct_ats_harvest", 2, None)
+            else:
+                add_task(f'site:jobs.lever.co "{alt_primary}" {loc}', "ats", "ats_synonym_harvest", 2, None)
 
         # 4. Tier 4: Remote / Startup Specific Boards (if requested or applicable)
         if remote in ("remote", "any") and not has_specific_loc:
             add_task(f"site:wellfound.com/jobs {primary_title} remote", "startup", "startup_remote", 3, None)
             add_task(f"site:weworkremotely.com {primary_title}", "remote", "remote_niche", 3, None)
-            add_task(f"site:remoteok.com {primary_title}", "remote", "remote_niche", 3, None)
-            add_task(f"site:builtin.com {primary_title} remote", "startup", "startup_remote", 3, None)
-        elif remote == "remote":
-            add_task(f"site:wellfound.com/jobs {primary_title} remote", "startup", "startup_remote", 2, None)
 
-        # 5. Tier 5: Skills & Keyword Target Queries
-        if expanded.must_have_skills:
-            top_skills = " ".join(expanded.must_have_skills[:3])
-            loc_str = f"in {loc}" if loc else ""
-            add_task(f"{primary_title} {top_skills} {loc_str} careers apply", "career_page", "skill_targeted", 3, 14)
-            add_task(f"{primary_title} {top_skills} {loc_str} \"apply now\" OR \"open positions\"", "web", "skill_targeted", 4, 14)
-
-        # 6. Tier 6: Direct Career Page Discovery
-        if loc:
-            add_task(f'"{primary_title}" "{loc}" careers inurl:careers -site:greenhouse.io -site:lever.co', "career_page", "career_page_discovery", 4, 30)
-            add_task(f'{primary_title} "{loc}" hiring "open roles" 2026', "web", "web_discovery", 5, 30)
-
-        # Sort tasks: prioritize queries that explicitly match the requested geography
+        # Sort tasks: ensure priority 1 (initial round) comes first, capped at 12 tasks total
         def task_sort_key(t: SearchTask):
             if has_specific_loc:
                 q_low = t.query.lower()
@@ -127,4 +113,5 @@ class SearchPlannerAgent:
             return (t.priority + 1, 1)
 
         tasks.sort(key=task_sort_key)
-        return tasks
+        # Cap total plan between 6 and 12 high-value queries
+        return tasks[:12]

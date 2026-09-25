@@ -279,6 +279,21 @@ class ResearchOrchestrator:
             if _use_runtime:
                 from datahunt.agent import AgentRuntime, AgentState
 
+                canonical_kwargs = {}
+                if 'job_req' in locals() and isinstance(job_req, JobSearchRequest):
+                    canonical_kwargs = {
+                        "canonical_job_request": job_req,
+                        "locations": job_req.locations or ([job_req.location] if job_req.location else []),
+                        "location_operator": job_req.location_operator or "OR",
+                        "remote_allowed": job_req.remote_allowed if job_req.remote_allowed is not None else True,
+                        "explicit_location": job_req.location or "",
+                        "explicit_titles": [job_req.job_title] if job_req.job_title else [],
+                        "explicit_experience_min": job_req.experience_min,
+                        "explicit_experience_max": job_req.experience_max,
+                        "explicit_skills": job_req.explicit_skills or job_req.skills or [],
+                        "inferred_skills": job_req.inferred_skills or [],
+                    }
+
                 agent_state = AgentState(
                     request=task.request_text,
                     run_id=run.id,
@@ -289,12 +304,13 @@ class ResearchOrchestrator:
                     max_fetch_calls=run.budget.max_pages,
                     deadline=deadline,
                     max_iterations=20,
+                    **canonical_kwargs,
                 )
                 # Inject the pre-computed search plan so we don't re-plan
                 agent_state.search_plan = [
                     {
                         "query": q.get("query") if isinstance(q, dict) else str(q),
-                        "tier": 1 if (isinstance(q, dict) and q.get("purpose") == "direct_ats_harvest") else 2,
+                        "tier": q.get("priority", 1 if (isinstance(q, dict) and q.get("purpose") == "direct_ats_harvest") else 2) if isinstance(q, dict) else 2,
                         "purpose": q.get("purpose", "general") if isinstance(q, dict) else "general",
                     }
                     for q in queries

@@ -4,6 +4,7 @@ AgentRuntime — The primary decision-loop execution engine.
 Replaces the 8-phase linear pipeline in agent/orchestrator.py with
 an explicit observe→decide→act loop.
 """
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
@@ -13,12 +14,20 @@ from datahunt.errors import DataHuntError, ErrorCode
 from datahunt.logger import logger
 from datahunt.llm import GeminiClient
 from datahunt.tools import SearchTool, FetchTool, ExtractTool, VerifyTool, DedupeTool, ExportTool
-from datahunt.tools.search import is_valid_job_url
+from datahunt.tools.search import is_valid_job_url, canonicalize_url, generate_job_fingerprint
 from datahunt.models import VerificationStatus
 
 from .state import AgentState, AgentStatus
 from .decision import AgentAction, DecisionEngine
-from .policies import GoalEvaluator, match_location, match_experience, MatchStatus
+from .policies import (
+    GoalEvaluator,
+    MatchStatus,
+    match_location,
+    match_experience,
+    match_title_relevance,
+    qualify_job,
+    QualificationResult,
+)
 
 
 class AgentRuntime:
@@ -44,13 +53,32 @@ class AgentRuntime:
         Execute the agent loop until a stop condition is reached.
         Returns the final result dict.
         """
-        emit("status", {"message": "Understanding request", "phase": "PLANNING"})
+        emit("status", {"message": "Understanding search requirements", "phase": "PLANNING"})
         state.status = AgentStatus.PLANNING
+
+        # Initialize canonical job request if in jobs mode
+        if state.mode in ("jobs", "job") and not state.canonical_job_request:
+            try:
+                from datahunt.agents import QueryUnderstandingAgent, JobSearchRequest
+                qu_agent = QueryUnderstandingAgent(gemini_client=self.client)
+                job_req = qu_agent.understand(state.request)
+                if isinstance(job_req, JobSearchRequest):
+                    state.canonical_job_request = job_req
+                    state.explicit_titles = [job_req.job_title] if job_req.job_title else []
+                    state.explicit_skills = job_req.explicit_skills
+                    state.inferred_skills = job_req.inferred_skills
+                    state.locations = job_req.locations
+                    state.location_operator = job_req.location_operator
+                    state.explicit_location = job_req.location
+                    state.explicit_experience_min = job_req.experience_min
+                    state.explicit_experience_max = job_req.experience_max
+                    state.remote_allowed = job_req.remote_allowed
+            except Exception as e:
+                logger.warning(f"Could not build canonical job request: {e}")
 
         if state.search_plan:
             # Caller pre-injected a plan (e.g. orchestrator after LLM planning)
-            emit("status", {"message": f"Using pre-built plan: {len(state.search_plan)} queries", "phase": "PLANNED"})
-            # Still extract constraints from the request for filtering
+            emit("status", {"message": f"Using search plan: {len(state.search_plan)} queries", "phase": "PLANNED"})
             if state.explicit_location is None:
                 state.explicit_location = self._extract_location(state.request)
             if state.explicit_experience_min is None and state.explicit_experience_max is None:
@@ -62,7 +90,7 @@ class AgentRuntime:
                 logger.warning(f"Planning failed: {e}; using basic query plan")
                 state.search_plan = [{"query": state.request, "tier": 1, "purpose": "primary"}]
 
-        emit("status", {"message": f"Search plan ready: {len(state.search_plan)} queries", "phase": "PLANNED"})
+        emit("status", {"message": f"Formulated {len(state.search_plan)} search queries", "phase": "PLANNED"})
         state.record_action("planned")
 
         while True:
@@ -92,28 +120,78 @@ class AgentRuntime:
         return self._finalize(state, emit)
 
     def _build_search_plan(self, state: AgentState, emit):
-        """Build a tiered search plan from the request."""
+        """Build a focused tiered search plan from the request."""
         is_job = state.mode in ("jobs", "job")
         if is_job:
-            from datahunt.tools.search import generate_ats_queries, generate_broad_job_queries
-            tier1 = [{"query": q, "tier": 1, "purpose": "official_ats"} for q in generate_ats_queries(state.request)[:8]]
-            tier2 = [{"query": q, "tier": 2, "purpose": "regional_boards"} for q in generate_broad_job_queries(state.request)[:6]]
-            plan = tier1 + tier2
+            from datahunt.agents import QueryUnderstandingAgent, QueryExpansionAgent, SearchPlannerAgent, JobSearchRequest
+            qu_agent = QueryUnderstandingAgent(gemini_client=self.client)
+            qe_agent = QueryExpansionAgent(gemini_client=self.client)
+            sp_agent = SearchPlannerAgent()
+
+            if not state.canonical_job_request:
+                state.canonical_job_request = qu_agent.understand(state.request)
+
+            job_req = state.canonical_job_request if isinstance(state.canonical_job_request, JobSearchRequest) else qu_agent.understand(state.request)
+            expanded = qe_agent.expand(job_req)
+            tasks = sp_agent.plan(job_req, expanded)
+            plan = [{"query": t.query, "tier": t.priority, "purpose": t.purpose} for t in tasks]
         else:
             from datahunt.models.run import RunBudget
             spec = self.client.normalize_request(state.request)
             plan_data = self.client.plan_research(spec, RunBudget())
             queries = plan_data.get("queries", [{"query": state.request}])
-            plan = [{"query": q.get("query", str(q)), "tier": 2, "purpose": q.get("purpose", "general")} for q in queries[:20]]
+            plan = [{"query": q.get("query", str(q)), "tier": 2, "purpose": q.get("purpose", "general")} for q in queries[:10]]
 
         state.search_plan = plan
-        state.explicit_location = self._extract_location(state.request)
-        state.explicit_experience_min, state.explicit_experience_max = self._extract_experience(state.request)
+        if state.explicit_location is None:
+            state.explicit_location = self._extract_location(state.request)
+        if state.explicit_experience_min is None and state.explicit_experience_max is None:
+            state.explicit_experience_min, state.explicit_experience_max = self._extract_experience(state.request)
+
+    def _is_promising_candidate(self, hit: Dict[str, Any], state: AgentState) -> bool:
+        """Lightweight pre-fetch triage to reject obvious junk before network requests."""
+        url = (hit.get("url") or "").lower()
+        title = (hit.get("title") or "").lower()
+        snippet = (hit.get("snippet") or "").lower()
+        text = f"{url} {title} {snippet}"
+
+        # 1. Non-job URL patterns
+        JUNK_URL_PATTERNS = ["/jobs/search", "/browse/", "/tag/", "/category/", "/login", "/signup", "/people/", "/candidate/"]
+        if any(p in url for p in JUNK_URL_PATTERNS):
+            return False
+
+        # 2. Obvious directory/people titles
+        JUNK_TITLES = ["people directory", "candidate profile", "sign in", "log in", "create account"]
+        if any(jt in title for jt in JUNK_TITLES):
+            return False
+
+        # 3. If in jobs mode:
+        if state.mode in ("jobs", "job"):
+            req_t = (state.canonical_job_request.job_title if state.canonical_job_request else state.request).lower()
+            if any(k in req_t for k in ("genai", "generative ai", "llm", "ai engineer")):
+                DISQUALIFYING_ROLES = [
+                    "cybersecurity", "cyber security", "infosec", "soc analyst",
+                    "full stack", "fullstack", "front end", "frontend", "ui developer",
+                    "accountant", "bookkeeper", "sales manager", "recruiter", "talent acquisition"
+                ]
+                if any(dr in title for dr in DISQUALIFYING_ROLES) and not any(ai in title for ai in ("genai", "generative ai", "llm", "ai engineer")):
+                    return False
+
+            # If user requested specific regions, e.g. Saudi/UAE, reject explicit foreign anchors
+            if state.locations:
+                req_geos = [loc.lower() for loc in state.locations]
+                is_gulf = any(g in ("saudi", "saudi arabia", "uae", "dubai", "riyadh") for g in req_geos)
+                if is_gulf:
+                    FOREIGN_ANCHORS = ["cairo, egypt", "alexandria, egypt", "london, uk", "london, united kingdom", "bangalore, india", "denver, co", "san francisco, ca"]
+                    if any(fa in text for fa in FOREIGN_ANCHORS) and not any(rg in text for rg in ("saudi", "uae", "dubai", "riyadh", "worldwide", "global remote")):
+                        return False
+
+        return True
 
     def _act_search(self, state: AgentState, emit):
-        """Execute the next batch of searches."""
+        """Execute the next batch of searches with canonical URL deduplication."""
         state.status = AgentStatus.SEARCHING
-        batch_size = min(5, len(state.search_plan) - state.search_plan_index)
+        batch_size = min(4, len(state.search_plan) - state.search_plan_index)
         if batch_size <= 0:
             return
 
@@ -129,19 +207,22 @@ class AgentRuntime:
             query = q_obj["query"]
             emit("status", {"message": f"Searching: {query[:60]}", "phase": "SEARCHING"})
 
-            before_count = len(state.candidate_urls)
             try:
-                res = self.search.execute(query=query, limit=20)
+                res = self.search.execute(query=query, limit=15)
                 state.search_calls += 1
                 new_candidates = 0
 
                 if res.success:
                     for hit in res.data:
                         url = hit.get("url")
-                        if not url or url in state.seen_urls:
+                        if not url:
+                            continue
+                        canon = canonicalize_url(url)
+                        if not canon or canon in state.seen_canonical_urls:
                             continue
                         if state.mode in ("jobs", "job") and not is_valid_job_url(url):
                             continue
+                        state.seen_canonical_urls.add(canon)
                         state.seen_urls.add(url)
                         state.candidate_urls.append(hit)
                         new_candidates += 1
@@ -156,23 +237,41 @@ class AgentRuntime:
                 state.add_warning(f"Search failed: {query[:40]}")
 
     def _act_fetch(self, state: AgentState, emit):
-        """Fetch top candidates from the queue."""
+        """Fetch top candidates from the queue with candidate triage and deduplication."""
         state.status = AgentStatus.FETCHING
 
-        if state.explicit_location:
-            loc = state.explicit_location.lower()
-            state.candidate_urls.sort(key=lambda h: (
-                0 if any(t in f"{h.get('url','')} {h.get('title','')} {h.get('snippet','')}".lower()
-                         for t in loc.split()) else 1
+        # Filter and deduplicate candidates before network requests
+        promising = []
+        for h in state.candidate_urls:
+            u = h.get("url")
+            if not u:
+                continue
+            canon = canonicalize_url(u)
+            if canon in state.seen_document_ids:
+                continue
+            if not self._is_promising_candidate(h, state):
+                continue
+            promising.append(h)
+
+        # Prioritize locations if stated
+        if state.locations:
+            loc_tokens = [loc.lower() for loc in state.locations]
+            promising.sort(key=lambda h: (
+                0 if any(t in f"{h.get('url','')} {h.get('title','')} {h.get('snippet','')}".lower() for t in loc_tokens) else 1
             ))
 
-        batch = state.candidate_urls[:15]
-        state.candidate_urls = state.candidate_urls[15:]
+        batch = promising[:10]
+        # Retain remaining candidates
+        state.candidate_urls = promising[10:]
+
+        if not batch:
+            self._act_extract(state, emit)
+            return
 
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        emit("status", {"message": f"Fetching {len(batch)} pages", "phase": "FETCHING"})
+        emit("status", {"message": f"Fetching {len(batch)} candidate pages", "phase": "FETCHING"})
 
-        with ThreadPoolExecutor(max_workers=8) as executor:
+        with ThreadPoolExecutor(max_workers=6) as executor:
             futures = {executor.submit(self.fetch.execute, url=h.get("url"), run_id=state.run_id): h for h in batch}
             for future in as_completed(futures):
                 if state.deadline > 0 and time.time() >= state.deadline:
@@ -183,6 +282,8 @@ class AgentRuntime:
                     res = future.result()
                     state.fetch_calls += 1
                     if res.success and res.data:
+                        canon = canonicalize_url(res.data.requested_url)
+                        state.seen_document_ids.add(canon)
                         state.fetched_docs.append(res.data)
                         emit("status", {"message": f"Fetched: {res.data.requested_url[:50]}", "phase": "FETCHING"})
                     else:
@@ -216,9 +317,14 @@ class AgentRuntime:
                 logger.warning(f"Extract error: {e}")
 
     def _act_verify(self, state: AgentState, emit):
-        """Verify unverified records."""
+        """Verify unverified records and deterministically qualify job candidates."""
         state.status = AgentStatus.VERIFYING
-        already_processed = set(r.id for r in state.verified_records) | set(r.id for r in state.rejected_records)
+        already_processed = (
+            set(r.id for r in state.verified_records)
+            | set(r.id for r in state.rejected_records)
+            | set(r.id for r in state.qualified_records)
+            | set(r.id for r in state.disqualified_records)
+        )
         unverified = [r for r in state.raw_records if r.id not in already_processed]
 
         if not unverified:
@@ -226,6 +332,26 @@ class AgentRuntime:
 
         emit("status", {"message": f"Verifying {len(unverified)} candidates", "phase": "VERIFYING"})
         geo_name = state.explicit_location
+
+        # Ensure canonical job request exists for jobs mode
+        job_req = state.canonical_job_request
+        if state.mode in ("jobs", "job") and not job_req:
+            try:
+                from datahunt.agents.query_understanding import JobSearchRequest
+                job_req = JobSearchRequest(
+                    raw_query=state.request,
+                    job_title=state.explicit_titles[0] if state.explicit_titles else "",
+                    locations=state.locations or ([state.explicit_location] if state.explicit_location else []),
+                    location_operator=state.location_operator or "OR",
+                    experience_min=state.explicit_experience_min,
+                    experience_max=state.explicit_experience_max,
+                    skills=state.explicit_skills,
+                    inferred_skills=state.inferred_skills,
+                    remote_allowed=state.remote_allowed if state.remote_allowed is not None else True,
+                )
+                state.canonical_job_request = job_req
+            except Exception as e:
+                logger.warning(f"Error creating fallback JobSearchRequest: {e}")
 
         for rec in unverified:
             if state.deadline > 0 and time.time() >= state.deadline:
@@ -240,89 +366,132 @@ class AgentRuntime:
                     geography_rule=geo_name,
                 )
 
-                job_loc = rec.fields.get("location", "")
-                loc_status, loc_reason = match_location(state.explicit_location, job_loc)
+                if state.mode in ("jobs", "job") and job_req:
+                    q_res = qualify_job(rec, job_req)
+                    rec.confidence = q_res.score
+                    rec.fields["relevance_score"] = q_res.score
+                    rec.fields["match_level"] = "HIGH" if q_res.score >= 0.8 else ("MEDIUM" if q_res.score >= 0.5 else "LOW")
+                    rec.fields["match_explanation"] = "; ".join(q_res.reasons)
+                    rec.fields["score_breakdown"] = q_res.score_breakdown
+                    if q_res.warnings:
+                        rec.warnings.extend(q_res.warnings)
 
-                if loc_status == MatchStatus.MISMATCH:
-                    state.rejected_records.append(rec)
-                    state.add_observation(f"Rejected '{rec.fields.get('title', '?')}': {loc_reason}")
-                    continue
-
-                if rec.verification_status == VerificationStatus.VERIFIED or \
-                   rec.verification_status == VerificationStatus.NEEDS_REVIEW:
-                    state.verified_records.append(rec)
-                    if loc_status == MatchStatus.UNKNOWN:
-                        rec.warnings.append(f"Location unverified: {loc_reason}")
+                    if q_res.qualified and (rec.verification_status in (VerificationStatus.VERIFIED, VerificationStatus.NEEDS_REVIEW)):
+                        state.qualified_records.append(rec)
+                        state.verified_records.append(rec)
+                        state.add_observation(f"Qualified '{rec.fields.get('title', '?')}': score {q_res.score} - {'; '.join(q_res.reasons)}")
+                    else:
+                        state.disqualified_records.append(rec)
+                        state.rejected_records.append(rec)
+                        disqualify_reason = "; ".join(q_res.reasons) if not q_res.qualified else "Verification status rejected"
+                        state.add_observation(f"Disqualified '{rec.fields.get('title', '?')}': {disqualify_reason}")
                 else:
-                    state.rejected_records.append(rec)
+                    if rec.verification_status in (VerificationStatus.VERIFIED, VerificationStatus.NEEDS_REVIEW):
+                        state.verified_records.append(rec)
+                    else:
+                        state.rejected_records.append(rec)
 
             except Exception as e:
                 logger.warning(f"Verify error: {e}")
                 rec.warnings.append(f"Verification error: {e}")
-                state.verified_records.append(rec)
+                state.rejected_records.append(rec)
 
     def _act_analyze(self, state: AgentState, emit):
-        """Run job analysis and ranking."""
+        """Run job analysis and ranking with deterministic qualification fallback."""
         state.status = AgentStatus.ANALYZING
-        emit("status", {"message": f"Analyzing {len(state.verified_records)} results", "phase": "ANALYZING"})
+        target_records = state.qualified_records if state.qualified_records else state.verified_records
+        emit("status", {"message": f"Analyzing {len(target_records)} results", "phase": "ANALYZING"})
+
+        job_req = state.canonical_job_request
+        if not job_req and state.mode in ("jobs", "job"):
+            try:
+                from datahunt.agents.query_understanding import JobSearchRequest
+                job_req = JobSearchRequest(
+                    raw_query=state.request,
+                    job_title=state.explicit_titles[0] if state.explicit_titles else "",
+                    locations=state.locations or ([state.explicit_location] if state.explicit_location else []),
+                    location_operator=state.location_operator or "OR",
+                    experience_min=state.explicit_experience_min,
+                    experience_max=state.explicit_experience_max,
+                    skills=state.explicit_skills,
+                    inferred_skills=state.inferred_skills,
+                    remote_allowed=state.remote_allowed if state.remote_allowed is not None else True,
+                )
+                state.canonical_job_request = job_req
+            except Exception as e:
+                logger.warning(f"Error building JobSearchRequest for analysis: {e}")
+
         try:
             from datahunt.agents import DataNormalizer, HardFilter, JobAnalysisAgent
-            from datahunt.agents.query_understanding import JobSearchRequest
             normalizer = DataNormalizer()
             hard_filter = HardFilter()
             analyzer = JobAnalysisAgent(gemini_client=self.client)
 
-            normalized = [normalizer.normalize(r.fields, record_id=r.id, canonical_url=r.canonical_url or "") for r in state.verified_records]
-            job_req = JobSearchRequest(
-                job_title=state.explicit_titles[0] if state.explicit_titles else "",
-                location=state.explicit_location or "",
-                experience_min=state.explicit_experience_min,
-                experience_max=state.explicit_experience_max,
-                skills=state.explicit_skills,
-            )
-            passed, _ = hard_filter.apply(normalized, job_req)
-            if passed:
-                analyzed = analyzer.analyze_and_rank(passed, job_req, None)
-                scored_map = {m.job.raw_id: m for m in analyzed}
-                for r in state.verified_records:
-                    if r.id in scored_map:
-                        m = scored_map[r.id]
-                        r.fields["relevance_score"] = m.relevance_score
-                        r.fields["match_level"] = m.match_level
-                        r.fields["match_explanation"] = m.match_explanation
-                        r.confidence = m.relevance_score
-                state.verified_records.sort(key=lambda r: -(r.confidence or 0.0))
+            normalized = [normalizer.normalize(r.fields, record_id=r.id, canonical_url=r.canonical_url or "") for r in target_records]
+            if job_req:
+                passed, _ = hard_filter.apply(normalized, job_req)
+                if passed:
+                    analyzed = analyzer.analyze_and_rank(passed, job_req, None)
+                    scored_map = {m.job.raw_id: m for m in analyzed}
+                    for r in target_records:
+                        if r.id in scored_map:
+                            m = scored_map[r.id]
+                            r.fields["relevance_score"] = m.relevance_score
+                            r.fields["match_level"] = m.match_level
+                            r.fields["match_explanation"] = m.match_explanation
+                            r.confidence = m.relevance_score
+                    target_records.sort(key=lambda r: -(r.confidence or 0.0))
         except Exception as e:
-            logger.warning(f"Analysis error (non-fatal): {e}")
+            logger.warning(f"Analysis LLM error (falling back to deterministic qualification): {e}")
+            self._deterministic_qualification(state, emit)
+
+    def _deterministic_qualification(self, state: AgentState, emit):
+        """Deterministic qualification fallback when Gemini/LLM analysis is unavailable."""
+        job_req = state.canonical_job_request
+        if not job_req:
+            return
+
+        target_records = state.qualified_records if state.qualified_records else state.verified_records
+        for r in target_records:
+            q_res = qualify_job(r, job_req)
+            r.confidence = q_res.score
+            r.fields["relevance_score"] = q_res.score
+            r.fields["match_level"] = "HIGH" if q_res.score >= 0.8 else ("MEDIUM" if q_res.score >= 0.5 else "LOW")
+            r.fields["match_explanation"] = "; ".join(q_res.reasons)
+            r.fields["score_breakdown"] = q_res.score_breakdown
+            if q_res.warnings:
+                r.warnings.extend(q_res.warnings)
+
+        target_records.sort(key=lambda r: -(r.confidence or 0.0))
 
     def _finalize(self, state: AgentState, emit) -> Dict[str, Any]:
-        """Deduplicate, export, emit completion."""
-        emit("status", {"message": f"Removing duplicates from {len(state.verified_records)} results", "phase": "DEDUPLICATING"})
+        """Deduplicate, qualify, export, emit completion."""
+        # For jobs mode, export qualified records; for other modes, verified records
+        records_to_dedupe = state.qualified_records if state.mode in ("jobs", "job") else state.verified_records
+        emit("status", {"message": f"Removing duplicates from {len(records_to_dedupe)} results", "phase": "DEDUPLICATING"})
 
-        if state.verified_records:
+        if records_to_dedupe:
             try:
-                dedup_res = self.dedupe.execute(state.verified_records)
-                final_records = dedup_res.data.get("unique_records", state.verified_records)
+                dedup_res = self.dedupe.execute(records_to_dedupe)
+                final_records = dedup_res.data.get("unique_records", records_to_dedupe)
             except Exception as e:
                 logger.warning(f"Dedupe error: {e}")
-                final_records = state.verified_records
+                final_records = records_to_dedupe
         else:
             final_records = []
 
         if state.mode in ("jobs", "job") and final_records:
-            self._act_analyze(state, emit)
-            final_records = state.verified_records  # re-sort by score
+            final_records.sort(key=lambda r: -(getattr(r, "confidence", 0.0) or 0.0))
 
-        emit("status", {"message": f"Found {len(final_records)} verified results", "phase": "COMPLETED"})
+        emit("status", {"message": f"Found {len(final_records)} qualified results", "phase": "COMPLETED"})
 
-        result_status = "completed" if final_records else ("partial" if state.warnings else "failed")
-        if len(final_records) < state.target_results and state.warnings:
-            result_status = "partial"
+        result_status = "completed" if len(final_records) >= state.target_results else ("partial" if final_records else "failed")
 
         return {
             "status": result_status,
             "records": final_records,
-            "records_verified": len(final_records),
+            "records_verified": len(state.verified_records),
+            "records_qualified": len(final_records),
             "records_rejected": len(state.rejected_records),
             "search_iterations": len(state.search_iterations),
             "pages_fetched": state.fetch_calls,
@@ -330,7 +499,7 @@ class AgentRuntime:
             "llm_calls": state.llm_calls,
             "completion_reason": state.completion_reason,
             "warnings": state.warnings,
-            "observations": state.observations[-20:],  # last 20 for UI
+            "observations": state.observations[-20:],
             "actions_taken": state.actions_taken,
         }
 
