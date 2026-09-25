@@ -331,6 +331,9 @@ class ResearchOrchestrator:
                             "action": data.get("action"),
                             "reason": data.get("reason"),
                         })
+                    elif event_type in ("record.extracted", "record.verified"):
+                        data["counters"] = counters.__dict__
+                        emit_event(event_type, data)
                     else:
                         emit_event(event_type, data)
 
@@ -355,6 +358,48 @@ class ResearchOrchestrator:
                 counters.records_verified = _result.get("records_verified", 0)
                 counters.records_rejected = _result.get("records_rejected", 0)
                 counters.search_queries = _result.get("search_iterations", 0)
+
+                # Persist fetched documents to SQLite database
+                for doc in fetched_docs:
+                    try:
+                        self.doc_repo.upsert_document(doc)
+                    except Exception as de:
+                        logger.warning(f"Error persisting source document {doc.id}: {de}")
+
+                # Persist all extracted and qualified records to SQLite database
+                persisted_record_ids = set()
+                for rec in (agent_state.raw_records or []):
+                    try:
+                        self.record_repo.insert_record(rec)
+                        persisted_record_ids.add(rec.id)
+                    except Exception as re:
+                        logger.warning(f"Error inserting raw record {rec.id}: {re}")
+
+                for rec in final_records:
+                    if rec.id not in persisted_record_ids:
+                        try:
+                            self.record_repo.insert_record(rec)
+                            persisted_record_ids.add(rec.id)
+                        except Exception as re:
+                            logger.warning(f"Error inserting final record {rec.id}: {re}")
+                    try:
+                        self.record_repo.update_record_status(rec.id, rec.verification_status, rec.confidence)
+                    except Exception as ue:
+                        logger.warning(f"Error updating record status {rec.id}: {ue}")
+
+                counters.records_extracted = len(persisted_record_ids)
+                counters.records_verified = len(final_records)
+
+                # Emit verified events so the web cockpit and Kanban receive records live
+                for rec in final_records:
+                    emit_event("record.verified", {
+                        "record_id": rec.id,
+                        "status": rec.verification_status.value,
+                        "confidence": rec.confidence,
+                        "fields": rec.fields,
+                        "warnings": rec.warnings,
+                        "counters": counters.__dict__,
+                    })
 
                 for doc in fetched_docs[:8]:
                     snippet = (doc.extracted_text or "").strip()

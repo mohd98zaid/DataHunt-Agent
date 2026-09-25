@@ -313,6 +313,11 @@ class AgentRuntime:
                     for rec in res.data:
                         state.raw_records.append(rec)
                         state.llm_calls += 1
+                        emit("record.extracted", {
+                            "record_id": rec.id,
+                            "fields": rec.fields,
+                            "source_url": doc.requested_url,
+                        })
             except Exception as e:
                 logger.warning(f"Extract error: {e}")
 
@@ -380,6 +385,13 @@ class AgentRuntime:
                         state.qualified_records.append(rec)
                         state.verified_records.append(rec)
                         state.add_observation(f"Qualified '{rec.fields.get('title', '?')}': score {q_res.score} - {'; '.join(q_res.reasons)}")
+                        emit("record.verified", {
+                            "record_id": rec.id,
+                            "status": rec.verification_status.value,
+                            "confidence": rec.confidence,
+                            "fields": rec.fields,
+                            "warnings": rec.warnings,
+                        })
                     else:
                         state.disqualified_records.append(rec)
                         state.rejected_records.append(rec)
