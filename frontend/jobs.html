@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DataHunt // Job Intelligence Tracker & Pipeline</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
+  <link rel="stylesheet" href="css/styles.css?v=6">
+  <link rel="stylesheet" href="css/jobs.css?v=5">
+  <!-- Markdown parser and sanitizer for clean formatted JDs -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body class="job-tracker-body">
+  <!-- Scanline Overlay -->
+  <div class="scanline-overlay"></div>
+
+  <div class="tracker-container">
+    <!-- Header -->
+    <header class="tracker-header glass-panel">
+      <div class="tracker-brand">
+        <div class="brand-logo-icon"></div>
+        <div>
+          <div class="brand-title">DATAHUNT <span style="font-size: 13px; color: var(--neon-cyan); font-weight: 400;">// JOB PIPELINE TRACKER</span></div>
+          <div class="tracker-subtitle">Scraped ATS Positions • Application Tracking • Interview Call Logs</div>
+        </div>
+      </div>
+      <div class="tracker-header-actions">
+        <div class="tracker-stat-pill" id="total-jobs-pill">0 TOTAL JOBS</div>
+        <div class="tracker-stat-pill applied-pill" id="applied-jobs-pill">0 APPLIED</div>
+        <div class="tracker-stat-pill interview-pill" id="interview-jobs-pill">0 INTERVIEWS</div>
+        <button class="bulk-delete-btn" id="bulk-delete-btn" style="display: none;" title="Delete selected job records">
+          <span>🗑️ DELETE (<span id="selected-count">0</span>)</span>
+        </button>
+        <button class="refresh-btn" id="refresh-jobs-btn" title="Sync from Database">
+          <span>⟳ REFRESH</span>
+        </button>
+        <a href="/" class="cockpit-link-btn" title="Back to Central Agent Hub" style="background: rgba(0, 240, 255, 0.1); border-color: var(--neon-cyan); color: var(--neon-cyan);">
+          <span>← AGENT HUB</span>
+        </a>
+        <a href="/cockpit.html?mode=jobs" class="cockpit-link-btn" title="Open Job Radar Cockpit">
+          <span>🎯 RADAR COCKPIT</span>
+        </a>
+      </div>
+    </header>
+
+    <!-- Search and Advanced Filters Bar -->
+    <section class="tracker-controls glass-panel">
+      <!-- Search & Primary Chips -->
+      <div class="controls-top-row">
+        <div class="search-box-wrap">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="job-search-input" class="tracker-search-input" placeholder="Search by Job Role, Company, Location, or Keyword..." />
+        </div>
+
+        <div class="filter-chips-wrap">
+          <span class="filter-label">STATUS:</span>
+          <button class="filter-chip active" data-filter="all">ALL</button>
+          <button class="filter-chip" data-filter="applied">APPLIED</button>
+          <button class="filter-chip" data-filter="interview">INTERVIEWS</button>
+          <button class="filter-chip" data-filter="not_applied">NOT APPLIED</button>
+          <button class="filter-chip" data-filter="0sec">⚡ 0-SEC / RECENT</button>
+        </div>
+      </div>
+
+      <!-- Advanced Multi-Select Filters Row -->
+      <div class="controls-dropdown-row">
+        <!-- Multi-Select Company -->
+        <div class="multi-select-dropdown" id="dropdown-company">
+          <button type="button" class="multi-select-trigger" id="trigger-company" title="Filter by Companies">
+            <span class="filter-group-icon">🏢</span>
+            <span class="multi-select-label" id="label-company">All Companies</span>
+            <span class="multi-select-badge" id="badge-company" style="display:none;">0</span>
+            <span class="multi-select-arrow">▾</span>
+          </button>
+          <div class="multi-select-menu" id="menu-company">
+            <div class="multi-select-search-box">
+              <span class="search-mini-icon">🔍</span>
+              <input type="text" id="search-company" class="multi-select-search-input" placeholder="Search companies..." autocomplete="off" />
+            </div>
+            <div class="multi-select-toolbar">
+              <button type="button" class="ms-btn" id="select-all-companies">Select All</button>
+              <button type="button" class="ms-btn" id="clear-companies">Clear</button>
+              <span class="ms-count-text" id="status-company">0 selected</span>
+            </div>
+            <div class="multi-select-options custom-scrollbar" id="options-company"></div>
+          </div>
+        </div>
+
+        <!-- Multi-Select Location -->
+        <div class="multi-select-dropdown" id="dropdown-location">
+          <button type="button" class="multi-select-trigger" id="trigger-location" title="Filter by Locations">
+            <span class="filter-group-icon">📍</span>
+            <span class="multi-select-label" id="label-location">All Locations</span>
+            <span class="multi-select-badge" id="badge-location" style="display:none;">0</span>
+            <span class="multi-select-arrow">▾</span>
+          </button>
+          <div class="multi-select-menu" id="menu-location">
+            <div class="multi-select-search-box">
+              <span class="search-mini-icon">🔍</span>
+              <input type="text" id="search-location" class="multi-select-search-input" placeholder="Search locations..." autocomplete="off" />
+            </div>
+            <div class="multi-select-toolbar">
+              <button type="button" class="ms-btn" id="select-all-locations">Select All</button>
+              <button type="button" class="ms-btn" id="clear-locations">Clear</button>
+              <span class="ms-count-text" id="status-location">0 selected</span>
+            </div>
+            <div class="multi-select-options custom-scrollbar" id="options-location"></div>
+          </div>
+        </div>
+
+        <!-- Multi-Select Scraped Time -->
+        <div class="multi-select-dropdown" id="dropdown-date">
+          <button type="button" class="multi-select-trigger" id="trigger-date" title="Filter by Scraped Time">
+            <span class="filter-group-icon">🗓️</span>
+            <span class="multi-select-label" id="label-date">Any Scraped Time</span>
+            <span class="multi-select-badge" id="badge-date" style="display:none;">0</span>
+            <span class="multi-select-arrow">▾</span>
+          </button>
+          <div class="multi-select-menu" id="menu-date">
+            <div class="multi-select-toolbar">
+              <button type="button" class="ms-btn" id="select-all-date">Select All</button>
+              <button type="button" class="ms-btn" id="clear-date">Clear</button>
+              <span class="ms-count-text" id="status-date">0 selected</span>
+            </div>
+            <div class="multi-select-options custom-scrollbar" id="options-date"></div>
+          </div>
+        </div>
+
+        <!-- Multi-Select Interview Stage -->
+        <div class="multi-select-dropdown" id="dropdown-interview">
+          <button type="button" class="multi-select-trigger" id="trigger-interview" title="Filter by Call Stages">
+            <span class="filter-group-icon">📞</span>
+            <span class="multi-select-label" id="label-interview">All Call Stages</span>
+            <span class="multi-select-badge" id="badge-interview" style="display:none;">0</span>
+            <span class="multi-select-arrow">▾</span>
+          </button>
+          <div class="multi-select-menu" id="menu-interview">
+            <div class="multi-select-toolbar">
+              <button type="button" class="ms-btn" id="select-all-interview">Select All</button>
+              <button type="button" class="ms-btn" id="clear-interview">Clear</button>
+              <span class="ms-count-text" id="status-interview">0 selected</span>
+            </div>
+            <div class="multi-select-options custom-scrollbar" id="options-interview"></div>
+          </div>
+        </div>
+
+        <div class="filter-action-group">
+          <button id="reset-filters-btn" class="reset-filter-btn" title="Reset all filters">
+            <span>✕ RESET FILTERS</span>
+          </button>
+          <div id="filtered-count-badge" class="filtered-count-badge">SHOWING 0 OF 0</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Interactive Data Table -->
+    <main class="table-container glass-panel">
+      <div class="table-scroll-area">
+        <table class="jobs-table" id="jobs-table">
+          <thead>
+            <tr>
+              <th style="width: 38px; text-align: center;">
+                <input type="checkbox" id="select-all-jobs" class="cyber-checkbox" title="Select / Deselect all visible jobs" />
+              </th>
+              <th style="width: 45px;">#</th>
+              <th>JOB ROLE & COMPANY</th>
+              <th>LOCATION & SALARY</th>
+              <th style="width: 170px;">SCRAPED AT</th>
+              <th style="width: 170px;">APPLIED STATUS</th>
+              <th style="width: 180px;">INTERVIEW CALL</th>
+              <th style="width: 160px; text-align: center;">ACTIONS</th>
+            </tr>
+          </thead>
+          <tbody id="jobs-table-body">
+            <tr>
+              <td colspan="8" class="empty-table-cell">Loading verified jobs from database...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+
+  <!-- Job Detail Drawer / Modal -->
+  <div class="detail-modal-backdrop" id="job-detail-modal" style="display: none;">
+    <div class="detail-modal-card glass-panel">
+      <div class="detail-modal-header">
+        <div class="detail-title-wrap">
+          <span class="detail-role-title" id="modal-job-title">Role Title</span>
+          <span class="detail-company-sub" id="modal-job-company">@ Company</span>
+        </div>
+        <button class="close-modal-btn" id="modal-close-btn">✕</button>
+      </div>
+
+      <div class="detail-modal-body">
+        <div class="detail-meta-grid">
+          <div class="detail-meta-card">
+            <div class="meta-label">LOCATION</div>
+            <div class="meta-val" id="modal-job-location">Remote</div>
+          </div>
+          <div class="detail-meta-card">
+            <div class="meta-label">COMPENSATION</div>
+            <div class="meta-val highlight-green" id="modal-job-salary">Competitive</div>
+          </div>
+          <div class="detail-meta-card">
+            <div class="meta-label">SCRAPED TIMESTAMP</div>
+            <div class="meta-val" id="modal-job-timestamp">-</div>
+          </div>
+          <div class="detail-meta-card">
+            <div class="meta-label">FRESHNESS / AGE</div>
+            <div class="meta-val highlight-cyan" id="modal-job-freshness">-</div>
+          </div>
+        </div>
+
+        <div class="status-interactive-strip glass-panel">
+          <div class="status-strip-col">
+            <label>APPLICATION STATUS</label>
+            <select id="modal-applied-select" class="status-dropdown-input">
+              <option value="not_applied">⚪ Not Applied</option>
+              <option value="applied">🔵 Applied</option>
+              <option value="interviewing">🟡 Interviewing</option>
+              <option value="offered">🟢 Offer Received</option>
+              <option value="rejected">🔴 Rejected</option>
+            </select>
+          </div>
+
+          <div class="status-strip-col">
+            <label>INTERVIEW CALL STATUS</label>
+            <select id="modal-interview-select" class="status-dropdown-input">
+              <option value="no_call">⚪ No Call Yet</option>
+              <option value="screening">📞 Recruiter Screening</option>
+              <option value="technical">💻 Technical Interview</option>
+              <option value="final_round">🎯 Final Round</option>
+              <option value="offered">🏆 Offer Extended</option>
+              <option value="rejected">🚫 Not Selected</option>
+            </select>
+          </div>
+
+          <div class="status-strip-col">
+            <label>APPLIED DATE</label>
+            <input type="datetime-local" id="modal-applied-at-input" class="status-text-input" />
+          </div>
+
+          <div class="status-strip-col" style="flex-grow: 1.5;">
+            <label>PERSONAL NOTES</label>
+            <input type="text" id="modal-notes-input" class="status-text-input" placeholder="e.g. Applied via Lever, recruiter screening scheduled" />
+          </div>
+
+          <button class="save-status-btn" id="modal-save-status-btn">
+            <span>SAVE STATUS</span>
+          </button>
+        </div>
+
+        <div class="jd-container">
+          <div class="jd-header">
+            <span class="jd-title">📄 COMPLETE JOB DESCRIPTION & REQUIREMENTS</span>
+            <span class="jd-source" id="modal-job-source">Source: Direct ATS</span>
+          </div>
+          <div class="jd-content-body" id="modal-jd-body">
+            Loading job details...
+          </div>
+        </div>
+
+        <div class="evidence-box-section" id="modal-evidence-box" style="display: none;">
+          <div class="evidence-title">🛡️ VERIFICATION ANCHORS & EVIDENCE</div>
+          <div class="evidence-list" id="modal-evidence-list"></div>
+        </div>
+      </div>
+
+      <div class="detail-modal-footer">
+        <button class="modal-delete-btn" id="modal-delete-btn" title="Permanently delete job from database">
+          <span>🗑️ DELETE RECORD</span>
+        </button>
+        <a href="#" id="modal-direct-apply-link" target="_blank" rel="noopener noreferrer" class="direct-apply-big-btn">
+          <span>APPLY DIRECTLY ON ATS PORTAL</span>
+          <span>➔</span>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/jobs.js?v=6"></script>
+</body>
+</html>

@@ -1,0 +1,567 @@
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;700;800;900&family=Rajdhani:wght@500;600;700&family=Share+Tech+Mono&display=swap');
+
+:root {
+  --bg-primary: #070b16;
+  --bg-card: rgba(10, 18, 38, 0.75);
+  --bg-card-hover: rgba(13, 24, 52, 0.9);
+  --panel-border: rgba(0, 240, 255, 0.22);
+  --neon-cyan: #00f0ff;
+  --neon-blue: #0072ff;
+  --neon-green: #00ffa3;
+  --neon-amber: #ffb800;
+  --neon-purple: #b026ff;
+  --neon-red: #ff3366;
+  --text-main: #e2f1ff;
+  --text-muted: #7d97b8;
+  --glow-cyan: 0 0 15px rgba(0, 240, 255, 0.45);
+  --glow-green: 0 0 15px rgba(0, 255, 163, 0.45);
+  --glow-purple: 0 0 15px rgba(176, 38, 255, 0.45);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background-color: var(--bg-primary);
+  background-image: 
+    radial-gradient(circle at 50% 10%, rgba(0, 240, 255, 0.08) 0%, transparent 60%),
+    radial-gradient(circle at 90% 80%, rgba(176, 38, 255, 0.06) 0%, transparent 50%),
+    linear-gradient(rgba(0, 240, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 240, 255, 0.03) 1px, transparent 1px);
+  background-size: 100% 100%, 100% 100%, 40px 40px, 40px 40px;
+  color: var(--text-main);
+  font-family: 'Rajdhani', sans-serif;
+  min-height: 100vh;
+  overflow-x: hidden;
+  position: relative;
+}
+
+/* Subtle scanlines */
+body::before {
+  content: "";
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%);
+  background-size: 100% 4px;
+  pointer-events: none;
+  z-index: 9999;
+}
+
+.hub-container {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 24px 32px 60px 32px;
+  position: relative;
+  z-index: 10;
+}
+
+/* Header */
+.hub-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--panel-border);
+  margin-bottom: 40px;
+}
+
+.brand-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.brand-hexagon {
+  width: 38px;
+  height: 38px;
+  background: linear-gradient(135deg, rgba(0, 240, 255, 0.2), rgba(0, 255, 163, 0.3));
+  border: 1.5px solid var(--neon-cyan);
+  border-radius: 8px;
+  box-shadow: var(--glow-cyan);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  animation: pulseHex 3s infinite alternate;
+}
+
+@keyframes pulseHex {
+  0% { box-shadow: 0 0 10px rgba(0,240,255,0.3); }
+  100% { box-shadow: 0 0 25px rgba(0,240,255,0.7); }
+}
+
+.brand-name {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 2.5px;
+  background: linear-gradient(90deg, #ffffff, var(--neon-cyan));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.brand-badge {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+  color: var(--neon-green);
+  background: rgba(0, 255, 163, 0.1);
+  border: 1px solid rgba(0, 255, 163, 0.3);
+  padding: 2px 8px;
+  border-radius: 4px;
+  letter-spacing: 1px;
+}
+
+.hub-nav {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.nav-link-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: rgba(0, 240, 255, 0.08);
+  border: 1px solid rgba(0, 240, 255, 0.25);
+  border-radius: 6px;
+  color: var(--text-main);
+  text-decoration: none;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  transition: all 0.25s ease;
+}
+
+.nav-link-btn:hover {
+  background: rgba(0, 240, 255, 0.2);
+  border-color: var(--neon-cyan);
+  color: #fff;
+  box-shadow: var(--glow-cyan);
+  transform: translateY(-1px);
+}
+
+.nav-link-btn.highlight {
+  background: rgba(0, 255, 163, 0.12);
+  border-color: var(--neon-green);
+  color: var(--neon-green);
+}
+
+.nav-link-btn.highlight:hover {
+  background: rgba(0, 255, 163, 0.25);
+  box-shadow: var(--glow-green);
+}
+
+/* Hero Section */
+.hub-hero {
+  text-align: center;
+  margin-bottom: 48px;
+  position: relative;
+}
+
+.hero-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 14px;
+  background: rgba(0, 240, 255, 0.1);
+  border: 1px solid var(--neon-cyan);
+  border-radius: 20px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px;
+  color: var(--neon-cyan);
+  letter-spacing: 1.5px;
+  margin-bottom: 16px;
+  box-shadow: 0 0 15px rgba(0, 240, 255, 0.2);
+}
+
+.hero-title {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 42px;
+  font-weight: 900;
+  letter-spacing: 3px;
+  line-height: 1.2;
+  margin-bottom: 14px;
+  text-transform: uppercase;
+}
+
+.hero-title span {
+  background: linear-gradient(90deg, var(--neon-cyan), var(--neon-green));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.hero-desc {
+  font-size: 17px;
+  color: var(--text-muted);
+  max-width: 780px;
+  margin: 0 auto 30px auto;
+  line-height: 1.6;
+}
+
+/* Quick Telemetry Ribbon */
+.hub-ribbon {
+  display: flex;
+  justify-content: center;
+  gap: 32px;
+  margin-bottom: 48px;
+  flex-wrap: wrap;
+}
+
+.ribbon-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(10, 18, 38, 0.6);
+  border: 1px solid rgba(0, 240, 255, 0.15);
+  padding: 8px 18px;
+  border-radius: 8px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 12px;
+}
+
+.ribbon-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--neon-green);
+  box-shadow: 0 0 8px var(--neon-green);
+}
+
+.ribbon-label {
+  color: var(--text-muted);
+}
+
+.ribbon-val {
+  color: var(--neon-cyan);
+  font-weight: 700;
+}
+
+/* Agent Fleet Grid */
+.fleet-section-title {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 16px;
+  letter-spacing: 2px;
+  color: var(--neon-cyan);
+  margin-bottom: 24px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.fleet-section-title::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--panel-border), transparent);
+}
+
+.fleet-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 24px;
+  margin-bottom: 50px;
+}
+
+/* Agent Card */
+.agent-card {
+  background: var(--bg-card);
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  backdrop-filter: blur(12px);
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.agent-card::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0; height: 3px;
+  background: linear-gradient(90deg, transparent, var(--card-accent, var(--neon-cyan)), transparent);
+  opacity: 0.7;
+  transition: opacity 0.3s ease;
+}
+
+.agent-card:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--card-accent, var(--neon-cyan));
+  transform: translateY(-4px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4), 0 0 20px rgba(0, 240, 255, 0.15);
+}
+
+.agent-card:hover::before {
+  opacity: 1;
+  box-shadow: 0 0 10px var(--card-accent, var(--neon-cyan));
+}
+
+.agent-card.jobs-card {
+  --card-accent: var(--neon-green);
+}
+
+.agent-card.research-card {
+  --card-accent: var(--neon-cyan);
+}
+
+.agent-card.market-card {
+  --card-accent: var(--neon-purple);
+}
+
+.agent-card.tracker-card {
+  --card-accent: var(--neon-amber);
+}
+
+.card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.agent-icon-badge {
+  width: 52px;
+  height: 52px;
+  border-radius: 10px;
+  background: rgba(0, 240, 255, 0.08);
+  border: 1px solid rgba(0, 240, 255, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  box-shadow: 0 0 15px rgba(0, 0, 0, 0.3);
+}
+
+.jobs-card .agent-icon-badge {
+  background: rgba(0, 255, 163, 0.08);
+  border-color: rgba(0, 255, 163, 0.3);
+}
+
+.market-card .agent-icon-badge {
+  background: rgba(176, 38, 255, 0.08);
+  border-color: rgba(176, 38, 255, 0.3);
+}
+
+.tracker-card .agent-icon-badge {
+  background: rgba(255, 184, 0, 0.08);
+  border-color: rgba(255, 184, 0, 0.3);
+}
+
+.agent-badge-pill {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  border: 1px solid currentColor;
+}
+
+.badge-green {
+  color: var(--neon-green);
+  background: rgba(0, 255, 163, 0.12);
+}
+
+.badge-cyan {
+  color: var(--neon-cyan);
+  background: rgba(0, 240, 255, 0.12);
+}
+
+.badge-purple {
+  color: var(--neon-purple);
+  background: rgba(176, 38, 255, 0.12);
+}
+
+.badge-amber {
+  color: var(--neon-amber);
+  background: rgba(255, 184, 0, 0.12);
+}
+
+.agent-title {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  letter-spacing: 1px;
+}
+
+.agent-subtitle {
+  font-size: 14px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-bottom: 18px;
+}
+
+/* Feature bullets */
+.agent-features {
+  list-style: none;
+  margin-bottom: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.agent-features li {
+  font-size: 13px;
+  color: #c0d3eb;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-features li::before {
+  content: "▹";
+  color: var(--card-accent, var(--neon-cyan));
+  font-weight: bold;
+  font-size: 14px;
+}
+
+/* Action Button */
+.deploy-agent-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  padding: 13px 20px;
+  background: linear-gradient(135deg, rgba(0, 240, 255, 0.15), rgba(0, 240, 255, 0.05));
+  border: 1.5px solid var(--card-accent, var(--neon-cyan));
+  border-radius: 8px;
+  color: #fff;
+  text-decoration: none;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: all 0.25s ease;
+}
+
+.deploy-agent-btn:hover {
+  background: var(--card-accent, var(--neon-cyan));
+  color: #070b16;
+  box-shadow: 0 0 20px var(--card-accent, var(--neon-cyan));
+  transform: translateY(-2px);
+}
+
+.deploy-agent-btn .arrow {
+  transition: transform 0.25s ease;
+}
+
+.deploy-agent-btn:hover .arrow {
+  transform: translateX(4px);
+}
+
+/* Quick Mission Launcher Row */
+.hub-launcher-card {
+  background: var(--bg-card);
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  padding: 24px 32px;
+  margin-bottom: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.launcher-info {
+  flex: 1;
+  min-width: 280px;
+}
+
+.launcher-title {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 15px;
+  color: var(--neon-cyan);
+  margin-bottom: 4px;
+  letter-spacing: 1px;
+}
+
+.launcher-desc {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.launcher-input-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 2;
+  min-width: 320px;
+}
+
+.launcher-input {
+  flex: 1;
+  background: rgba(7, 11, 22, 0.8);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 12px 16px;
+  color: var(--text-main);
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.launcher-input:focus {
+  border-color: var(--neon-cyan);
+  box-shadow: var(--glow-cyan);
+}
+
+.launcher-submit-btn {
+  background: var(--neon-cyan);
+  color: #070b16;
+  border: none;
+  border-radius: 6px;
+  padding: 12px 24px;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  letter-spacing: 1px;
+  transition: all 0.2s ease;
+}
+
+.launcher-submit-btn:hover {
+  box-shadow: var(--glow-cyan);
+  transform: translateY(-1px);
+}
+
+/* Footer */
+.hub-footer {
+  border-top: 1px solid var(--panel-border);
+  padding-top: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.hub-footer a {
+  color: var(--neon-cyan);
+  text-decoration: none;
+}
+
+.hub-footer a:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 800px) {
+  .hero-title { font-size: 28px; }
+  .hub-container { padding: 16px; }
+  .fleet-grid { grid-template-columns: 1fr; }
+  .hub-header { flex-direction: column; gap: 16px; align-items: flex-start; }
+}

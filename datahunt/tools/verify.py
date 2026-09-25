@@ -1,9 +1,60 @@
-﻿from typing import Any, Dict, List, Optional
-from datahunt.logger import logger
+from typing import Any, Dict, List, Optional
 from datahunt.models import ExtractedRecord, VerificationStatus
 from datahunt.policy import is_public_business_email
 from datahunt.tools.base import ToolResult
 from datahunt.llm.gemini_client import GeminiClient
+
+GEO_SYNONYMS = {
+    "uae": ["uae", "united arab emirates", "dubai", "abu dhabi", "sharjah", "ajman", "al ain", "ras al khaimah", "middle east", "mena", "gcc", "ae"],
+    "dubai": ["dubai", "uae", "united arab emirates", "abu dhabi", "sharjah", "ajman", "al ain", "ras al khaimah", "middle east", "mena", "gcc", "difc", "internet city", "silicon oasis", "business bay", "jlt", "ae"],
+    "saudi": ["saudi", "saudi arabia", "ksa", "riyadh", "jeddah", "dammam", "khobar", "neom", "middle east", "mena", "gcc", "sa"],
+    "saudi arabia": ["saudi", "saudi arabia", "ksa", "riyadh", "jeddah", "dammam", "khobar", "neom", "middle east", "mena", "gcc", "sa"],
+    "ksa": ["saudi", "saudi arabia", "ksa", "riyadh", "jeddah", "dammam", "khobar", "neom", "middle east", "mena", "gcc", "sa"],
+    "india": ["india", "bangalore", "bengaluru", "mumbai", "delhi", "hyderabad", "pune", "chennai", "gurgaon", "noida", "in"],
+    "uk": ["uk", "united kingdom", "london", "england", "scotland", "manchester", "birmingham", "gb"],
+    "london": ["london", "uk", "united kingdom", "england"],
+    "us": ["us", "usa", "united states", "america", "san francisco", "new york", "ca", "ny", "seattle", "austin", "boston", "california"],
+    "usa": ["us", "usa", "united states", "america", "san francisco", "new york", "ca", "ny", "seattle", "austin", "boston", "california"],
+    "singapore": ["singapore", "sg"],
+    "germany": ["germany", "berlin", "munich", "frankfurt", "de"],
+    "canada": ["canada", "toronto", "vancouver", "montreal", "ca"]
+}
+
+def check_geographic_compliance(job_location: Optional[str], requested_geo: Optional[str]) -> bool:
+    if not requested_geo or not str(requested_geo).strip():
+        return True
+    if not job_location or not str(job_location).strip():
+        return True
+
+    geo_lower = str(requested_geo).lower().strip()
+    loc_lower = str(job_location).lower().strip()
+
+    # Remote / Worldwide / Anywhere is always compliant
+    if any(rem in loc_lower for rem in ("remote", "anywhere", "worldwide", "global", "unspecified")):
+        return True
+
+    # Support composite queries like "Saudi or UAE", "Dubai and Riyadh"
+    allowed_terms = set()
+    parts = [p.strip() for p in geo_lower.replace(" or ", ",").replace(" and ", ",").replace("/", ",").split(",") if p.strip()]
+    for p in parts:
+        terms = GEO_SYNONYMS.get(p)
+        if terms:
+            allowed_terms.update(terms)
+        else:
+            allowed_terms.add(p)
+
+    if any(term in loc_lower for term in allowed_terms):
+        return True
+
+    # If location explicitly contains a conflicting major hub outside allowed terms, it's a conflict
+    KNOWN_HUBS = {
+        "san francisco", "new york", "london", "singapore", "dubai", "seattle",
+        "austin", "boston", "toronto", "berlin", "chicago", "los angeles", "florida", "tokyo", "paris", "riyadh"
+    }
+    if any(hub in loc_lower for hub in KNOWN_HUBS if hub not in allowed_terms):
+        return False
+
+    return True
 
 class VerifyTool:
     name = "verify_record"
@@ -17,10 +68,10 @@ class VerifyTool:
         record: ExtractedRecord,
         required_fields: Optional[List[str]] = None,
         freshness_rule: Optional[Dict[str, Any]] = None,
-        contact_policy: str = "business_public_only"
+        contact_policy: str = "business_public_only",
+        geography_rule: Optional[str] = None
     ) -> ToolResult:
         req_fields = required_fields or ["title", "company"]
-        fresh_rule = freshness_rule or {}
         
         # 1. Check contact policy compliance
         fields = record.fields
@@ -56,12 +107,35 @@ class VerifyTool:
                 else:
                     field_checks.append({"field": rf, "status": "supported", "reason": f"Evidence verified for '{rf}'"})
 
+        # 3. Check geographic compliance if rule is provided
+        if geography_rule and geography_rule.strip():
+            loc = fields.get("location")
+            if loc and not check_geographic_compliance(loc, geography_rule):
+                record.warnings.append(f"Location '{loc}' does not match requested geography '{geography_rule}'")
+                field_checks.append({
+                    "field": "location",
+                    "status": "mismatch",
+                    "reason": f"Location '{loc}' conflicts with requested geography '{geography_rule}'"
+                })
+                is_verified = False
+
+        # 4. Check job listing validity (reject login portals, directory roots, aggregator titles)
+        if record.record_type == "job_listing":
+            t_lower = str(fields.get("title") or "").strip().lower()
+            c_lower = str(fields.get("company") or "").strip().lower()
+            if any(lp in t_lower for lp in ("sign in", "log in", "login", "mygreenhouse")):
+                record.warnings.append("Job title is a login portal page")
+                is_verified = False
+            elif t_lower and c_lower and (t_lower == c_lower or t_lower.replace(" ", "") == c_lower.replace(" ", "")):
+                record.warnings.append("Job title matches company name (directory root)")
+                is_verified = False
+
         if is_verified:
             record.verification_status = VerificationStatus.VERIFIED
             record.confidence = 0.95
         else:
             record.verification_status = VerificationStatus.NEEDS_REVIEW
-            record.confidence = 0.50
+            record.confidence = 0.45
 
         return ToolResult(
             success=True,

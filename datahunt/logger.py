@@ -1,9 +1,9 @@
-﻿import json
+import json
 import logging
 import re
 import sys
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 # Secret and PII patterns for redaction
 EMAIL_PATTERN = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
@@ -65,7 +65,7 @@ class JsonFormatter(logging.Formatter):
         if record.exc_info:
             log_obj["exception"] = self.formatException(record.exc_info)
             
-        return json.dumps(log_obj, ensure_ascii=False)
+        return json.dumps(log_obj, ensure_ascii=True)
 
 def get_logger(name: str = "datahunt") -> logging.Logger:
     logger = logging.getLogger(name)

@@ -1,4 +1,4 @@
-﻿from datahunt.llm.gemini_client import GeminiClient
+from datahunt.llm.gemini_client import GeminiClient
 from datahunt.llm.prompts import (
     SHARED_SYSTEM_PROMPT,
     INTAKE_USER_TEMPLATE,
@@ -8,6 +8,7 @@ from datahunt.llm.prompts import (
     VERIFICATION_TEMPLATE,
     DEDUPLICATION_TEMPLATE,
     SUMMARY_TEMPLATE,
+    RESEARCH_SYNTHESIS_TEMPLATE,
     REFUSAL_SAFETY_TEMPLATE,
 )
 
@@ -21,5 +22,6 @@ __all__ = [
     "VERIFICATION_TEMPLATE",
     "DEDUPLICATION_TEMPLATE",
     "SUMMARY_TEMPLATE",
+    "RESEARCH_SYNTHESIS_TEMPLATE",
     "REFUSAL_SAFETY_TEMPLATE",
 ]

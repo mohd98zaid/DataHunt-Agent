@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DataHunt // Nexus AI Companion</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <!-- Three.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <!-- Anime.js for UI animations -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js"></script>
+
+  <style>
+    :root {
+      --cyan:    #00f0ff;
+      --green:   #00ffa3;
+      --purple:  #9d00ff;
+      --amber:   #ffb800;
+      --red:     #ff3366;
+      --bg:      #04090f;
+      --panel:   rgba(6,14,28,0.88);
+      --border:  rgba(0,240,255,0.22);
+      --text:    #d0e8f8;
+      --muted:   rgba(160,200,230,0.55);
+    }
+
+    * { margin:0; padding:0; box-sizing:border-box; }
+
+    body {
+      width:100vw; height:100vh; overflow:hidden;
+      background:var(--bg);
+      font-family:'Rajdhani',sans-serif;
+      color:var(--text);
+      user-select:none;
+    }
+
+    /* ─── 3D Canvas ─────────────────────────────────────────────── */
+    #bot-canvas {
+      position:absolute; inset:0;
+      width:100%; height:100%;
+      z-index:1;
+    }
+
+    /* ─── Scanline Overlay ─────────────────────────────────────── */
+    .scanlines {
+      position:fixed; inset:0; z-index:2; pointer-events:none;
+      background:repeating-linear-gradient(
+        0deg, transparent, transparent 3px,
+        rgba(0,0,0,0.09) 3px, rgba(0,0,0,0.09) 4px
+      );
+    }
+
+    /* ─── Top Header ───────────────────────────────────────────── */
+    .nx-header {
+      position:absolute; top:0; left:0; right:0; z-index:20;
+      display:flex; align-items:center; justify-content:space-between;
+      padding:14px 24px;
+      background:linear-gradient(to bottom, rgba(4,9,15,0.96), transparent);
+      pointer-events:none;
+      opacity:0; /* animated in */
+    }
+
+    .nx-brand {
+      display:flex; align-items:center; gap:14px; pointer-events:auto;
+    }
+
+    .nx-hexagon {
+      width:44px; height:44px;
+      background:linear-gradient(135deg,rgba(0,240,255,0.25),rgba(0,240,255,0.08));
+      border:1.5px solid var(--cyan);
+      clip-path:polygon(25% 0%,75% 0%,100% 50%,75% 100%,25% 100%,0% 50%);
+      display:flex; align-items:center; justify-content:center;
+      font-size:20px;
+      box-shadow:0 0 18px rgba(0,240,255,0.45);
+      animation:hexPulse 3s ease-in-out infinite alternate;
+    }
+    @keyframes hexPulse {
+      from { box-shadow:0 0 12px rgba(0,240,255,0.35); }
+      to   { box-shadow:0 0 32px rgba(0,240,255,0.70); }
+    }
+
+    .nx-title-block .nx-title { font-family:'Orbitron',sans-serif; font-size:18px; font-weight:900; letter-spacing:3px; background:linear-gradient(90deg,#fff,var(--cyan)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
+    .nx-title-block .nx-sub   { font-family:'Share Tech Mono',monospace; font-size:10px; color:var(--green); letter-spacing:1.5px; margin-top:1px; }
+
+    .nx-nav { display:flex; gap:10px; pointer-events:auto; }
+
+    .nx-nav-btn {
+      display:flex; align-items:center; gap:6px;
+      padding:7px 14px;
+      background:var(--panel);
+      border:1px solid var(--border);
+      border-radius:8px;
+      color:var(--text);
+      font-family:'Share Tech Mono',monospace; font-size:11px;
+      text-decoration:none;
+      transition:all 0.22s ease;
+      backdrop-filter:blur(12px);
+    }
+    .nx-nav-btn:hover { background:rgba(0,240,255,0.14); border-color:var(--cyan); color:#fff; box-shadow:0 0 14px rgba(0,240,255,0.35); transform:translateY(-2px); }
+
+    /* ─── Status Bar (left side) ────────────────────────────────── */
+    .nx-status-bar {
+      position:absolute; left:20px; top:50%; transform:translateY(-50%);
+      z-index:20; display:flex; flex-direction:column; gap:12px;
+      opacity:0; /* animated in */
+    }
+
+    .nx-stat-pill {
+      background:var(--panel);
+      border:1px solid var(--border);
+      border-left:3px solid var(--cyan);
+      border-radius:8px;
+      padding:10px 14px;
+      backdrop-filter:blur(14px);
+      min-width:160px;
+      box-shadow:0 4px 20px rgba(0,0,0,0.5);
+    }
+    .nx-stat-label { font-family:'Orbitron',sans-serif; font-size:9px; font-weight:700; letter-spacing:1.5px; color:var(--cyan); margin-bottom:4px; }
+    .nx-stat-val   { font-family:'Share Tech Mono',monospace; font-size:13px; color:#fff; }
+    .nx-stat-dot   { display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--green); box-shadow:0 0 6px var(--green); margin-right:6px; animation:blink 1.4s ease infinite; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+    /* ─── Speech Bubble (right side) ────────────────────────────── */
+    .nx-speech-panel {
+      position:absolute; right:20px; top:50%; transform:translateY(-50%);
+      z-index:20; width:230px;
+      display:flex; flex-direction:column; gap:10px;
+      opacity:0;
+    }
+
+    .nx-speech-bubble {
+      background:var(--panel);
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:14px 16px;
+      backdrop-filter:blur(16px);
+      box-shadow:0 6px 30px rgba(0,0,0,0.6), 0 0 20px rgba(0,240,255,0.10);
+      position:relative;
+    }
+    .nx-speech-bubble::before {
+      content:''; position:absolute; left:-10px; top:50%; transform:translateY(-50%);
+      border:5px solid transparent; border-right-color:var(--border);
+    }
+    .speech-label { font-family:'Orbitron',sans-serif; font-size:9px; font-weight:700; letter-spacing:1.5px; color:var(--cyan); margin-bottom:6px; }
+    #dialogue-speech-text {
+      font-family:'Share Tech Mono',monospace; font-size:12px; color:var(--text);
+      line-height:1.5; min-height:36px;
+    }
+    /* Cursor blink while typing */
+    #dialogue-speech-text::after { content:'|'; animation:blink 0.7s step-end infinite; color:var(--cyan); }
+
+    /* ─── Control Deck (bottom) ─────────────────────────────────── */
+    .nx-deck {
+      position:absolute; bottom:20px; left:50%; transform:translateX(-50%);
+      z-index:30; width:92%; max-width:1020px;
+      background:var(--panel);
+      border:1px solid var(--border);
+      border-radius:16px;
+      padding:18px 22px;
+      backdrop-filter:blur(20px);
+      box-shadow:0 12px 50px rgba(0,0,0,0.85), 0 0 30px rgba(0,240,255,0.12);
+      display:flex; flex-direction:column; gap:14px;
+      opacity:0; /* animated in */
+    }
+
+    .deck-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+
+    .deck-lbl {
+      font-family:'Orbitron',sans-serif; font-size:10px; font-weight:700;
+      letter-spacing:1.5px; color:var(--cyan); min-width:140px;
+      text-transform:uppercase;
+    }
+
+    .deck-btns { display:flex; gap:8px; flex-wrap:wrap; flex:1; }
+
+    .dbtn {
+      background:rgba(255,255,255,0.04);
+      border:1px solid rgba(0,240,255,0.22);
+      color:var(--text); font-family:'Share Tech Mono',monospace; font-size:11px;
+      padding:7px 13px; border-radius:7px; cursor:pointer;
+      transition:all 0.18s ease; display:flex; align-items:center; gap:5px;
+    }
+    .dbtn:hover { background:rgba(0,240,255,0.14); border-color:var(--cyan); color:#fff; transform:translateY(-2px); box-shadow:0 4px 14px rgba(0,240,255,0.22); }
+    .dbtn.active      { background:var(--cyan); color:#040a12; border-color:var(--cyan); font-weight:700; box-shadow:0 0 14px rgba(0,240,255,0.6); }
+    .dbtn.done-active { background:var(--green)  !important; color:#040a12 !important; border-color:var(--green) !important; box-shadow:0 0 14px rgba(0,255,163,0.6) !important; }
+    .dbtn.fail-active { background:var(--red)    !important; color:#fff    !important; border-color:var(--red)   !important; box-shadow:0 0 14px rgba(255,51,102,0.6) !important; }
+    .dbtn.vfx-btn     { border-color:rgba(157,0,255,0.35); }
+    .dbtn.vfx-btn:hover { border-color:var(--purple); box-shadow:0 4px 14px rgba(157,0,255,0.30); }
+
+    /* Telemetry footer strip */
+    .deck-tele {
+      display:flex; flex-wrap:wrap; gap:20px;
+      font-family:'Share Tech Mono',monospace; font-size:10px;
+      border-top:1px solid rgba(0,240,255,0.13); padding-top:10px;
+      color:var(--muted);
+    }
+    .tele-val { color:var(--cyan); font-weight:bold; }
+
+    /* Camera hint */
+    .nx-hint {
+      position:absolute; top:82px; left:50%; transform:translateX(-50%);
+      z-index:10; pointer-events:none;
+      background:var(--panel); backdrop-filter:blur(10px);
+      border:1px solid rgba(0,240,255,0.18);
+      padding:6px 16px; border-radius:20px;
+      font-family:'Share Tech Mono',monospace; font-size:10px; color:var(--muted);
+      letter-spacing:1px; opacity:0;
+    }
+
+    /* ─── VFX Flash overlay ─────────────────────────────────────── */
+    #vfx-flash {
+      position:fixed; inset:0; z-index:100;
+      pointer-events:none; opacity:0;
+      background:radial-gradient(circle, rgba(0,240,255,0.20) 0%, transparent 70%);
+    }
+  </style>
+</head>
+<body>
+
+  <canvas id="bot-canvas"></canvas>
+  <div class="scanlines"></div>
+  <div id="vfx-flash"></div>
+
+  <!-- Top Header -->
+  <header class="nx-header">
+    <div class="nx-brand">
+      <div class="nx-hexagon">⚡</div>
+      <div class="nx-title-block">
+        <div class="nx-title">DATAHUNT // NEXUS</div>
+        <div class="nx-sub">3D AI COMPANION SYSTEM — v3.0</div>
+      </div>
+    </div>
+    <nav class="nx-nav">
+      <a href="/cockpit.html" class="nx-nav-btn">🚀 COCKPIT</a>
+      <a href="/index.html"   class="nx-nav-btn">🏠 HUB</a>
+      <a href="/jobs.html"    class="nx-nav-btn">⚡ TRACKER</a>
+    </nav>
+  </header>
+
+  <!-- Camera hint -->
+  <div class="nx-hint">🖱️ Drag to orbit 360° &nbsp;·&nbsp; Scroll to zoom &nbsp;·&nbsp; Mouse moves to look at you</div>
+
+  <!-- Left status bar -->
+  <aside class="nx-status-bar">
+    <div class="nx-stat-pill">
+      <div class="nx-stat-label">AGENT STATE</div>
+      <div class="nx-stat-val"><span class="nx-stat-dot"></span><span id="hud-state">STANDBY</span></div>
+    </div>
+    <div class="nx-stat-pill">
+      <div class="nx-stat-label">EMOTION</div>
+      <div class="nx-stat-val" id="hud-emotion">HAPPY</div>
+    </div>
+    <div class="nx-stat-pill">
+      <div class="nx-stat-label">RENDERER</div>
+      <div class="nx-stat-val">THREE.JS r128</div>
+    </div>
+    <div class="nx-stat-pill">
+      <div class="nx-stat-label">LIGHTING</div>
+      <div class="nx-stat-val">PBR ACES-FILMIC</div>
+    </div>
+    <div class="nx-stat-pill">
+      <div class="nx-stat-label">SHIELD</div>
+      <div class="nx-stat-val" id="hud-shield">DORMANT</div>
+    </div>
+  </aside>
+
+  <!-- Right speech bubble -->
+  <aside class="nx-speech-panel">
+    <div class="nx-speech-bubble">
+      <div class="speech-label">⚡ AI DIALOGUE</div>
+      <div id="dialogue-speech-text">Initializing neural systems…</div>
+    </div>
+  </aside>
+
+  <!-- Bottom Control Deck -->
+  <div class="nx-deck" id="nx-deck">
+
+    <!-- Row 1: Phase states -->
+    <div class="deck-row">
+      <div class="deck-lbl">AGENT PHASE</div>
+      <div class="deck-btns" id="phase-btns">
+        <button class="dbtn active"     onclick="setPhase('STANDBY',    this)">👋 STANDBY</button>
+        <button class="dbtn"            onclick="setPhase('PLANNING',   this)">🤔 PLANNING</button>
+        <button class="dbtn"            onclick="setPhase('SEARCHING',  this)">🔍 SEARCHING</button>
+        <button class="dbtn"            onclick="setPhase('COLLECTING', this)">📥 COLLECTING</button>
+        <button class="dbtn"            onclick="setPhase('EXTRACTING', this)">🧩 EXTRACTING</button>
+        <button class="dbtn"            onclick="setPhase('VERIFYING',  this)">🛡️ VERIFYING</button>
+        <button class="dbtn done-active" onclick="setPhase('COMPLETED', this)">🎉 COMPLETED</button>
+        <button class="dbtn fail-active" onclick="setPhase('FAILED',    this)">⚠️ FAILED</button>
+      </div>
+    </div>
+
+    <!-- Row 2: OLED emotions -->
+    <div class="deck-row">
+      <div class="deck-lbl">OLED VISOR</div>
+      <div class="deck-btns" id="emotion-btns">
+        <button class="dbtn active" onclick="setEmotion('happy',   this)">^^ Happy</button>
+        <button class="dbtn"        onclick="setEmotion('wink',    this)">^~ Wink</button>
+        <button class="dbtn"        onclick="setEmotion('curious', this)">oO Curious</button>
+        <button class="dbtn"        onclick="setEmotion('scan',    this)">── Oscilloscope</button>
+        <button class="dbtn"        onclick="setEmotion('matrix',  this)">◎ Matrix Rain</button>
+        <button class="dbtn"        onclick="setEmotion('love',    this)">♥ Joy Stars</button>
+        <button class="dbtn"        onclick="setEmotion('alert',   this)">&gt;&lt; Alert</button>
+      </div>
+    </div>
+
+    <!-- Row 3: VFX triggers -->
+    <div class="deck-row">
+      <div class="deck-lbl">VFX TRIGGER</div>
+      <div class="deck-btns">
+        <button class="dbtn vfx-btn" onclick="triggerSearch()">⚡ Radar Ripple</button>
+        <button class="dbtn vfx-btn" onclick="triggerIngest()">📦 Data Packet</button>
+        <button class="dbtn vfx-btn" onclick="triggerExtract()">💎 Knowledge Crystal</button>
+        <button class="dbtn vfx-btn" onclick="triggerVerify()">🎯 Verify Beam</button>
+        <button class="dbtn vfx-btn" onclick="triggerBurst()">💥 Particle Burst</button>
+        <button class="dbtn vfx-btn" onclick="triggerTendril()">🌿 Energy Tendril</button>
+      </div>
+    </div>
+
+    <!-- Telemetry strip -->
+    <div class="deck-tele">
+      <span>STATE: <span class="tele-val" id="tele-state">STANDBY</span></span>
+      <span>EMOTION: <span class="tele-val" id="tele-emotion">HAPPY</span></span>
+      <span>SHIELD: <span class="tele-val" id="tele-shield">DORMANT</span></span>
+      <span>ENGINE: <span class="tele-val">THREE.JS PBR</span></span>
+      <span>PARTICLES: <span class="tele-val">1200 NEBULA + 220 DUST</span></span>
+      <span>FRAME: <span class="tele-val" id="tele-fps">-- FPS</span></span>
+    </div>
+  </div>
+
+  <!-- Bot avatar scripts -->
+  <script src="js/sound_fx.js?v=1"></script>
+  <script src="js/bot_avatar.js?v=3"></script>
+
+  <script>
+    let avatar = null;
+    let lastFpsTime = performance.now(), frameCount = 0;
+
+    document.addEventListener("DOMContentLoaded", () => {
+      avatar = new AIBotAvatar("bot-canvas", { enableControls: true });
+
+      // ── Anime.js entry orchestration ───────────────────────────────
+      const tl = anime.timeline({ easing: "spring(1, 80, 10, 0)" });
+
+      tl.add({ targets: ".nx-header",    opacity: [0,1], translateY: [-20, 0], duration: 700 })
+        .add({ targets: ".nx-hint",      opacity: [0,1], duration: 500 }, "-=400")
+        .add({ targets: ".nx-stat-pill", opacity: [0,1], translateX: [-30,0], delay: anime.stagger(90), duration: 500 }, "-=300")
+        .add({ targets: ".nx-speech-panel", opacity:[0,1], translateX:[30,0], duration: 500 }, "-=600")
+        .add({ targets: "#nx-deck",      opacity: [0,1], translateY: [30, 0], duration: 600 }, "-=400")
+        .add({ targets: ".dbtn",         opacity: [0,1], scale: [0.88, 1], delay: anime.stagger(28), duration: 350 }, "-=350");
+
+      // Hide hint after 5s
+      setTimeout(() => anime({ targets: ".nx-hint", opacity: 0, duration: 600 }), 5000);
+
+      // FPS counter
+      function countFps() {
+        frameCount++;
+        const now = performance.now();
+        if (now - lastFpsTime >= 1000) {
+          document.getElementById("tele-fps").textContent = frameCount + " FPS";
+          frameCount = 0; lastFpsTime = now;
+        }
+        requestAnimationFrame(countFps);
+      }
+      requestAnimationFrame(countFps);
+    });
+
+    // ── Phase control ──────────────────────────────────────────────
+    function setPhase(state, btn) {
+      if (!avatar) return;
+      avatar.setAgentState(state);
+
+      document.querySelectorAll("#phase-btns .dbtn").forEach(b => b.classList.remove("active","done-active","fail-active"));
+      btn.classList.add(state === "COMPLETED" ? "done-active" : state === "FAILED" ? "fail-active" : "active");
+
+      document.getElementById("hud-state").textContent  = state;
+      document.getElementById("tele-state").textContent = state;
+
+      const shieldActive = ["SEARCHING","COLLECTING","EXTRACTING","VERIFYING"].includes(state);
+      const shieldLabel  = shieldActive ? "ACTIVE" : "DORMANT";
+      document.getElementById("hud-shield").textContent  = shieldLabel;
+      document.getElementById("tele-shield").textContent = shieldLabel;
+
+      // Flash overlay
+      flashScreen(state === "COMPLETED" ? "#00ffa3" : state === "FAILED" ? "#ff3366" : "#00f0ff");
+      anime({ targets: btn, scale: [1.12, 1], duration: 350, easing: "spring(1,80,10,0)" });
+      if (window.SoundFX) {
+        if (state === "COMPLETED") window.SoundFX.playMissionComplete();
+        else window.SoundFX.playClick();
+      }
+    }
+
+    // ── Emotion control ─────────────────────────────────────────────
+    function setEmotion(emotion, btn) {
+      if (!avatar) return;
+      avatar.setEmotion(emotion);
+      document.querySelectorAll("#emotion-btns .dbtn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      document.getElementById("hud-emotion").textContent  = emotion.toUpperCase();
+      document.getElementById("tele-emotion").textContent = emotion.toUpperCase();
+      anime({ targets: btn, scale:[1.10,1], duration:280, easing:"spring(1,80,10,0)" });
+      if (window.SoundFX) window.SoundFX.playClick();
+    }
+
+    // ── VFX triggers ────────────────────────────────────────────────
+    function triggerSearch() {
+      if (avatar) avatar.onSearchResult("Autonomous Intelligence Research");
+      flashScreen("#00cfff");
+      if (window.SoundFX) window.SoundFX.playSearchPing();
+    }
+    function triggerIngest() {
+      if (avatar) avatar.onPageFetched("https://docs.langchain.com/architecture");
+      if (window.SoundFX) window.SoundFX.playDataPacket();
+    }
+    function triggerExtract() {
+      if (avatar) avatar.onRecordExtracted({ title: "LCEL Runnables Architecture" });
+      flashScreen("#7000ff");
+      if (window.SoundFX) window.SoundFX.playClick();
+    }
+    function triggerVerify() {
+      if (avatar) avatar.onRecordVerified({}, true);
+      flashScreen("#ffb800");
+      if (window.SoundFX) window.SoundFX.playVerifiedChime();
+    }
+    function triggerBurst() {
+      if (avatar) avatar._particleBurst(0x00f0ff);
+      flashScreen("#00f0ff");
+    }
+    function triggerTendril() {
+      if (avatar) avatar._spawnTendril(0x9d00ff);
+      flashScreen("#9d00ff");
+    }
+
+    function flashScreen(color) {
+      const el = document.getElementById("vfx-flash");
+      el.style.background = `radial-gradient(circle, ${color}22 0%, transparent 70%)`;
+      anime({ targets: el, opacity: [0, 0.9, 0], duration: 420, easing: "easeOutQuart" });
+    }
+  </script>
+</body>
+</html>

@@ -11,23 +11,37 @@ dist/
 
 # Environments & Secrets (NEVER commit secrets or API keys)
 .env
+.env.local
+.env.*.local
 .venv/
 venv/
 ENV/
 env/
+video/
+
+# AI Agent Framework & IDE state
+.agents/
+.gemini/
+.claude/
+scratch/
 
 # Testing & Coverage
 .pytest_cache/
 .coverage
 htmlcov/
+*.log
 
 # Local SQLite databases and runtime storage
 *.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
 *.db
+*.db-wal
+*.db-shm
 *.sqlite
-data/*.sqlite3
-data/*.db
-data/*.sqlite
+data/*.sqlite3*
+data/*.db*
+data/*.sqlite*
 !data/.gitkeep
 
 # Export artifacts generated from runs
@@ -43,8 +57,7 @@ exports/*
 Thumbs.db
 desktop.ini
 
-# Ignore all markdown files except README.md
-*.md
-**/*.md
-!README.md
-!**/README.md
+# Temporary files
+*.tmp
+*.temp
+*.bak

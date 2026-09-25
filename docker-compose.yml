@@ -1,0 +1,16 @@
+services:
+  datahunt-agent:
+    build: .
+    container_name: datahunt-agent-core
+    ports:
+      - "8000:8000"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_MODEL=auto
+      - GEMINI_LITE_MODEL=gemini-flash-lite-latest
+      - GEMINI_FLASH_MODEL=gemini-3.8-flash
+      - DATAHUNT_DB_PATH=datahunt.db
+    volumes:
+      - ./exports:/app/exports
+      - ./datahunt.db:/app/datahunt.db
+    restart: unless-stopped

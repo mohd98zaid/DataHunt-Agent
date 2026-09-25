@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DataHunt // Autonomous Agent Cockpit</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
+  <link rel="stylesheet" href="css/styles.css?v=105">
+  <!-- Markdown parser for clean formatted results -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <!-- Three.js and OrbitControls -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <!-- Postprocessing for Neon Bloom -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+</head>
+<body>
+  <!-- 3D Canvas Background -->
+  <canvas id="webgl-canvas"></canvas>
+
+  <!-- Futuristic Scanlines & Vignette -->
+  <div class="scanline-overlay"></div>
+
+  <!-- Cockpit UI Overlay -->
+  <div class="cockpit-container">
+    <!-- Header -->
+    <header class="cockpit-header">
+      <div class="brand-area" style="display: flex; align-items: center; gap: 12px;">
+        <a href="/" class="cockpit-header-tracker-link" style="display: flex; align-items: center; gap: 6px; padding: 4px 12px; background: rgba(0, 240, 255, 0.12); border: 1px solid var(--neon-cyan); border-radius: 6px; color: var(--neon-cyan); text-decoration: none; font-weight: 700; font-size: 11px; letter-spacing: 0.5px;" title="Return to Central AI Agent Hub">
+          <span>← AGENT HUB</span>
+        </a>
+        <div class="brand-logo-icon"></div>
+        <div class="brand-title">DATAHUNT</div>
+        <div class="brand-tag" id="cockpit-agent-tag">🔬 RESEARCH AGENT</div>
+      </div>
+      <div class="header-status-strip">
+        <div class="status-indicator">
+          <div class="status-dot" id="system-dot"></div>
+          <span id="system-status-text">NEURAL LINK: ONLINE</span>
+        </div>
+        <div class="status-indicator">
+          <div class="status-dot" style="background: var(--neon-cyan); box-shadow: 0 0 8px var(--neon-cyan);"></div>
+          <span style="color: var(--neon-cyan);">LANGSMITH: ACTIVE</span>
+        </div>
+        <div class="status-indicator">
+          <span>TARGET: GEMINI MULTI-MODEL</span>
+        </div>
+        <div class="status-indicator">
+          <span>LATENCY: <span id="ping-text" style="color: var(--neon-cyan);">12ms</span></span>
+        </div>
+        <button id="audio-toggle-btn" class="cockpit-header-tracker-link" title="Toggle Sci-Fi Audio Synthesizer" style="background: rgba(0, 240, 255, 0.1); border-color: var(--neon-cyan); color: var(--neon-cyan); margin-right: 6px; cursor: pointer;">
+          <span id="audio-toggle-icon">🔊</span>
+          <span id="audio-toggle-text">AUDIO ON</span>
+        </button>
+        <a href="/bot_preview.html" target="_blank" rel="noopener noreferrer" class="cockpit-header-tracker-link" title="Open Dedicated 3D AI Bot Visual Showcase" style="border-color: var(--neon-cyan); color: var(--neon-cyan); margin-right: 6px;">
+          <span>🤖 BOT SHOWCASE</span>
+          <span style="font-size: 10px;">↗</span>
+        </a>
+        <a href="/jobs.html" target="_blank" rel="noopener noreferrer" class="cockpit-header-tracker-link" title="Open Job Application & Pipeline Tracker in New Tab">
+          <span>⚡ JOB TRACKER</span>
+          <span style="font-size: 10px;">↗</span>
+        </a>
+      </div>
+    </header>
+
+    <!-- Left Sidebar: Records & Pipeline -->
+    <aside class="left-sidebar">
+      <div class="glass-panel records-panel">
+        <div class="panel-header" style="padding: 0 0 10px 0;">
+          <div class="panel-title" id="presets-panel-title">MISSION DIRECTIVES</div>
+          <span style="font-family: 'Share Tech Mono', monospace; font-size: 10px; color: var(--neon-cyan);">PRESETS</span>
+        </div>
+
+        <div id="dynamic-presets-container">
+          <div class="preset-label" id="preset-label-1">🔬 Research Directives</div>
+          <div class="query-presets" id="query-presets-list">
+            <div class="preset-chip" onclick="window.setQuery && window.setQuery('LangChain & LCEL Architecture');">LangChain & LCEL Architecture</div>
+            <div class="preset-chip" onclick="window.setQuery && window.setQuery('Compare Rust vs Go for high-concurrency microservices');">Rust vs Go Microservices</div>
+            <div class="preset-chip" onclick="window.setQuery && window.setQuery('top 3 open source AI agent frameworks and github stars');">AI Agent Frameworks</div>
+            <div class="preset-chip" onclick="window.setQuery && window.setQuery('Vector DB Comparison: Milvus vs Qdrant vs pgvector');">Vector DB Comparison</div>
+          </div>
+        </div>
+
+        <div class="preset-label" style="margin-top: 14px;">Freshness Radar Filter</div>
+        <div class="freshness-toggle-group" id="freshness-toggle-group">
+          <button type="button" class="freshness-chip active" id="freshness-chip-0sec" onclick="window.setFreshness && window.setFreshness('0sec')">⚡ 0-SEC LIVE</button>
+          <button type="button" class="freshness-chip" id="freshness-chip-24h" onclick="window.setFreshness && window.setFreshness('24h')">PAST 24H</button>
+          <button type="button" class="freshness-chip" id="freshness-chip-all" onclick="window.setFreshness && window.setFreshness('all')">ALL TIME</button>
+        </div>
+
+        <div class="preset-label" style="margin-top: 14px;">Multi-Model Neural Core</div>
+        <div class="freshness-toggle-group" id="model-toggle-group">
+          <button type="button" class="freshness-chip active" id="model-chip-auto" onclick="window.setModel && window.setModel('auto')" title="Hybrid Multi-Model (Lite for Planning + 3.8 Flash for Synthesis with Auto-Fallback)">🔄 MULTI-MODEL</button>
+          <button type="button" class="freshness-chip" id="model-chip-lite" onclick="window.setModel && window.setModel('lite')" title="Gemini Lite (Ultra-fast, lowest latency)">⚡ LITE</button>
+          <button type="button" class="freshness-chip" id="model-chip-flash" onclick="window.setModel && window.setModel('flash')" title="Gemini 3.8 Flash (Multimodal deep reasoning)">🚀 3.8 FLASH</button>
+        </div>
+      </div>
+
+      <!-- State Machine Phase Tracker -->
+      <div class="glass-panel pipeline-section">
+        <div class="panel-header" style="padding: 0 0 10px 0;">
+          <div class="panel-title">PIPELINE STAGES</div>
+        </div>
+
+        <div class="phase-node" id="phase-node-PLANNING">
+          <div class="phase-left">
+            <div class="phase-icon">01</div>
+            <div class="phase-name">PLANNING</div>
+          </div>
+          <div class="phase-badge">READY</div>
+        </div>
+
+        <div class="phase-node" id="phase-node-SEARCHING">
+          <div class="phase-left">
+            <div class="phase-icon">02</div>
+            <div class="phase-name">SEARCHING</div>
+          </div>
+          <div class="phase-badge">IDLE</div>
+        </div>
+
+        <div class="phase-node" id="phase-node-COLLECTING">
+          <div class="phase-left">
+            <div class="phase-icon">03</div>
+            <div class="phase-name">COLLECTING</div>
+          </div>
+          <div class="phase-badge">IDLE</div>
+        </div>
+
+        <div class="phase-node" id="phase-node-EXTRACTING">
+          <div class="phase-left">
+            <div class="phase-icon">04</div>
+            <div class="phase-name">EXTRACTING</div>
+          </div>
+          <div class="phase-badge">IDLE</div>
+        </div>
+
+        <div class="phase-node" id="phase-node-VERIFYING">
+          <div class="phase-left">
+            <div class="phase-icon">05</div>
+            <div class="phase-name">VERIFYING</div>
+          </div>
+          <div class="phase-badge">IDLE</div>
+        </div>
+
+        <div class="phase-node" id="phase-node-DEDUPLICATING">
+          <div class="phase-left">
+            <div class="phase-icon">06</div>
+            <div class="phase-name">DEDUPLICATING</div>
+          </div>
+          <div class="phase-badge">IDLE</div>
+        </div>
+
+        <div class="phase-node" id="phase-node-EXPORTING">
+          <div class="phase-left">
+            <div class="phase-icon">07</div>
+            <div class="phase-name">EXPORTING</div>
+          </div>
+          <div class="phase-badge">IDLE</div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Center Stage: Floating Prompt Card -->
+    <main class="center-viewport">
+      <!-- Floating Holographic Prompt / Status Pill -->
+      <div class="video-prompt-card" id="center-prompt-card">
+        <div class="prompt-card-top">
+          <div class="pill-badge" id="card-state-pill">
+            <span class="pill-dot"></span>
+            <span id="card-state-label">Waiting...</span>
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <span class="spec-tag" id="active-model-tag" style="border-color: var(--neon-cyan); color: var(--neon-cyan); font-weight: 700;">🔄 MULTI-MODEL</span>
+            <span class="spec-tag" id="active-mode-badge" style="border-color: var(--neon-green); color: var(--neon-green); font-weight: 700;">AGENT: RESEARCH</span>
+          </div>
+        </div>
+
+        <!-- Initial Input View -->
+        <form id="prompt-form" style="display: flex; width: 100%; margin: 0; padding: 0;">
+          <div class="prompt-input-row" id="prompt-input-row" style="flex: 1;">
+            <div class="input-icon">🔍</div>
+            <input 
+              type="text" 
+              id="query-input" 
+              class="modern-query-input" 
+              placeholder="Deploy research directive e.g. What is LangChain architecture?" 
+              autocomplete="off"
+            />
+            <button 
+              type="submit" 
+              id="engage-btn" 
+              class="modern-send-btn" 
+              title="Launch Autonomous Mission"
+            >
+              <span id="engage-btn-text">Deploy</span>
+              <span class="send-arrow">➔</span>
+            </button>
+          </div>
+        </form>
+
+        <!-- Active Analyzing Banner -->
+        <div class="analyzing-banner" id="analyzing-banner" style="display: none;">
+          <div class="analyzing-spinner" id="analyzing-spinner"></div>
+          <div class="analyzing-text-wrap">
+            <div class="analyzing-title" id="analyzing-title">Analyzing request...</div>
+            <div class="analyzing-subtitle" id="analyzing-subtitle">Scanning public web and synthesizing facts</div>
+          </div>
+          <button class="view-results-mini-btn" id="view-results-btn" style="display: none;">
+            <span>VIEW REPORT</span>
+          </button>
+          <button class="view-results-mini-btn" id="new-query-btn" style="display: none; background: rgba(0, 240, 255, 0.15); border-color: var(--neon-cyan); color: var(--neon-cyan);">
+            <span>NEW QUERY</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Floating Live Speech Bubble directly above the 3D Bot -->
+      <div class="bot-dialogue-pill" id="bot-dialogue-pill">
+        <div class="dialogue-avatar-dot"></div>
+        <div class="dialogue-bubble-content">
+          <span class="dialogue-tag" id="dialogue-tag">AI COMPANION</span>
+          <span class="dialogue-speech-text" id="dialogue-speech-text">Ready for directives. Standing by on circular pedestal 👋</span>
+        </div>
+      </div>
+
+      <!-- On-Page Research Dossier & Intelligence Viewer -->
+      <div class="center-results-panel glass-panel" id="center-results-panel" style="display: none;">
+        <div class="results-panel-header">
+          <div class="results-panel-title-group">
+            <div class="panel-title" id="results-panel-title">🔬 RESEARCH INTELLIGENCE DOSSIER</div>
+            <div class="results-panel-query-badge" id="results-panel-query-badge"></div>
+          </div>
+          <div class="results-panel-actions">
+            <a id="onpage-dl-md" class="panel-action-btn md-action" href="#" download title="Download Markdown Dossier (.md)">
+              <span>📄 .MD</span>
+            </a>
+            <a id="onpage-dl-docx" class="panel-action-btn docx-action" href="#" download title="Download Microsoft Word Report (.docx)">
+              <span>📘 .DOCX</span>
+            </a>
+            <a id="onpage-dl-json" class="panel-action-btn json-action" href="#" download title="Download Raw Dataset (.json)">
+              <span>📦 .JSON</span>
+            </a>
+            <button id="onpage-fullscreen-btn" class="panel-action-btn fullscreen-action" type="button" title="Open Fullscreen Focus View">
+              <span>⛶ FULLSCREEN</span>
+            </button>
+            <button id="onpage-new-query-btn" class="panel-action-btn new-query-action" type="button" title="Start New Directive">
+              <span>🔄 NEW</span>
+            </button>
+            <button id="onpage-close-btn" class="panel-action-btn close-action" type="button" title="Minimize Panel & View 3D Bot" style="border-color: rgba(255, 51, 102, 0.4); color: var(--neon-red); background: rgba(255, 51, 102, 0.1);">
+              <span>✕ CLOSE</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Interactive Tab Switcher -->
+        <div class="results-tab-bar" id="results-tab-bar">
+          <button type="button" class="results-tab-btn active" id="tab-btn-dossier">
+            <span>📖 EXECUTIVE DOSSIER</span>
+          </button>
+          <button type="button" class="results-tab-btn" id="tab-btn-entities">
+            <span>🧩 KNOWLEDGE MATRIX (<span id="tab-entities-count">0</span>)</span>
+          </button>
+          <button type="button" class="results-tab-btn" id="tab-btn-sources">
+            <span>🌐 VERIFIED SOURCES (<span id="tab-sources-count">0</span>)</span>
+          </button>
+        </div>
+
+        <!-- Tab 1: Executive Markdown Dossier -->
+        <div class="results-tab-content active" id="tab-content-dossier">
+          <div class="markdown-body onpage-markdown-body" id="onpage-dossier-markdown">
+            <!-- Full rich formatted research dossier renders here -->
+          </div>
+        </div>
+
+        <!-- Tab 2: Structured Entity & Finding Matrix -->
+        <div class="results-tab-content" id="tab-content-entities">
+          <div id="onpage-entities-container" class="research-entity-grid">
+            <!-- Discovered concept & knowledge entity cards render here -->
+          </div>
+        </div>
+
+        <!-- Tab 3: Primary Web Source Ingestion Log -->
+        <div class="results-tab-content" id="tab-content-sources">
+          <div id="onpage-sources-container" class="research-sources-grid">
+            <!-- Live verified documentation URLs & excerpts render here -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Bottom Floating Live Entity Ticker -->
+      <div class="center-bottom-ticker" id="bottom-ticker">
+        <span class="ticker-badge">LIVE TELEMETRY</span>
+        <span class="ticker-text" id="ticker-text">Agent standing by. Neural synthesis ready.</span>
+      </div>
+    </main>
+
+    <!-- Right Sidebar: Telemetry & Vitals -->
+    <aside class="right-sidebar">
+      <!-- Waveform Audio/Data Visualizer -->
+      <div class="glass-panel waveform-card">
+        <div class="panel-header" style="padding: 0 0 8px 0;">
+          <div class="panel-title">TELEMETRY WAVE</div>
+          <span style="font-family: 'Share Tech Mono', monospace; font-size: 10px; color: var(--neon-green);">60 FPS</span>
+        </div>
+        <canvas id="waveform-canvas"></canvas>
+      </div>
+
+      <!-- Radial Confidence Gauge -->
+      <div class="glass-panel confidence-card">
+        <div class="radial-container">
+          <svg class="radial-svg" viewBox="0 0 80 80">
+            <circle class="radial-bg" cx="40" cy="40" r="35"></circle>
+            <circle id="radial-progress" class="radial-progress" cx="40" cy="40" r="35"></circle>
+          </svg>
+          <div class="radial-value-text" id="radial-value-text">0%</div>
+        </div>
+        <div class="confidence-info">
+          <div class="confidence-info-title">CONFIDENCE INDEX</div>
+          <div class="confidence-info-desc" id="confidence-desc">Verification threshold >= 75%</div>
+        </div>
+      </div>
+
+      <!-- Real-time Counters Grid -->
+      <div class="glass-panel stats-grid">
+        <div class="stat-tile">
+          <span class="stat-label">PAGES FETCHED</span>
+          <span class="stat-number" id="stat-pages">0</span>
+        </div>
+        <div class="stat-tile">
+          <span class="stat-label">SEARCH QUERIES</span>
+          <span class="stat-number" id="stat-queries">0</span>
+        </div>
+        <div class="stat-tile">
+          <span class="stat-label">VERIFIED RECORDS</span>
+          <span class="stat-number" id="stat-verified" style="color: var(--neon-green);">0</span>
+        </div>
+        <div class="stat-tile">
+          <span class="stat-label">REJECTED / DUPES</span>
+          <span class="stat-number" id="stat-rejected" style="color: var(--neon-red);">0</span>
+        </div>
+      </div>
+
+      <!-- Terminal Log Stream -->
+      <div class="glass-panel log-panel">
+        <div class="panel-header" style="padding: 0 0 8px 0;">
+          <div class="panel-title">LIVE EVENT STREAM</div>
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <div class="live-blip"></div>
+            <span style="font-family: 'Share Tech Mono', monospace; font-size: 10px; color: var(--neon-green);">STREAMING</span>
+          </div>
+        </div>
+        <div class="terminal-logs" id="terminal-log">
+          <div class="log-entry system">[SYSTEM] Neural Workstation online. Waiting for directive...</div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Bottom Status Bar -->
+    <footer class="cockpit-footer">
+      <div class="footer-left">
+        <span class="footer-label">DATASET EXPORT:</span>
+        <span class="footer-val" id="export-status-desc">Standby</span>
+      </div>
+      <div class="footer-center">
+        <div class="data-indicator">
+          <span class="data-label">VERIFICATION POLICY</span>
+          <span class="data-val" style="color: var(--neon-cyan);">CRYPTOGRAPHIC PROVENANCE</span>
+        </div>
+        <div class="data-indicator">
+          <span class="data-label">PARALLEL WORKERS</span>
+          <span class="data-val" style="color: var(--neon-green);">10 CONCURRENT</span>
+        </div>
+      </div>
+      <div class="footer-right">
+        <a id="download-btn" class="download-link-btn" href="#" download style="display: none;">
+          <span>📥 DOWNLOAD PAYLOAD</span>
+        </a>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Dedicated Slide-Over Modal for Full Research Report -->
+  <div class="results-modal-backdrop" id="results-modal">
+    <div class="results-modal-card glass-panel">
+      <div class="results-modal-header">
+        <div class="panel-title" id="modal-title-text">📊 AUTONOMOUS RESEARCH DOSSIER</div>
+        <button class="close-modal-btn" id="close-modal-btn">✕</button>
+      </div>
+      <div class="results-modal-body markdown-body" id="modal-report-content">
+        <!-- Rendered markdown content appears here cleanly -->
+      </div>
+      <div class="results-modal-footer" style="display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap;">
+        <a id="modal-dl-md" class="download-link-btn md-btn" style="display: flex; background: rgba(0, 240, 255, 0.15); border: 1px solid var(--neon-cyan); color: var(--neon-cyan); padding: 8px 14px;" href="#" download>
+          <span>📄 DOWNLOAD DOSSIER (.MD)</span>
+        </a>
+        <a id="modal-dl-docx" class="download-link-btn docx-btn" style="display: flex; background: rgba(99, 102, 241, 0.2); border: 1px solid #818cf8; color: #a5b4fc; padding: 8px 14px;" href="#" download>
+          <span>📘 DOWNLOAD REPORT (.DOCX)</span>
+        </a>
+        <a id="modal-dl-json" class="download-link-btn json-btn" style="display: flex; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.2); color: #cbd5e1; padding: 8px 14px;" href="#" download>
+          <span>📦 RAW DATA (.JSON)</span>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/sound_fx.js?v=105"></script>
+  <script src="js/bot_avatar.js?v=105"></script>
+  <script src="js/three_scene.js?v=105"></script>
+  <script src="js/hud.js?v=105"></script>
+  <script src="js/app.js?v=105"></script>
+</body>
+</html>

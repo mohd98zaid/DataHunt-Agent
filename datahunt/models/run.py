@@ -1,4 +1,4 @@
-﻿from datetime import datetime, timezone
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
@@ -19,12 +19,12 @@ class RunStatus(str, Enum):
 
 class RunBudget(BaseModel):
     deadline_seconds: int = 300
-    max_tool_steps: int = 30
-    max_search_queries: int = 12
-    max_pages: int = 40
+    max_tool_steps: int = 60
+    max_search_queries: int = 16
+    max_pages: int = 50
     max_browser_pages: int = 8
     max_response_bytes: int = 2000000
-    max_output_records: int = 250
+    max_output_records: int = 350
 
 class RunCounters(BaseModel):
     tool_steps: int = 0

@@ -1,4 +1,4 @@
-﻿from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 from datahunt.logger import logger
 from datahunt.models import ExtractedRecord, VerificationStatus
 from datahunt.tools.base import ToolResult
@@ -16,12 +16,13 @@ class DedupeTool:
         clusters: Dict[str, List[str]] = {}
 
         for record in records:
-            # 1. Check canonical URL first
+            # Prioritize composite entity identity key (company::title::location)
+            # This prevents collapsing distinct jobs, products, or concepts discovered on the same page
             key = None
-            if record.canonical_url and record.canonical_url.strip():
+            if record.identity_key and record.identity_key.strip():
+                key = f"ident::{record.identity_key.strip().lower()}"
+            elif record.canonical_url and record.canonical_url.strip():
                 key = f"url::{record.canonical_url.strip().lower()}"
-            elif record.identity_key and record.identity_key.strip():
-                key = f"ident::{record.identity_key.strip()}"
             else:
                 key = f"id::{record.id}"
 

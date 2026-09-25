@@ -1,7 +1,6 @@
-﻿from datetime import datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
-import sqlite3
 from datahunt.db.connection import get_connection
 from datahunt.logger import logger
 
@@ -40,13 +39,19 @@ def run_migrations(db_path: Optional[Path] = None, migrations_dir: Optional[Path
             logger.info(f"Applying migration: {version}")
             sql_content = sql_file.read_text(encoding="utf-8")
             
-            # executescript executes all statements in script
-            conn.executescript(sql_content)
+            statements = sql_content.split(';')
+            conn.execute('BEGIN')
+            for stmt in statements:
+                stmt = stmt.strip()
+                if stmt:
+                    conn.execute(stmt)
+            
             now_str = datetime.now(timezone.utc).isoformat()
             conn.execute(
                 "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?);",
                 (version, now_str)
             )
+            conn.execute('COMMIT')
             applied.append(version)
             logger.info(f"Successfully applied migration: {version}")
             

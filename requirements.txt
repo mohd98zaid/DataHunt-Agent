@@ -1,16 +1,24 @@
 # Core HTTP & Network
 httpx>=0.27.0
 beautifulsoup4>=4.12.0
+duckduckgo-search>=6.0.0
+
+# Web API & Real-Time Streaming
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+websockets>=12.0
 
 # Data Validation & Modeling
 pydantic>=2.7.0
 python-dotenv>=1.0.0
 
-# LLM SDK
+# LLM SDK & Observability
 google-genai>=0.1.0
+langsmith>=0.1.0
 
 # Export Formats
 openpyxl>=3.1.0
+python-docx>=1.2.0
 
 # CLI & Utilities
 rich>=13.7.0

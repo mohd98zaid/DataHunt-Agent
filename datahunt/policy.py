@@ -1,4 +1,4 @@
-﻿import ipaddress
+import ipaddress
 import re
 import socket
 from urllib.parse import urlparse
@@ -37,7 +37,8 @@ BLOCKED_IP_NETWORKS = [
 # Generic business mailboxes
 GENERIC_BUSINESS_PREFIXES = {
     "info", "support", "careers", "jobs", "hiring", "sales", "contact",
-    "press", "hr", "hello", "team", "office", "media", "help", "inquiries"
+    "press", "hr", "hello", "team", "office", "media", "help", "inquiries",
+    "recruiting", "recruitment", "talent", "people", "partnerships", "work", "apply"
 }
 
 def validate_url_scheme_and_format(url: str, allow_http: bool = True) -> str:
@@ -82,10 +83,10 @@ def check_ip_ssrf(ip_obj: ipaddress.IPv4Address | ipaddress.IPv6Address) -> None
                 operator_message=f"SSRF blocked IP {ip_obj} matching network {net}"
             )
 
-def validate_url_ssrf(url: str, allow_http: bool = True) -> Tuple[str, str, List[str]]:
+def validate_url_ssrf(url: str, allow_http: bool = True) -> Tuple[str, str]:
     """
     Validate URL and perform DNS resolution checks to defend against SSRF.
-    Returns (cleaned_url, hostname, resolved_ips).
+    Returns (cleaned_url, validated_ip).
     """
     cleaned_url = validate_url_scheme_and_format(url, allow_http=allow_http)
     parsed = urlparse(cleaned_url)
@@ -101,7 +102,7 @@ def validate_url_ssrf(url: str, allow_http: bool = True) -> Tuple[str, str, List
     try:
         ip_obj = ipaddress.ip_address(hostname)
         check_ip_ssrf(ip_obj)
-        return cleaned_url, hostname, [str(ip_obj)]
+        return cleaned_url, str(ip_obj)
     except ValueError:
         pass # It is a domain name, proceed to DNS resolution
 
@@ -128,7 +129,7 @@ def validate_url_ssrf(url: str, allow_http: bool = True) -> Tuple[str, str, List
             operator_message=f"Zero resolved IPs for {hostname}"
         )
 
-    return cleaned_url, hostname, resolved_ips
+    return cleaned_url, resolved_ips[0]
 
 def check_domain_policy(
     domain: str,
@@ -137,6 +138,7 @@ def check_domain_policy(
 ) -> None:
     """Enforce allowed and blocked domain rules."""
     domain_lower = domain.lower()
+    domain_lower = domain_lower.rstrip('.')
     
     # Check blocked domains
     if blocked_domains:
@@ -186,12 +188,15 @@ def is_public_business_email(email: str) -> bool:
 
 def escape_csv_formula(val: Any) -> str:
     """
-    Neutralize CSV formula injection risk by prepending a single quote
-    if a cell starts with '=', '+', '-', or '@'.
+    Neutralize CSV / Excel formula injection risk by prepending a single quote
+    if a cell starts with '=', '+', '-', '@', '\t', or '\r', including when preceded by whitespace.
     """
     if val is None:
         return ""
     text = str(val)
-    if text and text[0] in ("=", "+", "-", "@", "\t", "\r"):
+    if not text:
+        return ""
+    stripped = text.lstrip()
+    if stripped and stripped[0] in ("=", "+", "-", "@", "\t", "\r", "%"):
         return "'" + text
     return text

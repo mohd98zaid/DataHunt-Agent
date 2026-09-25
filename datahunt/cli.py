@@ -1,6 +1,13 @@
-﻿import argparse
+import argparse
 import sys
-from pathlib import Path
+
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -10,6 +17,7 @@ from datahunt.db import run_migrations, RunRepository, TaskRepository, RecordRep
 from datahunt.models import RunStatus, VerificationStatus
 from datahunt.orchestrator import ResearchOrchestrator
 from datahunt.tools import ExportTool
+from agent import list_agents
 
 console = Console()
 
@@ -17,14 +25,31 @@ def cmd_migrate(args):
     console.print(f"[bold cyan]{APP_NAME}[/bold cyan] Running SQLite migrations...")
     applied = run_migrations()
     if applied:
-        console.print(f"[bold green]✓[/bold green] Applied migrations: {', '.join(applied)}")
+        console.print(f"[bold green][OK][/bold green] Applied migrations: {', '.join(applied)}")
     else:
-        console.print("[bold green]✓[/bold green] Database schema is up to date.")
+        console.print("[bold green][OK][/bold green] Database schema is up to date.")
+
+def cmd_agents(args):
+    """List available specialized AI agents and their mission profiles."""
+    agents = list_agents()
+    table = Table(title=f"{APP_NAME} Specialized Autonomous Agents", border_style="cyan")
+    table.add_column("Agent Mode", style="bold green")
+    table.add_column("Agent Name", style="bold")
+    table.add_column("Mission Description")
+    
+    for a in agents:
+        table.add_row(
+            a.get("mode", "").upper(),
+            a.get("name", ""),
+            a.get("description", "")
+        )
+    console.print(table)
 
 def cmd_run(args):
-    console.print(Panel(f"[bold cyan]{APP_NAME}[/bold cyan] Starting Research Run\n[italic]{args.query}[/italic]", border_style="cyan"))
+    agent_label = f"[{args.agent.upper()}] " if args.agent and args.agent != "auto" else ""
+    console.print(Panel(f"[bold cyan]{APP_NAME}[/bold cyan] Starting Research Run {agent_label}\n[italic]{args.query}[/italic]", border_style="cyan"))
     
-    orch = ResearchOrchestrator()
+    orch = ResearchOrchestrator(model=args.model)
     try:
         task, run = orch.create_task_and_run(
             request_text=args.query,
@@ -33,6 +58,7 @@ def cmd_run(args):
             output_format=args.format,
             allowed_domains=args.allowed_domains,
             blocked_domains=args.blocked_domains,
+            agent_mode=args.agent,
         )
         console.print(f"Task ID: [bold]{task.id}[/bold] | Run ID: [bold]{run.id}[/bold]")
         
@@ -126,6 +152,10 @@ def main():
     parser = argparse.ArgumentParser(prog="datahunt", description=f"{APP_NAME} - Autonomous Research AI Agent (v{__version__})")
     subparsers = parser.add_subparsers(dest="subcommand", help="Available subcommands")
 
+    # agents
+    sub_agents = subparsers.add_parser("agents", help="List available autonomous AI agent profiles")
+    sub_agents.set_defaults(func=cmd_agents)
+
     # migrate
     sub_migrate = subparsers.add_parser("migrate", help="Run SQLite database migrations")
     sub_migrate.set_defaults(func=cmd_migrate)
@@ -133,9 +163,11 @@ def main():
     # run
     sub_run = subparsers.add_parser("run", help="Start a new research run")
     sub_run.add_argument("query", type=str, help="Research query (e.g. 'Find 20 AI jobs in Dubai')")
+    sub_run.add_argument("--agent", type=str, choices=["auto", "jobs", "research", "market"], default="auto", help="Specialized agent profile to deploy")
+    sub_run.add_argument("--model", type=str, choices=["auto", "gemini-flash-lite-latest", "gemini-3.8-flash"], default="auto", help="AI model engine to use")
     sub_run.add_argument("--max-records", type=int, default=50, help="Maximum records to retrieve")
     sub_run.add_argument("--freshness", type=int, default=7, help="Freshness window in days")
-    sub_run.add_argument("--format", type=str, choices=["json", "csv", "xlsx"], default="json", help="Export format")
+    sub_run.add_argument("--format", type=str, choices=["json", "csv", "xlsx", "md", "docx"], default="json", help="Export format")
     sub_run.add_argument("--allowed-domains", nargs="*", default=None, help="Allowed domains")
     sub_run.add_argument("--blocked-domains", nargs="*", default=None, help="Blocked domains")
     sub_run.set_defaults(func=cmd_run)

@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DataHunt // Central AI Agent Hub</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
+  <link rel="stylesheet" href="css/hub.css?v=1">
+</head>
+<body>
+  <div class="hub-container">
+    <!-- Header -->
+    <header class="hub-header">
+      <div class="brand-wrapper">
+        <div class="brand-hexagon">⚡</div>
+        <div>
+          <div class="brand-name">DATAHUNT</div>
+          <div class="brand-badge">MULTI-AGENT COMMAND PORTAL</div>
+        </div>
+      </div>
+      <nav class="hub-nav">
+        <a href="/cockpit.html?mode=jobs" class="nav-link-btn">
+          <span>🎯 JOB RADAR</span>
+        </a>
+        <a href="/cockpit.html?mode=research" class="nav-link-btn">
+          <span>🔬 DEEP RESEARCH</span>
+        </a>
+        <a href="/cockpit.html?mode=market" class="nav-link-btn">
+          <span>📊 MARKET INTEL</span>
+        </a>
+        <a href="/bot_preview.html" class="nav-link-btn" style="border-color: var(--neon-cyan); color: var(--neon-cyan);">
+          <span>🤖 3D AVATAR</span>
+        </a>
+        <a href="/jobs.html" class="nav-link-btn highlight" target="_blank" rel="noopener noreferrer">
+          <span>⚡ JOB TRACKER</span>
+          <span style="font-size: 10px;">↗</span>
+        </a>
+        <a href="/docs" class="nav-link-btn" target="_blank" rel="noopener noreferrer">
+          <span>📖 API DOCS</span>
+        </a>
+      </nav>
+    </header>
+
+    <!-- Hero Section -->
+    <section class="hub-hero">
+      <div class="hero-tag">
+        <span style="width: 8px; height: 8px; border-radius: 50%; background: var(--neon-green); box-shadow: 0 0 8px var(--neon-green); display: inline-block;"></span>
+        <span>AUTONOMOUS MULTI-AGENT INTELLIGENCE SUITE</span>
+      </div>
+      <h1 class="hero-title">
+        Deploy Specialized <span>AI Agents</span>
+      </h1>
+      <p class="hero-desc">
+        Select a purpose-engineered autonomous AI agent to execute mission directives: from sub-second ATS career scraping and applicant tracking to deep technical knowledge synthesis and competitive market intelligence.
+      </p>
+
+      <!-- Telemetry Ribbon -->
+      <div class="hub-ribbon">
+        <div class="ribbon-item">
+          <div class="ribbon-dot"></div>
+          <span class="ribbon-label">AGENT FLEET:</span>
+          <span class="ribbon-val">4 ACTIVE SYSTEMS</span>
+        </div>
+        <div class="ribbon-item">
+          <div class="ribbon-dot"></div>
+          <span class="ribbon-label">NEURAL ENGINE:</span>
+          <span class="ribbon-val">GEMINI 3.8 FLASH & LITE</span>
+        </div>
+        <div class="ribbon-item">
+          <div class="ribbon-dot"></div>
+          <span class="ribbon-label">VERIFICATION:</span>
+          <span class="ribbon-val">CRYPTOGRAPHIC PROVENANCE</span>
+        </div>
+        <div class="ribbon-item">
+          <div class="ribbon-dot"></div>
+          <span class="ribbon-label">RADAR INTERVAL:</span>
+          <span class="ribbon-val">⚡ 0-SEC REALTIME</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Quick Directive Launcher -->
+    <div class="hub-launcher-card">
+      <div class="launcher-info">
+        <div class="launcher-title">⚡ INSTANT MISSION DISPATCHER</div>
+        <div class="launcher-desc">Type your directive and choose an agent to launch immediately.</div>
+      </div>
+      <form class="launcher-input-row" onsubmit="event.preventDefault(); launchDirective();">
+        <select id="launcher-agent-mode" style="background: rgba(7, 11, 22, 0.9); border: 1px solid var(--panel-border); color: var(--neon-cyan); padding: 12px 14px; border-radius: 6px; font-family: 'Orbitron', sans-serif; font-size: 11px; font-weight: 700; outline: none; cursor: pointer;">
+          <option value="research">🔬 DEEP RESEARCH AGENT</option>
+          <option value="jobs">🎯 0-SEC JOB RADAR</option>
+          <option value="market">📊 MARKET INTEL AGENT</option>
+        </select>
+        <input 
+          type="text" 
+          id="launcher-query-input" 
+          class="launcher-input" 
+          placeholder="e.g. What is LangChain architecture? or Find senior AI engineer jobs in Dubai" 
+          required 
+        />
+        <button type="submit" class="launcher-submit-btn">
+          <span>DEPLOY ➔</span>
+        </button>
+      </form>
+    </div>
+
+    <!-- Agent Fleet Showcase -->
+    <div class="fleet-section-title">
+      <span>AUTONOMOUS AGENT FLEET</span>
+    </div>
+
+    <div class="fleet-grid">
+      <!-- Agent 1: 0-Sec Job Radar -->
+      <div class="agent-card jobs-card">
+        <div>
+          <div class="card-top">
+            <div class="agent-icon-badge">🎯</div>
+            <span class="agent-badge-pill badge-green">⚡ 0-SEC LIVE RADAR</span>
+          </div>
+          <h2 class="agent-title">Job Radar AI Agent</h2>
+          <p class="agent-subtitle">
+            Autonomous career harvester extracting verified job postings directly from primary ATS engines (Greenhouse, Lever, Ashby, Workable).
+          </p>
+          <ul class="agent-features">
+            <li>Sub-second freshness detection (0s ago, just now, today)</li>
+            <li>Direct ATS apply link extraction bypassing job board aggregators</li>
+            <li>Verified compensation, location, and requirement scraping</li>
+            <li>Synchronized directly into SQLite Job Pipeline Tracker</li>
+          </ul>
+        </div>
+        <div style="display: flex; gap: 10px; margin-top: 10px;">
+          <a href="/cockpit.html?mode=jobs" class="deploy-agent-btn" style="flex: 2;">
+            <span>DEPLOY JOB HUNTER</span>
+            <span class="arrow">→</span>
+          </a>
+          <a href="/jobs.html" target="_blank" rel="noopener noreferrer" class="deploy-agent-btn" style="flex: 1; border-color: rgba(0, 255, 163, 0.4); background: rgba(0, 255, 163, 0.08);" title="Open Job Application Tracker">
+            <span>TRACKER ↗</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- Agent 2: Deep Technical Research Agent -->
+      <div class="agent-card research-card">
+        <div>
+          <div class="card-top">
+            <div class="agent-icon-badge">🔬</div>
+            <span class="agent-badge-pill badge-cyan">🔬 DEEP RESEARCH V2</span>
+          </div>
+          <h2 class="agent-title">Deep Research Agent</h2>
+          <p class="agent-subtitle">
+            Autonomous technical intelligence agent designed for documentation exploration, framework comparisons, and knowledge synthesis.
+          </p>
+          <ul class="agent-features">
+            <li>Multi-query autonomous search across primary documentation</li>
+            <li>Architectural teardowns, LCEL workflows, and code patterns</li>
+            <li>Synthesizes comprehensive, authoritative Markdown dossiers</li>
+            <li>Strict zero-hallucination citations linking to primary sources</li>
+          </ul>
+        </div>
+        <div style="margin-top: 10px;">
+          <a href="/cockpit.html?mode=research" class="deploy-agent-btn">
+            <span>DEPLOY RESEARCH AGENT</span>
+            <span class="arrow">→</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- Agent 3: Market & Competitive Intelligence -->
+      <div class="agent-card market-card">
+        <div>
+          <div class="card-top">
+            <div class="agent-icon-badge">📊</div>
+            <span class="agent-badge-pill badge-purple">📊 MARKET INTEL</span>
+          </div>
+          <h2 class="agent-title">Market Intel Agent</h2>
+          <p class="agent-subtitle">
+            Autonomous competitor landscape mapper and product intelligence agent analyzing SaaS pricing, feature matrices, and market positioning.
+          </p>
+          <ul class="agent-features">
+            <li>Automated competitor discovery and feature matrix generation</li>
+            <li>SaaS and API pricing tier comparisons (per-seat, usage, token)</li>
+            <li>Market differentiation, strengths, weaknesses & target audience</li>
+            <li>Downloadable structured exports in JSON, CSV, or Excel</li>
+          </ul>
+        </div>
+        <div style="margin-top: 10px;">
+          <a href="/cockpit.html?mode=market" class="deploy-agent-btn">
+            <span>DEPLOY MARKET AGENT</span>
+            <span class="arrow">→</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- Agent 4: Job Tracker & Kanban Dashboard -->
+      <div class="agent-card tracker-card">
+        <div>
+          <div class="card-top">
+            <div class="agent-icon-badge">⚡</div>
+            <span class="agent-badge-pill badge-amber">📋 PERSISTENT TRACKER</span>
+          </div>
+          <h2 class="agent-title">Job Tracker Dashboard</h2>
+          <p class="agent-subtitle">
+            Persistent applicant tracking database with multi-dimensional filtering, interview stage kanban, and bulk record deletion.
+          </p>
+          <ul class="agent-features">
+            <li>Multi-select filters: Employers, Locations, Scrape Age & Stages</li>
+            <li>Application status tracker: Applied, Interview Call, Offer, Notes</li>
+            <li>Inspect full Job Descriptions and exact timestamp evidence</li>
+            <li>Single and bulk deletion with instant SQLite sync</li>
+          </ul>
+        </div>
+        <div style="margin-top: 10px;">
+          <a href="/jobs.html" target="_blank" rel="noopener noreferrer" class="deploy-agent-btn">
+            <span>OPEN JOB TRACKER</span>
+            <span class="arrow">↗</span>
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="hub-footer">
+      <div>
+        <span>DATAHUNT AI CORE v0.1.0 // AUTONOMOUS MULTI-AGENT PLATFORM</span>
+      </div>
+      <div style="display: flex; gap: 20px;">
+        <a href="/cockpit.html">3D Workstation Cockpit</a>
+        <a href="/jobs.html" target="_blank">Job Tracker Dashboard</a>
+        <a href="/docs" target="_blank">Swagger OpenAPI</a>
+      </div>
+    </footer>
+  </div>
+
+  <script>
+    function launchDirective() {
+      const mode = document.getElementById("launcher-agent-mode").value;
+      const query = document.getElementById("launcher-query-input").value.trim();
+      if (!query) return;
+      window.location.href = `/cockpit.html?mode=${encodeURIComponent(mode)}&q=${encodeURIComponent(query)}`;
+    }
+  </script>
+</body>
+</html>
