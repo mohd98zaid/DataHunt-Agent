@@ -586,6 +586,7 @@ class SearchProvider(Protocol):
         self,
         query: str,
         limit: int = 10,
+        page: int = 1,
         freshness_days: Optional[int] = None,
         allowed_domains: Optional[List[str]] = None,
         blocked_domains: Optional[List[str]] = None
@@ -604,6 +605,7 @@ class DuckDuckGoSearchProvider:
         self,
         query: str,
         limit: int = 10,
+        page: int = 1,
         freshness_days: Optional[int] = None,
         allowed_domains: Optional[List[str]] = None,
         blocked_domains: Optional[List[str]] = None
@@ -628,6 +630,8 @@ class DuckDuckGoSearchProvider:
             try:
                 with httpx.Client(timeout=3.0, headers=headers, follow_redirects=True) as client:
                     post_data: Dict[str, str] = {"q": query}
+                    if page > 1:
+                        post_data["s"] = str((page - 1) * 30)
                     if timelimit:
                         post_data["df"] = timelimit
                     resp = client.post(self.LITE_URL, data=post_data)
@@ -720,6 +724,8 @@ class DuckDuckGoSearchProvider:
         try:
             with httpx.Client(timeout=3.0, headers=headers, follow_redirects=True) as client:
                 post_data = {"q": query}
+                if page > 1:
+                    post_data["s"] = str((page - 1) * 30)
                 if timelimit:
                     post_data["df"] = timelimit
                 resp = client.post(self.SEARCH_URL, data=post_data)
@@ -770,6 +776,7 @@ class DuckDuckGoSearchProvider:
             return self.search(
                 query=query,
                 limit=limit,
+                page=page,
                 freshness_days=None,
                 allowed_domains=allowed_domains,
                 blocked_domains=blocked_domains
@@ -786,35 +793,53 @@ class MockSearchProvider:
         self,
         query: str,
         limit: int = 10,
+        page: int = 1,
         freshness_days: Optional[int] = None,
         allowed_domains: Optional[List[str]] = None,
         blocked_domains: Optional[List[str]] = None
     ) -> List[SearchHit]:
         if self.predefined_hits:
-            hits = self.predefined_hits
+            start_idx = (page - 1) * limit
+            hits = self.predefined_hits[start_idx:start_idx + limit]
         else:
             q_low = query.lower()
             if any(k in q_low for k in ("job", "jobs", "hiring", "careers", "intern", "vacancy", "openings", "engineer", "developer")):
-                hits = [
-                    SearchHit(
-                        url="https://example.com/careers/ai-engineer-dubai",
-                        title="Senior AI Engineer - Dubai, UAE",
-                        snippet="Join our fast-growing AI team in Dubai. Requirements: Python, LLMs, Machine Learning. Posted 0 sec ago.",
-                        source_domain="example.com"
-                    ),
-                    SearchHit(
-                        url="https://example.com/careers/ml-ops-dubai",
-                        title="Machine Learning Engineer - Dubai",
-                        snippet="Example AI Ltd is hiring an ML engineer in Dubai. Apply online through our official portal.",
-                        source_domain="example.com"
-                    ),
-                    SearchHit(
-                        url="https://techjobs.ae/post/ai-researcher-101",
-                        title="AI Researcher - Dubai Tech Hub",
-                        snippet="Looking for an AI researcher with PhD or 3+ years experience. Competitive compensation in Dubai.",
-                        source_domain="techjobs.ae"
-                    )
-                ]
+                if page == 1:
+                    hits = [
+                        SearchHit(
+                            url="https://example.com/careers/ai-engineer-dubai",
+                            title="Senior AI Engineer - Dubai, UAE",
+                            snippet="Join our fast-growing AI team in Dubai. Requirements: Python, LLMs, Machine Learning. Posted 0 sec ago.",
+                            source_domain="example.com"
+                        ),
+                        SearchHit(
+                            url="https://example.com/careers/ml-ops-dubai",
+                            title="Machine Learning Engineer - Dubai",
+                            snippet="Example AI Ltd is hiring an ML engineer in Dubai. Apply online through our official portal.",
+                            source_domain="example.com"
+                        ),
+                        SearchHit(
+                            url="https://techjobs.ae/post/ai-researcher-101",
+                            title="AI Researcher - Dubai Tech Hub",
+                            snippet="Looking for an AI researcher with PhD or 3+ years experience. Competitive compensation in Dubai.",
+                            source_domain="techjobs.ae"
+                        )
+                    ]
+                else:
+                    hits = [
+                        SearchHit(
+                            url=f"https://example.com/careers/lead-ai-engineer-page{page}",
+                            title=f"Lead AI Engineer - Dubai (Page {page})",
+                            snippet="Advanced LLM and Generative AI role in Dubai. Fast growing team.",
+                            source_domain="example.com"
+                        ),
+                        SearchHit(
+                            url=f"https://techjobs.ae/post/ai-specialist-{page}",
+                            title=f"AI Systems Architect - Riyadh (Page {page})",
+                            snippet="Riyadh office seeking AI systems architect with 2+ years experience.",
+                            source_domain="techjobs.ae"
+                        ),
+                    ]
             else:
                 hits = [
                     SearchHit(
@@ -857,6 +882,7 @@ class LiveJobBoardSearchProvider:
         self,
         query: str,
         limit: int = 10,
+        page: int = 1,
         freshness_days: Optional[int] = None,
         allowed_domains: Optional[List[str]] = None,
         blocked_domains: Optional[List[str]] = None
@@ -963,6 +989,7 @@ class LLMSearchProvider:
         self,
         query: str,
         limit: int = 10,
+        page: int = 1,
         freshness_days: Optional[int] = None,
         allowed_domains: Optional[List[str]] = None,
         blocked_domains: Optional[List[str]] = None
@@ -1034,6 +1061,7 @@ class HybridSearchProvider:
         self,
         query: str,
         limit: int = 10,
+        page: int = 1,
         freshness_days: Optional[int] = None,
         allowed_domains: Optional[List[str]] = None,
         blocked_domains: Optional[List[str]] = None
@@ -1042,6 +1070,7 @@ class HybridSearchProvider:
         hits = self.ddg.search(
             query,
             limit=limit,
+            page=page,
             freshness_days=freshness_days,
             allowed_domains=allowed_domains,
             blocked_domains=blocked_domains
@@ -1065,6 +1094,7 @@ class HybridSearchProvider:
                 hits = self.llm_search.search(
                     query,
                     limit=limit,
+                    page=page,
                     freshness_days=freshness_days,
                     allowed_domains=allowed_domains,
                     blocked_domains=blocked_domains
@@ -1080,6 +1110,7 @@ class HybridSearchProvider:
             hits = self.job_board.search(
                 query,
                 limit=limit,
+                page=page,
                 freshness_days=freshness_days,
                 allowed_domains=allowed_domains,
                 blocked_domains=blocked_domains
@@ -1094,6 +1125,7 @@ class HybridSearchProvider:
                 hits = self.llm_search.search(
                     query,
                     limit=limit,
+                    page=page,
                     freshness_days=freshness_days,
                     allowed_domains=allowed_domains,
                     blocked_domains=blocked_domains
@@ -1109,6 +1141,7 @@ class HybridSearchProvider:
         return self.mock.search(
             query,
             limit=limit,
+            page=page,
             freshness_days=freshness_days,
             allowed_domains=allowed_domains,
             blocked_domains=blocked_domains
@@ -1126,6 +1159,7 @@ class SearchTool:
         self,
         query: str,
         limit: int = 10,
+        page: int = 1,
         freshness_days: Optional[int] = None,
         allowed_domains: Optional[List[str]] = None,
         blocked_domains: Optional[List[str]] = None
@@ -1133,7 +1167,7 @@ class SearchTool:
         now = time.time()
         allowed_str = ",".join(sorted(allowed_domains or []))
         blocked_str = ",".join(sorted(blocked_domains or []))
-        cache_key = f"{query}:{limit}:{freshness_days}:{allowed_str}:{blocked_str}"
+        cache_key = f"{query}:{limit}:{page}:{freshness_days}:{allowed_str}:{blocked_str}"
         if cache_key in self._query_cache:
             entry = self._query_cache[cache_key]
             if isinstance(entry, tuple) and len(entry) == 2:
@@ -1150,6 +1184,7 @@ class SearchTool:
             hits = self.provider.search(
                 query=query,
                 limit=limit,
+                page=page,
                 freshness_days=freshness_days,
                 allowed_domains=allowed_domains,
                 blocked_domains=blocked_domains
@@ -1198,9 +1233,11 @@ class ParallelSearchEngine:
         def _do_search(q_item: Dict[str, Any]):
             q_text = q_item.get("query") if isinstance(q_item, dict) else str(q_item)
             freshness = q_item.get("freshness_days") if isinstance(q_item, dict) else None
+            page = q_item.get("page", 1) if isinstance(q_item, dict) else 1
             res = self.search_tool.execute(
                 query=q_text,
                 limit=limit_per_query,
+                page=page,
                 freshness_days=freshness,
                 allowed_domains=allowed_domains,
                 blocked_domains=blocked_domains
@@ -1221,4 +1258,34 @@ class ParallelSearchEngine:
                     logger.warning(f"Parallel search worker error: {ex}")
 
         return all_hits
+
+
+class SearchProviderRegistry:
+    """
+    Registry for pluggable search providers (DuckDuckGo, LiveJobBoard, LLM, Mock, Hybrid).
+    Enables dynamic provider selection, fallback chains, and pagination.
+    """
+    def __init__(self):
+        self._providers: Dict[str, SearchProvider] = {}
+        ddg = DuckDuckGoSearchProvider()
+        jb = LiveJobBoardSearchProvider()
+        mock = MockSearchProvider()
+        hybrid = HybridSearchProvider()
+        self.register("duckduckgo", ddg)
+        self.register("ddg", ddg)
+        self.register("job_boards", jb)
+        self.register("mock", mock)
+        self.register("hybrid", hybrid)
+
+    def register(self, name: str, provider: SearchProvider):
+        self._providers[name.lower()] = provider
+
+    def get(self, name: str) -> Optional[SearchProvider]:
+        return self._providers.get(name.lower())
+
+    def get_default(self) -> SearchProvider:
+        return self._providers.get("hybrid") or self._providers.get("duckduckgo") or MockSearchProvider()
+
+    def list_providers(self) -> List[str]:
+        return list(self._providers.keys())
 

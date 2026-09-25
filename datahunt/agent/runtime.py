@@ -49,6 +49,8 @@ class AgentRuntime:
         self.goal_evaluator = GoalEvaluator()
         from datahunt.sources.registry import JobSourceRegistry
         self.source_registry = JobSourceRegistry()
+        from .discovery_engine import DiscoveryEngine
+        self.discovery_engine = DiscoveryEngine()
 
     def run(self, state: AgentState, emit: Callable[[str, Dict], None]) -> Dict[str, Any]:
         """
@@ -80,19 +82,75 @@ class AgentRuntime:
                 except Exception as e:
                     logger.warning(f"Could not build canonical job request: {e}")
 
-        if state.search_plan:
-            # Caller pre-injected a plan (e.g. orchestrator after LLM planning)
-            emit("status", {"message": f"Using search plan: {len(state.search_plan)} queries", "phase": "PLANNED"})
+            from .discovery_models import (
+                SearchTaskType,
+                StopReason,
+                DiscoveredSourceType,
+                SearchTask,
+                DiscoveryBudget,
+                DiscoveryRoundTelemetry,
+                SourceCoverageMatrix,
+                DiscoveryState,
+            )
+            state.discovery_budget = state.discovery_budget or DiscoveryBudget(
+                max_search_requests=state.max_search_calls,
+                max_fetches=state.max_fetch_calls,
+            )
+            if state.discovery_state is None:
+                target_geos = state.locations or ([state.explicit_location] if state.explicit_location else ["general"])
+                state.discovery_state = DiscoveryState(
+                    coverage_matrix=SourceCoverageMatrix(target_regions=target_geos)
+                )
+
+            initial_tasks = self.discovery_engine.generate_initial_tasks(state.canonical_job_request, state)
+
+            if state.search_plan:
+                injected_tasks = []
+                for idx, q_item in enumerate(state.search_plan):
+                    q_str = q_item.get("query") if isinstance(q_item, dict) else str(q_item)
+                    injected_tasks.append(SearchTask(
+                        id=f"injected_{idx}",
+                        task_type=SearchTaskType.GENERAL_SEARCH,
+                        query=q_str,
+                        source=q_item.get("source_id", "injected_plan") if isinstance(q_item, dict) else "injected_plan",
+                        source_type=DiscoveredSourceType.MAJOR_BOARD,
+                        priority=q_item.get("tier", 2) if isinstance(q_item, dict) else 2,
+                        depth=0,
+                        round=1,
+                        reason="Pre-planned search query",
+                        location=state.explicit_location,
+                    ))
+                seen_q = set()
+                combined_tasks = []
+                for t in initial_tasks + injected_tasks:
+                    if t.query not in seen_q:
+                        seen_q.add(t.query)
+                        combined_tasks.append(t)
+                state.discovery_state.task_queue.extend(combined_tasks)
+            else:
+                state.discovery_state.task_queue.extend(initial_tasks)
+
+            state.search_plan = [
+                {"query": t.query, "tier": t.priority, "purpose": t.reason, "source_id": t.source, "page": t.page}
+                for t in state.discovery_state.task_queue
+            ]
             if state.explicit_location is None:
                 state.explicit_location = self._extract_location(state.request)
             if state.explicit_experience_min is None and state.explicit_experience_max is None:
                 state.explicit_experience_min, state.explicit_experience_max = self._extract_experience(state.request)
         else:
-            try:
-                self._build_search_plan(state, emit)
-            except Exception as e:
-                logger.warning(f"Planning failed: {e}; using basic query plan")
-                state.search_plan = [{"query": state.request, "tier": 1, "purpose": "primary"}]
+            if state.search_plan:
+                emit("status", {"message": f"Using search plan: {len(state.search_plan)} queries", "phase": "PLANNED"})
+                if state.explicit_location is None:
+                    state.explicit_location = self._extract_location(state.request)
+                if state.explicit_experience_min is None and state.explicit_experience_max is None:
+                    state.explicit_experience_min, state.explicit_experience_max = self._extract_experience(state.request)
+            else:
+                try:
+                    self._build_search_plan(state, emit)
+                except Exception as e:
+                    logger.warning(f"Planning failed: {e}; using basic query plan")
+                    state.search_plan = [{"query": state.request, "tier": 1, "purpose": "primary"}]
 
         emit("status", {"message": f"Formulated {len(state.search_plan)} search queries", "phase": "PLANNED"})
         state.record_action("planned")
@@ -241,8 +299,137 @@ class AgentRuntime:
         return True
 
     def _act_search(self, state: AgentState, emit):
-        """Execute the next batch of searches with canonical URL deduplication."""
+        """Execute the next batch of searches with canonical URL deduplication and dynamic discovery."""
         state.status = AgentStatus.SEARCHING
+
+        # Branch 1: Dynamic Discovery Queue
+        if state.discovery_state and state.discovery_state.task_queue:
+            from .discovery_models import DiscoveryRoundTelemetry
+            batch_tasks = []
+            while state.discovery_state.task_queue and len(batch_tasks) < 4:
+                batch_tasks.append(state.discovery_state.task_queue.pop(0))
+
+            for task in batch_tasks:
+                if state.search_calls >= state.max_search_calls:
+                    break
+                if state.deadline > 0 and time.time() >= state.deadline:
+                    break
+
+                t_start = time.time()
+                query = task.query
+                page = getattr(task, "page", 1)
+                emit("status", {"message": f"Searching [R{task.round}]: {query[:60]} (page {page})", "phase": "SEARCHING"})
+
+                try:
+                    res = self.search.execute(query=query, limit=15, page=page)
+                    state.search_calls += 1
+                    new_candidates = 0
+                    initial_companies = len(state.discovery_state.discovered_companies)
+                    initial_ats = len(state.discovery_state.discovered_ats)
+
+                    if res.success and res.data:
+                        from datahunt.sources.models import SourceStatus
+                        for hit in res.data:
+                            url = hit.get("url")
+                            if not url:
+                                continue
+                            canon = canonicalize_url(url)
+                            if not canon or canon in state.seen_canonical_urls:
+                                continue
+                            if state.mode in ("jobs", "job") and not is_valid_job_url(url):
+                                continue
+
+                            detected_source = self.source_registry.identify_source_for_url(url)
+                            hit_source_id = detected_source.id if detected_source else task.source
+                            hit_source_name = detected_source.name if detected_source else "Public Web"
+                            hit["source_id"] = hit_source_id
+                            hit["source"] = hit_source_name
+
+                            state.seen_canonical_urls.add(canon)
+                            state.seen_urls.add(url)
+                            state.candidate_urls.append(hit)
+                            new_candidates += 1
+
+                            if hit_source_id in state.source_run_results:
+                                s_rec = state.source_run_results[hit_source_id]
+                                s_rec.records_found += 1
+                                s_rec.status = SourceStatus.SUCCESS
+
+                        # Dynamic discovery: analyze hits to discover new companies, ATS platforms, and boards
+                        new_followup_tasks = self.discovery_engine.process_search_hits(
+                            res.data, task, state, state.discovery_state
+                        )
+                        if new_followup_tasks:
+                            state.discovery_state.task_queue.extend(new_followup_tasks)
+                            logger.info(f"Discovered {len(new_followup_tasks)} follow-up search tasks from search hits")
+
+                    task.metadata["results_count"] = len(res.data) if res.success else 0
+                    task.metadata["new_candidates"] = new_candidates
+                    state.discovery_state.completed_tasks.append(task)
+                    state.discovery_state.executed_queries.add(query)
+
+                    cur_round = task.round
+                    state.discovery_state.round_novel_candidates[cur_round] = (
+                        state.discovery_state.round_novel_candidates.get(cur_round, 0) + new_candidates
+                    )
+
+                    duration_ms = (time.time() - t_start) * 1000
+                    new_sources_discovered = (
+                        (len(state.discovery_state.discovered_companies) - initial_companies)
+                        + (len(state.discovery_state.discovered_ats) - initial_ats)
+                    )
+
+                    # LangSmith and telemetry logging
+                    telemetry = DiscoveryRoundTelemetry(
+                        run_id=state.run_id,
+                        round=task.round,
+                        task_type=task.task_type.value,
+                        source=task.source,
+                        query=query,
+                        depth=task.depth,
+                        results_count=len(res.data) if res.success else 0,
+                        new_jobs_count=new_candidates,
+                        new_qualified_count=len(state.qualified_records),
+                        new_sources_count=new_sources_discovered,
+                        duration_ms=round(duration_ms, 2),
+                    )
+                    state.discovery_state.telemetry_logs.append(telemetry)
+                    emit("telemetry", telemetry.__dict__)
+
+                    self.decision_engine.record_search_iteration(
+                        state, query, len(res.data) if res.success else 0, new_candidates
+                    )
+                    state.add_observation(
+                        f"Search [R{task.round}] '{query[:35]}': {new_candidates} new candidates, {new_sources_discovered} new sources discovered"
+                    )
+
+                except Exception as e:
+                    logger.warning(f"Discovery search error for '{query}': {e}")
+                    state.add_warning(f"Search failed: {query[:40]}")
+
+            # If task queue is empty for current round, advance to next discovery round if budget permits
+            if not state.discovery_state.task_queue and state.discovery_state.current_round < state.discovery_budget.max_expansion_rounds:
+                cur_round = state.discovery_state.current_round
+                novel = state.discovery_state.round_novel_candidates.get(cur_round, 0)
+                if novel == 0:
+                    state.discovery_state.consecutive_low_yield_rounds += 1
+                else:
+                    state.discovery_state.consecutive_low_yield_rounds = 0
+
+                state.discovery_state.current_round += 1
+                next_tasks = self.discovery_engine.generate_next_round_tasks(
+                    state.discovery_state, state.canonical_job_request, state
+                )
+                if next_tasks:
+                    state.discovery_state.task_queue.extend(next_tasks)
+                    logger.info(f"Advanced to Discovery Round {state.discovery_state.current_round} with {len(next_tasks)} new tasks")
+                    emit("status", {
+                        "message": f"Advancing to Discovery Round {state.discovery_state.current_round} ({len(next_tasks)} tasks)",
+                        "phase": "SEARCHING"
+                    })
+            return
+
+        # Branch 2: Standard Search Plan
         batch_size = min(4, len(state.search_plan) - state.search_plan_index)
         if batch_size <= 0:
             return
@@ -624,6 +811,10 @@ class AgentRuntime:
             "coverage_report": coverage_report_dict,
             "coverage_summary": coverage_summary,
             "job_matches_markdown": job_matches_markdown,
+            "discovery_state": state.discovery_state,
+            "discovered_companies_count": len(state.discovery_state.discovered_companies) if state.discovery_state else 0,
+            "discovered_ats_count": len(state.discovery_state.discovered_ats) if state.discovery_state else 0,
+            "telemetry_logs": [t.__dict__ for t in state.discovery_state.telemetry_logs] if state.discovery_state else [],
         }
 
     def _extract_location(self, request: str) -> Optional[str]:

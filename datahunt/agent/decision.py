@@ -38,17 +38,26 @@ class DecisionEngine:
 
         # In jobs mode, target refers to QUALIFIED results. In general mode, verified records.
         effective_count = len(state.qualified_records) if (state.mode in ("jobs", "job") and state.qualified_records) else len(state.verified_records)
-        if effective_count >= state.target_results:
-            return AgentAction.STOP, f"Target results reached ({effective_count}/{state.target_results})"
+
+        # If discovery engine is active, evaluate dynamic coverage and balanced universe stopping
+        if state.discovery_state:
+            from datahunt.agent.discovery_engine import DiscoveryEngine
+            engine = DiscoveryEngine(state.discovery_budget)
+            stop_flag, stop_reason, stop_msg = engine.should_stop(state.discovery_state, state)
+            if stop_flag:
+                return AgentAction.STOP, stop_msg
+        else:
+            if effective_count >= state.target_results:
+                return AgentAction.STOP, f"Target results reached ({effective_count}/{state.target_results})"
+
+            if state.consecutive_low_yield_iterations >= CONSECUTIVE_LOW_YIELD_LIMIT:
+                if effective_count > 0:
+                    return AgentAction.STOP, f"Diminishing returns: {CONSECUTIVE_LOW_YIELD_LIMIT} consecutive low-yield iterations"
+                elif state.search_plan_index < len(state.search_plan):
+                    return AgentAction.EXPAND_SEARCH, "Low yield from current strategy, trying next tier"
 
         if state.search_calls >= state.max_search_calls and not state.candidate_urls:
             return AgentAction.STOP, "Search budget exhausted with no candidates"
-
-        if state.consecutive_low_yield_iterations >= CONSECUTIVE_LOW_YIELD_LIMIT:
-            if effective_count > 0:
-                return AgentAction.STOP, f"Diminishing returns: {CONSECUTIVE_LOW_YIELD_LIMIT} consecutive low-yield iterations"
-            elif state.search_plan_index < len(state.search_plan):
-                return AgentAction.EXPAND_SEARCH, "Low yield from current strategy, trying next tier"
 
         if state.candidate_urls:
             return AgentAction.FETCH, f"{len(state.candidate_urls)} candidates to fetch"
@@ -60,8 +69,13 @@ class DecisionEngine:
                 if unverified:
                     return AgentAction.VERIFY, f"{len(unverified)} records need verification"
 
-        if state.search_plan_index < len(state.search_plan) and state.search_calls < state.max_search_calls:
-            return AgentAction.SEARCH, f"Searching tier {state.search_plan_index + 1}/{len(state.search_plan)}"
+        # Check search availability across search plan or dynamic discovery queue
+        has_search_tasks = (state.search_plan_index < len(state.search_plan)) or (
+            state.discovery_state is not None and bool(state.discovery_state.task_queue)
+        )
+        if has_search_tasks and state.search_calls < state.max_search_calls:
+            msg = f"Searching discovery queue ({len(state.discovery_state.task_queue)} tasks)" if (state.discovery_state and state.discovery_state.task_queue) else f"Searching tier {state.search_plan_index + 1}/{len(state.search_plan)}"
+            return AgentAction.SEARCH, msg
 
         if effective_count > 0:
             return AgentAction.STOP, f"No more search capacity, returning {effective_count} results found"

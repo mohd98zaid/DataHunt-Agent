@@ -290,6 +290,14 @@ class ResearchOrchestrator:
                         "inferred_skills": job_req.inferred_skills or [],
                     }
 
+                from datahunt.agent.discovery_models import DiscoveryBudget
+                discovery_budget = DiscoveryBudget(
+                    max_runtime_seconds=settings.MAX_RUN_SECONDS,
+                    max_search_requests=run.budget.max_search_queries,
+                    max_fetches=run.budget.max_pages,
+                    max_expansion_rounds=6,
+                )
+
                 agent_state = AgentState(
                     request=task.request_text,
                     run_id=run.id,
@@ -300,6 +308,7 @@ class ResearchOrchestrator:
                     max_fetch_calls=run.budget.max_pages,
                     deadline=deadline,
                     max_iterations=20,
+                    discovery_budget=discovery_budget,
                     **canonical_kwargs,
                 )
                 # Inject the pre-computed search plan so we don't re-plan

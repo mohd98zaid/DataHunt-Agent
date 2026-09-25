@@ -106,6 +106,8 @@ class AgentState:
     status: AgentStatus = AgentStatus.INITIALIZING
     completion_reason: Optional[str] = None
     actions_taken: List[str] = field(default_factory=list)
+    discovery_state: Optional[Any] = None
+    discovery_budget: Optional[Any] = None
 
     def add_observation(self, obs: str):
         self.observations.append(obs)
