@@ -186,6 +186,15 @@ def is_public_business_email(email: str) -> bool:
         return False
     return False
 
+def is_safe_contact(val: str, contact_type: str = "email", policy_name: str = "business_public_only") -> bool:
+    """Validate whether contact data complies with privacy and contact policy."""
+    if not val:
+        return False
+    if contact_type == "email":
+        return is_public_business_email(val)
+    return True
+
+
 def escape_csv_formula(val: Any) -> str:
     """
     Neutralize CSV / Excel formula injection risk by prepending a single quote
