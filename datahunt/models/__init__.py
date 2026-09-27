@@ -11,6 +11,15 @@ from datahunt.models.market import (
 
 from datahunt.models.evidence import Evidence
 from datahunt.models.job_record import JobRecord
+from datahunt.models.shared_intel import (
+    SourceCategory, SourcePlan, EntityType, EntityIdentity, Fact,
+    EvidenceRelationship, EvidenceConfidence, SharedEvidence,
+    FreshnessRating, FreshnessAssessment, ContradictionStatus,
+    ContradictionItem, CoverageGap, SharedCoverageState, RiskSeverity,
+    RiskStatus, RiskItem, PersonRole, PersonProfile, ContactType,
+    ContactInfo, CompanyIntelligenceProfile, NewsEvent, OpportunityMatch,
+    MonitoringChangeType, MonitoringEvent
+)
 
 __all__ = [
     "TaskStatus", "ResearchSpec", "ResearchTask", "DateFilter", "Geography", "SourcePolicy",
@@ -22,6 +31,14 @@ __all__ = [
     "MarketAssetType", "MarketTimeHorizon", "MarketRegime", "ClaimType", "SourceTier",
     "FreshnessCategory", "MarketIntentSpec", "MarketEvidence", "MarketRecord",
     "CandidateStage", "MarketCandidate", "MarketCoverage",
+    "SourceCategory", "SourcePlan", "EntityType", "EntityIdentity", "Fact",
+    "EvidenceRelationship", "EvidenceConfidence", "SharedEvidence",
+    "FreshnessRating", "FreshnessAssessment", "ContradictionStatus",
+    "ContradictionItem", "CoverageGap", "SharedCoverageState", "RiskSeverity",
+    "RiskStatus", "RiskItem", "PersonRole", "PersonProfile", "ContactType",
+    "ContactInfo", "CompanyIntelligenceProfile", "NewsEvent", "OpportunityMatch",
+    "MonitoringChangeType", "MonitoringEvent",
 ]
+
 
 
