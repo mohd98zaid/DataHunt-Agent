@@ -360,12 +360,25 @@ def qualify_job(
     if missing_s:
         warnings.append(f"Explicit skills missing: {', '.join(missing_s)}")
 
+    # 4b. Inferred skills match (ranking adjustment only, never a hard gate)
+    inferred_skills = getattr(job_req, "inferred_skills", []) or []
+    inf_matched = []
+    if inferred_skills:
+        _, inf_matched, _ = match_skills(inferred_skills, job_blob)
+        if inf_matched:
+            reasons.append(f"Inferred domain skills matched: {', '.join(inf_matched)}")
+
     # Qualification criteria: hard gates must not be confirmed MISMATCH
+    # Explicit skills gate: if user specified explicit_skills, complete failure to match any disqualifies
+    explicit_skill_mismatch = bool(req_skills) and (s_status == MatchStatus.MISMATCH)
     is_qualified = (
         t_status != MatchStatus.MISMATCH
         and l_status != MatchStatus.MISMATCH
         and e_status != MatchStatus.MISMATCH
+        and not explicit_skill_mismatch
     )
+    if explicit_skill_mismatch:
+        reasons.append(f"Disqualified: Missing required explicit skills ({', '.join(missing_s)})")
 
     # Transparent scoring breakdown (title 40%, location 30%, experience 15%, skills 15%)
     t_val = 1.0 if t_status == MatchStatus.MATCH else (0.4 if t_status == MatchStatus.UNKNOWN else 0.0)
@@ -373,12 +386,19 @@ def qualify_job(
     e_val = 1.0 if e_status == MatchStatus.MATCH else (0.5 if e_status == MatchStatus.UNKNOWN else 0.0)
     s_val = 1.0 if s_status == MatchStatus.MATCH else (0.5 if s_status == MatchStatus.UNKNOWN else 0.2)
 
-    total_score = round(0.40 * t_val + 0.30 * l_val + 0.15 * e_val + 0.15 * s_val, 2)
+    # Inferred skill modifier (ranking only: up to +0.05 bonus or -0.05 penalty)
+    inf_modifier = 0.0
+    if inferred_skills:
+        inf_ratio = len(inf_matched) / len(inferred_skills)
+        inf_modifier = round((inf_ratio - 0.5) * 0.10, 2)
+
+    total_score = round(min(max(0.40 * t_val + 0.30 * l_val + 0.15 * e_val + 0.15 * s_val + inf_modifier, 0.05), 1.0), 2)
     score_breakdown = {
         "title": {"status": t_status.value, "score": t_val},
         "location": {"status": l_status.value, "score": l_val},
         "experience": {"status": e_status.value, "score": e_val},
         "skills": {"status": s_status.value, "score": s_val},
+        "inferred_skills": {"matched": inf_matched, "modifier": inf_modifier},
     }
 
     return QualificationResult(

@@ -418,7 +418,10 @@ def test_golden_market_discovery_engine_end_to_end():
     assert result["intent"]["requested_count"] == 10
 
     # 2. Coverage tracked
-    assert result["coverage"]["stop_reason"] in ("COVERAGE_COMPLETE", "DIMINISHING_RETURN")
+    assert result["coverage"]["stop_reason"] in (
+        "REQUEST_SATISFIED", "SUFFICIENT_EVIDENCE", "DIMINISHING_CANDIDATE_YIELD",
+        "DIMINISHING_EVIDENCE_YIELD", "COVERAGE_COMPLETE", "DIMINISHING_RETURN"
+    )
     assert len(result["coverage"]["sectors_checked"]) > 0
 
     # 3. Records returned

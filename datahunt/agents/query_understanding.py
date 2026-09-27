@@ -125,7 +125,11 @@ Return ONLY a valid JSON object with these fields:
   "job_title": "primary job title (string, required)",
   "alternative_titles": ["list of alternative job titles"],
   "skills": ["list of technical/soft skills mentioned or implied"],
+  "explicit_skills": ["list of skills explicitly mentioned or required by user in the query"],
+  "inferred_skills": ["list of skills commonly associated with the role/domain but not explicitly named by user"],
   "location": "city, country, or region (null if not mentioned)",
+  "locations": ["list of specific locations if multiple mentioned or OR'ed"],
+  "location_operator": "OR | AND",
   "cities": ["list of specific cities if multiple mentioned"],
   "remote_status": "remote | hybrid | onsite | any",
   "experience_min": null or integer (minimum years),
@@ -144,13 +148,16 @@ Return ONLY a valid JSON object with these fields:
 
 Rules:
 - job_title is REQUIRED. If absent, set clarification_needed=true and ask for it.
+- explicit_skills vs inferred_skills:
+  * explicit_skills: ONLY include skills the user explicitly mentioned or demanded (e.g. "requiring Python and LangChain" -> ["Python", "LangChain"]).
+  * inferred_skills: Skills commonly needed for the role but NOT typed by the user (e.g. "GenAI Engineer" implies LLM, RAG, Transformers). Never place inferred skills in explicit_skills.
+- locations & location_operator: If user specifies "Saudi Arabia or UAE", locations=["Saudi Arabia", "UAE"] and location_operator="OR".
 - If location is missing for a non-remote role, add "location" to missing_fields but do NOT block — set clarification_needed=false and proceed.
 - Currency MUST be local: Set salary_currency to the regional local currency code of the target location (e.g. SAR for Saudi Arabia, AED for UAE/Dubai, INR for India, GBP for UK, EUR for Europe, CAD for Canada, SGD for Singapore, QAR for Qatar) unless the user explicitly requested a specific foreign currency (like USD).
 - For Indian salary context: "15 LPA" = 1500000 INR annual, "15 lakhs" = 1500000.
 - For "2-5 years experience": experience_min=2, experience_max=5.
 - For "3+ years": experience_min=3, experience_max=null.
 - Be liberal with alternative_titles: if role is "AI Engineer", include "ML Engineer", "Machine Learning Engineer", "Applied Scientist", etc.
-- Extract skills even if only implied by the job title (e.g., "Python Engineer" implies Python).
 - Only ask one clarification question. Prefer to proceed with reasonable defaults.
 """
 
@@ -252,20 +259,64 @@ def _deterministic_parse(query: str) -> Dict[str, Any]:
     elif "part time" in q_lower or "part-time" in q_lower:
         emp_type = "part_time"
 
-    # Job title — first meaningful noun phrase
-    # Strip filler words and take first 3-4 words
+    # Skills extraction: separate explicit from inferred
+    KNOWN_TECH_SKILLS = [
+        "Python", "LangChain", "LlamaIndex", "LangGraph", "PyTorch", "TensorFlow", "FastAPI",
+        "Docker", "Kubernetes", "React", "Node.js", "TypeScript", "JavaScript", "Go", "Golang",
+        "Rust", "Java", "C++", "C#", "SQL", "PostgreSQL", "AWS", "GCP", "Azure", "Transformers",
+        "Hugging Face", "LLMs", "RAG", "Prompt Engineering"
+    ]
+    explicit_skills: List[str] = []
+    
+    # 1. Clause matching: requiring Python and LangChain, with Python, skills: Python
+    skill_clause_match = re.search(
+        r'\b(?:requiring|requires|with\s+skills?|must\s+have|skills?:\s*|tech\s+stack:?)\s+([^.,]+?)(?=\s+(?:in|at|for|paying|salary|\d+\s*[-–to]+|\d+\+?\s*years?)\b|\s*$)',
+        query,
+        re.IGNORECASE
+    )
+    if skill_clause_match:
+        clause_text = skill_clause_match.group(1)
+        # Split on 'and', ',', '&'
+        parts = re.split(r'\s+and\s+|,\s*|\s*&\s*', clause_text, flags=re.IGNORECASE)
+        for p in parts:
+            clean_p = p.strip()
+            if clean_p and len(clean_p) > 1 and clean_p.lower() not in ("experience", "skills", "knowledge", "proficiency"):
+                # Match to known skill capitalization if possible
+                matched_known = next((k for k in KNOWN_TECH_SKILLS if k.lower() == clean_p.lower()), clean_p.title())
+                if matched_known not in explicit_skills:
+                    explicit_skills.append(matched_known)
+
+    # 2. Check standalone known tech skills in query
+    for skill_name in KNOWN_TECH_SKILLS:
+        if re.search(r'\b' + re.escape(skill_name.lower()) + r'\b', q_lower):
+            if skill_name not in explicit_skills:
+                explicit_skills.append(skill_name)
+
+    # Inferred skills based on role / domain (never hard requirements)
+    inferred_skills: List[str] = []
+    if any(k in q_lower for k in ("genai", "generative ai", "llm", "ai engineer")):
+        for inf in ["LLM", "RAG", "Transformers", "FastAPI", "Prompt Engineering"]:
+            if inf not in explicit_skills and inf.lower() not in [s.lower() for s in explicit_skills]:
+                inferred_skills.append(inf)
+    elif "machine learning" in q_lower or "ml engineer" in q_lower:
+        for inf in ["Scikit-Learn", "PyTorch", "Pandas", "NumPy", "MLOps"]:
+            if inf not in explicit_skills and inf.lower() not in [s.lower() for s in explicit_skills]:
+                inferred_skills.append(inf)
+
+    # Job title — first meaningful noun phrase, stripped of clauses
     filler = re.sub(r'\b(find|search|get|me|latest|fresh|remote|hybrid|onsite|jobs?|openings?|roles?)\b', '', query, flags=re.IGNORECASE)
-    filler = re.sub(r'\b(?:in|at|for)\s+.*?(?=\s+(?:with|having|paying|salary)\b|\s*$)', '', filler, flags=re.IGNORECASE)
-    filler = re.sub(r'\bwith\s+.+', '', filler, flags=re.IGNORECASE)
+    filler = re.sub(r'\b(?:in|at|for)\s+.*?(?=\s+(?:with|having|paying|salary|requiring)\b|\s*$)', '', filler, flags=re.IGNORECASE)
+    filler = re.sub(r'\b(?:requiring|requires|with|having|paying|salary)\b.*', '', filler, flags=re.IGNORECASE)
+    filler = re.sub(r'\b\d+[-–to\s]+\d*\s*years?.*', '', filler, flags=re.IGNORECASE)
     title = re.sub(r'\s+', ' ', filler).strip()[:60] or query[:60]
 
     return {
         "raw_query": query,
         "job_title": title,
         "alternative_titles": [],
-        "skills": [],
-        "explicit_skills": [],
-        "inferred_skills": [],
+        "skills": list(explicit_skills),
+        "explicit_skills": explicit_skills,
+        "inferred_skills": inferred_skills,
         "location": location,
         "locations": locations,
         "location_operator": location_operator,

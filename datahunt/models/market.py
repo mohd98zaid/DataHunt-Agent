@@ -14,6 +14,19 @@ class MarketAssetType(str, Enum):
     UNKNOWN = "unknown"
 
 
+class MarketEntityType(str, Enum):
+    STOCK = "STOCK"
+    COMPANY = "COMPANY"
+    INDEX = "INDEX"
+    SECTOR = "SECTOR"
+    NEWS = "NEWS"
+    SOURCE = "SOURCE"
+    PERSON = "PERSON"
+    PRODUCT = "PRODUCT"
+    IPO = "IPO"
+    UNKNOWN = "UNKNOWN"
+
+
 class MarketTimeHorizon(str, Enum):
     INTRADAY = "intraday"
     ONE_DAY = "1_day"

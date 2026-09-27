@@ -682,7 +682,14 @@ class AgentRuntime:
 
             normalized = [normalizer.normalize(r.fields, record_id=r.id, canonical_url=r.canonical_url or "") for r in target_records]
             if job_req:
-                passed, _ = hard_filter.apply(normalized, job_req)
+                passed, rejected = hard_filter.apply(normalized, job_req)
+                passed_ids = {p.raw_id for p in passed}
+                # Hard filter elimination: rejected jobs must NEVER return to the final list
+                target_records[:] = [r for r in target_records if r.id in passed_ids]
+                state.qualified_records[:] = [r for r in state.qualified_records if r.id in passed_ids]
+                for rej_job, rej_reason in rejected:
+                    state.add_observation(f"Hard filter eliminated '{rej_job.title}': {rej_reason}")
+
                 if passed:
                     analyzed = analyzer.analyze_and_rank(passed, job_req, None)
                     scored_map = {m.job.raw_id: m for m in analyzed}

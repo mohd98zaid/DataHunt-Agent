@@ -195,10 +195,13 @@ class MarketDiscoveryEngine:
         # ---------------------------------------------------------
         # STAGE 12: Selection & Canonical MarketRecord Construction
         # ---------------------------------------------------------
-        # Never invent candidates! Only select candidates with at least minimal evidence
-        qualified_candidates = [c for c in deep_pool if c.evidence_confidence != "LOW" or c.signal_score >= 40.0]
+        # Never invent candidates! Separate validated high/medium confidence from low-evidence watchlist
+        qualified_candidates = [c for c in deep_pool if c.evidence_confidence in ("HIGH", "MEDIUM") or c.signal_score >= 45.0]
+        watchlist_candidates = [c for c in deep_pool if c not in qualified_candidates]
+
         if not qualified_candidates and deep_pool:
             qualified_candidates = deep_pool[:intent.requested_count]
+            watchlist_candidates = []
 
         final_candidates = qualified_candidates[:intent.requested_count]
 
@@ -270,6 +273,7 @@ class MarketDiscoveryEngine:
             context_notes=context_notes,
             top_sectors=top_sectors,
             records=final_records,
+            watchlist=watchlist_candidates,
         )
 
         duration = time.time() - start_time
@@ -435,15 +439,36 @@ class MarketDiscoveryEngine:
         emit: Callable[[str, Dict], None]
     ):
         """
-        Dynamically follows up on discovered official IR pages or exchange links.
+        Dynamically follows up on discovered official IR pages, exchange links,
+        and corporate disclosures for the top candidates.
         """
-        for u in list(discovered_sources)[:5]:
+        from urllib.parse import urlparse
+        domains = set()
+        for u in discovered_sources:
+            try:
+                parsed = urlparse(u)
+                if parsed.netloc:
+                    domains.add(parsed.netloc.lower())
+            except Exception:
+                pass
+
+        # Query top candidate disclosures across discovered authoritative domains
+        for cand in candidates[:4]:
             if time.time() > deadline:
                 break
-            tier, name = classify_source_tier(u)
-            if tier in (SourceTier.TIER_1, SourceTier.TIER_2):
-                # Search specifically for discovered domain if relevant
-                pass
+            for domain in list(domains)[:3]:
+                if time.time() > deadline:
+                    break
+                followup_q = f"site:{domain} {cand.symbol} quarterly results corporate announcements investor relations"
+                res = self._execute_search_span(followup_q, wave=7, source_type="dynamic_source_discovery")
+                if res and res.success:
+                    for hit in res.data:
+                        u = hit.get("url") or ""
+                        snip = hit.get("snippet") or hit.get("title") or ""
+                        if u and u not in cand.sources_seen:
+                            cand.sources_seen.append(u)
+                        if any(term in snip.lower() for term in ("order", "dividend", "revenue", "profit", "results", "growth")):
+                            cand.corporate_actions.append({"source": u, "detail": snip[:200]})
 
     # -------------------------------------------------------------------------
     # WAVE 4: DEEP STOCK RESEARCH
@@ -459,13 +484,14 @@ class MarketDiscoveryEngine:
         """
         Performs targeted searches for each candidate to get price, volume,
         technicals, fundamentals, and catalysts.
+        Strictly distinguishes current price (CMP) from target price / fair value.
         """
         for cand in candidates:
             if time.time() > deadline:
                 break
 
             # Search specific multi-source query for this stock
-            deep_q = f"{cand.company_name} {cand.symbol} {intent.market} share price target analysis results"
+            deep_q = f"{cand.company_name} {cand.symbol} {intent.market} share price analysis results"
             res = self._execute_search_span(deep_q, wave=4, source_type="deep_research")
 
             if res and res.success:
@@ -478,14 +504,38 @@ class MarketDiscoveryEngine:
                     if u and u not in cand.sources_seen:
                         cand.sources_seen.append(u)
 
-                    # Extract technical or numerical clues if available
-                    price_match = re.search(r"(?:₹|Rs\.?|INR)\s*([0-9,]+(?:\.[0-9]{1,2})?)", snip)
-                    if price_match and cand.current_price is None:
-                        try:
-                            cand.current_price = float(price_match.group(1).replace(",", ""))
-                            cand.price_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-                        except ValueError:
-                            pass
+                    # Extract price: strictly distinguish current price from target price / fair value
+                    lower_snip = snip.lower()
+                    price_matches = list(re.finditer(r"(?:₹|Rs\.?|INR)\s*([0-9,]+(?:\.[0-9]{1,2})?)", snip))
+                    for pm in price_matches:
+                        start_pos = pm.start()
+                        end_pos = pm.end()
+                        pre_ctx = lower_snip[max(0, start_pos - 35):start_pos]
+                        post_ctx = lower_snip[end_pos:min(len(lower_snip), end_pos + 35)]
+
+                        # Split on sentence/clause delimiters so context from adjacent sentences doesn't bleed
+                        pre_clause = re.split(r'[\.\;\n]', pre_ctx)[-1]
+                        post_clause = re.split(r'[\.\;\n]', post_ctx)[0]
+                        clause_surrounding = pre_clause + " " + post_clause
+
+                        is_target = any(term in clause_surrounding for term in (
+                            "target price", "target of", "target", "tp", "fair value",
+                            "stop loss", "stoploss", "sl", "resistance", "upper target", "forecast"
+                        ))
+
+                        if is_target:
+                            # Record as analyst view / target, NOT current market price
+                            try:
+                                target_val = float(pm.group(1).replace(",", ""))
+                                cand.analyst_views.append({"target_price": target_val, "source": src_name})
+                            except ValueError:
+                                pass
+                        elif cand.current_price is None:
+                            try:
+                                cand.current_price = float(pm.group(1).replace(",", ""))
+                                cand.price_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+                            except ValueError:
+                                pass
 
                     # Extract weekly/daily gain
                     change_match = re.search(r"([+-]?\d+(?:\.\d+)?)\s*%", snip)
@@ -504,7 +554,7 @@ class MarketDiscoveryEngine:
                             pass
 
                     # Add bullish evidence if positive
-                    if any(w in snip.lower() for w in ("bullish", "rally", "gain", "breakout", "target", "profit", "growth", "order")):
+                    if any(w in snip.lower() for w in ("bullish", "rally", "gain", "breakout", "profit", "growth", "order")):
                         cand.bullish_evidence.append(snip[:200])
                         cand.evidence_items.append(MarketEvidence(
                             claim=snip[:250],
@@ -562,8 +612,9 @@ class MarketDiscoveryEngine:
                             is_counter_evidence=True,
                         ))
 
+            # Record clean absence if no adverse disclosures found; no generic filler
             if not cand.risk_factors:
-                cand.risk_factors.append("General equity market volatility and sector-specific rotation risk.")
+                cand.risk_factors.append("No adverse material disclosures or analyst downgrades identified in reviewed sources.")
 
     # -------------------------------------------------------------------------
     # STOP CONDITIONS EVALUATION
@@ -576,20 +627,29 @@ class MarketDiscoveryEngine:
         deadline: float
     ) -> str:
         """
-        Adaptive stop controller.
-        Never stops simply because count == 20.
+        Evidence-driven adaptive stop controller.
+        Evaluates real coverage, quality, and diminishing returns without arbitrary stops.
         """
         if time.time() >= deadline:
-            return "TIME_BUDGET"
+            return "TIME_BUDGET_EXCEEDED"
 
-        qualified_count = len([c for c in candidates if c.evidence_confidence in ("HIGH", "MEDIUM")])
+        high_conf_count = len([c for c in candidates if c.evidence_confidence == "HIGH"])
+        med_conf_count = len([c for c in candidates if c.evidence_confidence == "MEDIUM"])
+        qualified_count = high_conf_count + med_conf_count
+
         if qualified_count >= intent.requested_count and len(coverage.sectors_checked) >= 3:
-            return "COVERAGE_COMPLETE"
+            return "REQUEST_SATISFIED"
 
-        if len(candidates) >= intent.requested_count * 2:
-            return "DIMINISHING_RETURN"
+        if len(candidates) >= intent.requested_count and high_conf_count >= max(1, intent.requested_count // 3):
+            return "SUFFICIENT_EVIDENCE"
 
-        return "COVERAGE_COMPLETE"
+        if len(candidates) >= intent.requested_count and qualified_count > 0:
+            return "DIMINISHING_EVIDENCE_YIELD"
+
+        if len(candidates) > 0 and len(coverage.sectors_checked) >= 4:
+            return "DIMINISHING_CANDIDATE_YIELD"
+
+        return "SUFFICIENT_EVIDENCE"
 
     # -------------------------------------------------------------------------
     # HELPER: SEARCH SPAN EXECUTION
@@ -658,6 +718,7 @@ class MarketDiscoveryEngine:
         context_notes: List[str],
         top_sectors: List[Dict[str, str]],
         records: List[MarketRecord],
+        watchlist: Optional[List[MarketCandidate]] = None,
     ) -> str:
         """
         Synthesizes structured market intelligence report adhering strictly to Section 50:
@@ -755,7 +816,19 @@ class MarketDiscoveryEngine:
             lines.append("---")
             lines.append("")
 
-        lines.append("## 3. Research Coverage & Provenance Matrix")
+        if watchlist:
+            lines.append("## 3. Watchlist / Insufficient Corroborating Evidence")
+            lines.append("> **Note**: These counters were identified in market scans but lacked sufficient multi-source evidence, disclosures, or confirmed volume breakout to qualify for the primary list.")
+            lines.append("")
+            for w_cand in watchlist[:5]:
+                lines.append(f"- **{w_cand.company_name}** (`{w_cand.symbol}`): Signal Score `{w_cand.signal_score:.1f}`, Confidence `{w_cand.evidence_confidence}` — Limited multi-source confirmation.")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+            lines.append("## 4. Research Coverage & Provenance Matrix")
+        else:
+            lines.append("## 3. Research Coverage & Provenance Matrix")
+
         lines.append(f"- **Exchanges Monitored**: {', '.join(coverage.exchanges_checked)}")
         lines.append(f"- **Total Discovered Candidates**: {coverage.candidate_count}")
         lines.append(f"- **Symbol-Validated Candidates**: {coverage.validated_candidate_count}")

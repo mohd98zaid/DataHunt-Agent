@@ -150,41 +150,96 @@ class DedupeTool:
         clusters: Dict[str, List[str]] = {}
 
         for record in records:
-            key = None
-            canon_url = canonicalize_url(record.canonical_url) if record.canonical_url else ""
+            keys: List[str] = []
             if record.identity_key and record.identity_key.strip():
-                key = f"ident::{record.identity_key.strip().lower()}"
-            elif canon_url:
-                key = f"url::{canon_url}"
-            elif record.fields.get("title") and record.fields.get("company"):
-                key = f"fp::{generate_job_fingerprint(record.fields.get('company'), record.fields.get('title'), record.fields.get('location'))}"
-            else:
-                key = f"id::{record.id}"
+                keys.append(f"ident::{record.identity_key.strip().lower()}")
 
-            if key in canonical_map:
-                primary = canonical_map[key]
+            src = record.fields.get("source") or ""
+            job_id = record.fields.get("job_id") or record.fields.get("source_job_id") or ""
+            if src and job_id:
+                keys.append(f"sid::{src.lower()}::{job_id.lower()}")
+
+            canon_url = canonicalize_url(record.canonical_url) if record.canonical_url else ""
+            if not canon_url:
+                u_raw = record.fields.get("source_url") or record.fields.get("url") or ""
+                if u_raw:
+                    canon_url = canonicalize_url(u_raw)
+            if canon_url:
+                keys.append(f"url::{canon_url}")
+                keys.append(f"link::{canon_url}")
+
+            apply_url = record.fields.get("application_url") or record.fields.get("apply_url") or record.fields.get("primary_application_url") or ""
+            if apply_url:
+                c_apply = canonicalize_url(apply_url)
+                if c_apply:
+                    keys.append(f"app::{c_apply}")
+                    keys.append(f"link::{c_apply}")
+
+            comp = record.fields.get("company") or record.fields.get("company_name") or ""
+            title = record.fields.get("title") or record.fields.get("job_title") or ""
+            loc = record.fields.get("location") or ""
+            if comp and title:
+                fp = generate_job_fingerprint(comp, title, loc)
+                keys.append(f"fp::{fp}")
+
+            if not keys:
+                keys.append(f"id::{record.id}")
+
+            # Check if any candidate key matches an existing primary record
+            primary: Optional[ExtractedRecord] = None
+            matched_key: Optional[str] = None
+            for k in keys:
+                if k in canonical_map:
+                    primary = canonical_map[k]
+                    matched_key = k
+                    break
+
+            if primary is not None:
                 record.verification_status = VerificationStatus.DUPLICATE
                 duplicates.append(record)
 
                 # Merge sources
                 p_sources = list(primary.fields.get("sources", []))
-                if not p_sources and primary.fields.get("source"):
+                for s in primary.fields.get("all_sources", []):
+                    if s and s not in p_sources:
+                        p_sources.append(s)
+                if primary.fields.get("source") and primary.fields["source"] not in p_sources:
                     p_sources.append(primary.fields["source"])
+                for u in (primary.canonical_url, primary.fields.get("source_url"), primary.fields.get("url")):
+                    if u and "://" in str(u):
+                        domain_part = str(u).split("://")[-1].split("/")[0].split(".")
+                        s_name = domain_part[-2] if len(domain_part) >= 2 else domain_part[0]
+                        if s_name and s_name not in p_sources:
+                            p_sources.append(s_name)
+
                 r_sources = list(record.fields.get("sources", []))
-                if not r_sources and record.fields.get("source"):
+                for s in record.fields.get("all_sources", []):
+                    if s and s not in r_sources:
+                        r_sources.append(s)
+                if record.fields.get("source") and record.fields["source"] not in r_sources:
                     r_sources.append(record.fields["source"])
+                for u in (record.canonical_url, record.fields.get("source_url"), record.fields.get("url")):
+                    if u and "://" in str(u):
+                        domain_part = str(u).split("://")[-1].split("/")[0].split(".")
+                        s_name = domain_part[-2] if len(domain_part) >= 2 else domain_part[0]
+                        if s_name and s_name not in r_sources:
+                            r_sources.append(s_name)
+
                 for s in r_sources:
                     if s and s not in p_sources:
                         p_sources.append(s)
                 primary.fields["sources"] = p_sources
+                primary.fields["all_sources"] = p_sources
 
                 # Merge all_source_urls
                 p_urls = list(primary.fields.get("all_source_urls", []))
-                if not p_urls and primary.canonical_url:
-                    p_urls.append(primary.canonical_url)
+                for u in (primary.canonical_url, primary.fields.get("source_url"), primary.fields.get("url")):
+                    if u and u not in p_urls:
+                        p_urls.append(u)
                 r_urls = list(record.fields.get("all_source_urls", []))
-                if not r_urls and record.canonical_url:
-                    r_urls.append(record.canonical_url)
+                for u in (record.canonical_url, record.fields.get("source_url"), record.fields.get("url")):
+                    if u and u not in r_urls:
+                        r_urls.append(u)
                 for u in r_urls:
                     if u and u not in p_urls:
                         p_urls.append(u)
@@ -210,20 +265,43 @@ class DedupeTool:
                         existing_ev_keys.add(ev_key)
 
                 clusters[primary.id].append(record.id)
-                logger.info(f"Collapsed duplicate record {record.id} into canonical {primary.id} under key: {key}")
+                logger.info(f"Collapsed duplicate record {record.id} into canonical {primary.id} under key: {matched_key}")
+                for k in keys:
+                    canonical_map[k] = primary
             else:
                 # Initialize sources and URLs on primary
-                if "sources" not in record.fields and record.fields.get("source"):
-                    record.fields["sources"] = [record.fields["source"]]
-                if "all_source_urls" not in record.fields and record.canonical_url:
-                    record.fields["all_source_urls"] = [record.canonical_url]
-                if "primary_application_url" not in record.fields:
-                    record.fields["primary_application_url"] = record.fields.get("application_url") or record.canonical_url
+                init_sources = list(record.fields.get("sources", []))
+                if record.fields.get("source") and record.fields["source"] not in init_sources:
+                    init_sources.append(record.fields["source"])
+                for u in (record.canonical_url, record.fields.get("source_url"), record.fields.get("url")):
+                    if u and "://" in str(u):
+                        domain_part = str(u).split("://")[-1].split("/")[0].split(".")
+                        s_name = domain_part[-2] if len(domain_part) >= 2 else domain_part[0]
+                        if s_name and s_name not in init_sources:
+                            init_sources.append(s_name)
+                record.fields["sources"] = init_sources
+                record.fields["all_sources"] = init_sources
 
-                canonical_map[key] = record
+                init_urls = list(record.fields.get("all_source_urls", []))
+                for u in (record.canonical_url, record.fields.get("source_url"), record.fields.get("url")):
+                    if u and u not in init_urls:
+                        init_urls.append(u)
+                record.fields["all_source_urls"] = init_urls
+
+                if "primary_application_url" not in record.fields:
+                    record.fields["primary_application_url"] = record.fields.get("application_url") or record.canonical_url or record.fields.get("source_url")
+
+                for k in keys:
+                    canonical_map[k] = record
                 clusters[record.id] = [record.id]
 
-        unique_records = list(canonical_map.values())
+        # Retain unique primary instances preserving discovery order
+        seen_ids = set()
+        unique_records = []
+        for r in canonical_map.values():
+            if r.id not in seen_ids:
+                seen_ids.add(r.id)
+                unique_records.append(r)
         return ToolResult(
             success=True,
             data={
