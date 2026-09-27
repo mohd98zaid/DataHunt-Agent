@@ -57,6 +57,16 @@ class ResearchOrchestrator:
         self.export_repo = ExportRepository()
         self.tool_repo = ToolEventRepository()
 
+        from datahunt.evidence.store import EvidenceStore
+        from datahunt.agent.task_controller import TaskController
+        self.evidence_store = EvidenceStore()
+        self.task_controller = TaskController(
+            gemini_client=self.client,
+            search_tool=self.search_tool,
+            fetch_tool=self.fetch_tool,
+            evidence_store=self.evidence_store,
+        )
+
     def create_task_and_run(
         self,
         request_text: str,
@@ -209,11 +219,34 @@ class ResearchOrchestrator:
 
             is_job_search = (intent_spec.intent == ResearchIntent.JOB_SEARCH) and (task_mode != "research")
             is_zero_sec = is_job_search and (task_mode == "jobs" or any(k in task.request_text.lower() for k in ("0sec", "0-sec", "latest", "recent", "fresh", "today", "just now", "newest")))
+            is_equity_market = (
+                (getattr(intent_spec, "intent", None) == ResearchIntent.MARKET_RESEARCH)
+                or (task_mode == "market")
+                or any(
+                    k in (task.request_text or "").lower()
+                    for k in ("stock", "stocks", "equity", "equities", "nse", "bse", "nifty", "sensex", "shares", "share price", "perform this week")
+                )
+            ) and (task_mode != "research" and task_mode != "jobs")
+            _use_market_engine = is_equity_market and not is_job_search
 
-            plan = self.client.plan_research(task.normalized_spec, run.budget)
-            queries = plan.get("queries", [])
+            is_people_search = (
+                (task_mode == "people")
+                or any(
+                    k in (task.request_text or "").lower()
+                    for k in (
+                        "recruiter", "recruiters", "hiring manager", "hiring managers",
+                        "talent acquisition", "head of talent", "engineering leader",
+                        "ai leader", "contact path", "find recruiters", "find people"
+                    )
+                )
+            ) and not is_equity_market
+            if is_people_search and task_mode != "jobs":
+                is_job_search = False
+            _use_people_engine = is_people_search and not is_job_search and not is_equity_market
 
-            # Augment with direct ATS harvesting targets when doing job research, or technical specs when doing research, or market intelligence
+            queries = []
+
+            # Augment with direct ATS harvesting targets when doing job research, or specialized market intelligence, or technical research
             if is_job_search:
                 from datahunt.agents import QueryUnderstandingAgent, QueryExpansionAgent, SearchPlannerAgent, JobSearchRequest
                 qu_agent = QueryUnderstandingAgent(gemini_client=self.client)
@@ -242,16 +275,20 @@ class ResearchOrchestrator:
                     from datahunt.tools.search import generate_ats_queries, generate_broad_job_queries
                     ats_queries = [{"query": q, "purpose": "direct_ats_harvest"} for q in generate_ats_queries(task.request_text)]
                     broad_queries = [{"query": q, "purpose": "broad_internet_sweep"} for q in generate_broad_job_queries(task.request_text)]
-                    queries = ats_queries[:4] + broad_queries[:6] + queries + ats_queries[4:] + broad_queries[6:]
+                    queries = ats_queries[:4] + broad_queries[:6] + ats_queries[4:] + broad_queries[6:]
 
-            elif task_mode == "market" or any(k in (task.request_text or "").lower() for k in ("pricing", "competitor", "market", "saas", "vs ", "alternative")):
-                from datahunt.tools.search import generate_market_research_queries
-                mkt_queries = [{"query": q, "purpose": "market_intelligence"} for q in generate_market_research_queries(task.request_text)]
-                queries = mkt_queries[:3] + queries + mkt_queries[3:]
-            elif task_mode == "research" or "research" in (task.request_text or "").lower():
-                from datahunt.tools.search import generate_technical_research_queries
-                tech_queries = [{"query": q, "purpose": "technical_documentation"} for q in generate_technical_research_queries(task.request_text)]
-                queries = tech_queries[:3] + queries + tech_queries[3:]
+            elif is_equity_market:
+                # MarketDiscoveryEngine executes its own 6-wave multi-source discovery loop
+                queries = [{"query": task.request_text, "purpose": "market_intelligence_discovery"}]
+            elif is_people_search:
+                queries = [{"query": task.request_text, "purpose": "people_contact_discovery"}]
+            else:
+                plan = self.client.plan_research(task.normalized_spec, run.budget)
+                queries = plan.get("queries", [])
+                if task_mode == "research" or "research" in (task.request_text or "").lower():
+                    from datahunt.tools.search import generate_technical_research_queries
+                    tech_queries = [{"query": q, "purpose": "technical_documentation"} for q in generate_technical_research_queries(task.request_text)]
+                    queries = tech_queries[:3] + queries + tech_queries[3:]
 
             logger.info(f"Planned {len(queries)} search queries (ATS augmented: {is_job_search})", extra={"run_id": run.id})
             emit_event("plan.ready", {
@@ -377,16 +414,16 @@ class ResearchOrchestrator:
                     try:
                         self.record_repo.insert_record(rec)
                         persisted_record_ids.add(rec.id)
-                    except Exception as re:
-                        logger.warning(f"Error inserting raw record {rec.id}: {re}")
+                    except Exception as rec_err:
+                        logger.warning(f"Error inserting raw record {rec.id}: {rec_err}")
 
                 for rec in final_records:
                     if rec.id not in persisted_record_ids:
                         try:
                             self.record_repo.insert_record(rec)
                             persisted_record_ids.add(rec.id)
-                        except Exception as re:
-                            logger.warning(f"Error inserting final record {rec.id}: {re}")
+                        except Exception as rec_err:
+                            logger.warning(f"Error inserting final record {rec.id}: {rec_err}")
                     try:
                         self.record_repo.update_record_status(rec.id, rec.verification_status, rec.confidence)
                     except Exception as ue:
@@ -420,11 +457,6 @@ class ResearchOrchestrator:
             # ----------------------------------------------------
             # NEW: Financial / Equity Market Intelligence uses MarketDiscoveryEngine
             # ----------------------------------------------------
-            is_equity_market = (task_mode == "market") or any(
-                k in (task.request_text or "").lower()
-                for k in ("stock", "stocks", "equity", "equities", "nse", "bse", "nifty", "sensex", "shares", "share price", "perform this week")
-            )
-            _use_market_engine = is_equity_market and not is_job_search
 
             if _use_market_engine:
                 from datahunt.agent.market_discovery import MarketDiscoveryEngine
@@ -521,9 +553,163 @@ class ResearchOrchestrator:
                 )
 
             # ----------------------------------------------------
+            # NEW: People + Contact Workflow (Section 27)
+            # ----------------------------------------------------
+            if _use_people_engine:
+                from datahunt.agents.people_intelligence import PeopleIntelligenceAgent
+                from datahunt.agents.contact_discovery import ContactDiscoveryAgent
+                from datahunt.models.record import ExtractedRecord, RecordEvidence, VerificationStatus
+                import uuid
+
+                people_agent = PeopleIntelligenceAgent(
+                    gemini_client=self.client,
+                    search_tool=self.search_tool,
+                    fetch_tool=self.fetch_tool,
+                )
+                contact_agent = ContactDiscoveryAgent(
+                    gemini_client=self.client,
+                    search_tool=self.search_tool,
+                    fetch_tool=self.fetch_tool,
+                )
+
+                emit_event("phase.change", {
+                    "phase": "PEOPLE_DISCOVERY",
+                    "message": "Identifying targets and discovering verified people profiles...",
+                    "thought": f"Executing People + Contact intelligence workflow for: '{task.request_text}'",
+                    "counters": counters.__dict__,
+                })
+
+                # Determine target companies from query or search
+                query_text = task.request_text
+                candidate_companies = []
+                m = re.search(r"\bat\s+([A-Za-z0-9&.\s]+?)(?:\s+in|\s+for|\.|$)", query_text, re.I)
+                if m:
+                    candidate_companies.append(m.group(1).strip())
+
+                comp_search = self.search_tool.execute(query=f"{query_text} companies hiring", limit=3)
+                counters.search_queries += 1
+                if comp_search.success and comp_search.data:
+                    c_hits = comp_search.data if isinstance(comp_search.data, list) else (comp_search.data.get("results", []) if isinstance(comp_search.data, dict) else [])
+                    for h in c_hits:
+                        title = getattr(h, "title", None) or (h.get("title", "") if isinstance(h, dict) else "")
+                        c_match = re.search(r"at\s+([A-Za-z0-9&.\s]+)", title)
+                        if c_match:
+                            candidate_companies.append(c_match.group(1).strip())
+
+                if not candidate_companies:
+                    candidate_companies = ["Top Tech Companies"]
+
+                seen_comps = set()
+                clean_comps = []
+                for c in candidate_companies:
+                    c_norm = c.lower().strip()
+                    if c_norm and c_norm not in seen_comps and len(c_norm) > 2:
+                        seen_comps.add(c_norm)
+                        clean_comps.append(c)
+
+                all_people = []
+                for comp in clean_comps[:3]:
+                    if time.time() > deadline:
+                        break
+                    peeps = people_agent.find_people(company=comp, max_results=task.max_records)
+                    counters.search_queries += 1
+                    all_people.extend(peeps)
+
+                if not all_people:
+                    s_res = self.search_tool.execute(query=f"{query_text} site:linkedin.com/in", limit=task.max_records)
+                    counters.search_queries += 1
+                    if s_res.success and s_res.data:
+                        p_hits = s_res.data if isinstance(s_res.data, list) else (s_res.data.get("results", []) if isinstance(s_res.data, dict) else [])
+                        for h in p_hits:
+                            title = str(getattr(h, "title", None) or (h.get("title") if isinstance(h, dict) else "") or "")
+                            url = str(getattr(h, "url", None) or (h.get("url") or h.get("link") if isinstance(h, dict) else "") or "")
+                            parts = re.split(r"[-–|:]", title)
+                            raw_name = parts[0].strip() if parts else title
+                            role_title = parts[1].strip() if len(parts) >= 2 else "Professional"
+                            company_name = parts[2].strip() if len(parts) >= 3 else "Company"
+                            if 1 < len(raw_name.split()) <= 4:
+                                from datahunt.models.shared_intel import PersonProfile, PersonRole
+                                all_people.append(PersonProfile(
+                                    name=raw_name,
+                                    company=company_name,
+                                    role=PersonRole.RECRUITER if "recruiter" in title.lower() else PersonRole.UNKNOWN,
+                                    role_title=role_title,
+                                    profile_url=url,
+                                    confidence=0.85,
+                                    relevance=f"Discovered via query match: {title}",
+                                    evidence=[str(getattr(h, 'snippet', None) or (h.get('snippet') if isinstance(h, dict) else '') or '')],
+                                ))
+
+                final_records = []
+                for person in all_people[:task.max_records]:
+                    rec_id = f"rec_{uuid.uuid4().hex[:12]}"
+                    contacts = contact_agent.discover_contacts(
+                        entity_name=person.company,
+                        entity_id=person.person_id,
+                        max_contacts=2,
+                    )
+                    evidence_list = []
+                    for snip in (person.evidence or []):
+                        if snip:
+                            evidence_list.append(RecordEvidence(
+                                record_id=rec_id,
+                                source_document_id="",
+                                field_name="profile_evidence",
+                                evidence_text=snip,
+                                locator={"profile_url": person.profile_url or ""},
+                            ))
+
+                    people_fields = {
+                        "person": person.name,
+                        "role": person.role.value if hasattr(person.role, "value") else str(person.role),
+                        "role_title": person.role_title,
+                        "company": person.company,
+                        "profile_url": person.profile_url,
+                        "why_relevant": person.relevance,
+                        "contact_path": contacts[0].value if contacts else "Not publicly disclosed",
+                    }
+
+                    rec = ExtractedRecord(
+                        id=rec_id,
+                        run_id=run.id,
+                        record_type="people_intelligence",
+                        identity_key=f"person:{person.company}:{person.name}".lower(),
+                        canonical_url=person.profile_url or "",
+                        fields=people_fields,
+                        normalized_fields=people_fields,
+                        confidence=person.confidence,
+                        verification_status=VerificationStatus.VERIFIED if person.profile_url else VerificationStatus.UNVERIFIED,
+                    )
+                    rec.evidence = evidence_list
+                    final_records.append(rec)
+                    verified_records.append(rec)
+                    try:
+                        self.record_repo.insert_record(rec)
+                    except Exception as re_err:
+                        logger.warning(f"Error inserting people record {rec.id}: {re_err}")
+
+                counters.records_extracted = len(final_records)
+                counters.records_verified = len(final_records)
+
+                for er in final_records:
+                    emit_event("record.verified", {
+                        "record_id": er.id,
+                        "status": er.verification_status.value,
+                        "confidence": er.confidence,
+                        "fields": er.fields,
+                        "warnings": er.warnings,
+                        "counters": counters.__dict__,
+                    })
+
+                logger.info(
+                    f"PeopleIntelligenceAgent: Discovered {len(final_records)} verified people records",
+                    extra={"run_id": run.id},
+                )
+
+            # ----------------------------------------------------
             # NEW: Technical & Deep Research uses ResearchDiscoveryEngine
             # ----------------------------------------------------
-            _use_research_engine = not _use_runtime and not _use_market_engine
+            _use_research_engine = not _use_runtime and not _use_market_engine and not _use_people_engine
             if _use_research_engine:
                 from datahunt.agent.research_discovery import ResearchDiscoveryEngine
 
@@ -573,8 +759,8 @@ class ResearchOrchestrator:
                 for rec in final_records:
                     try:
                         self.record_repo.insert_record(rec)
-                    except Exception as re:
-                        logger.warning(f"Error persisting research record: {re}")
+                    except Exception as rec_err:
+                        logger.warning(f"Error persisting research record: {rec_err}")
 
                 for doc in fetched_docs[:8]:
                     snippet = (doc.extracted_text or "").strip()
@@ -590,7 +776,7 @@ class ResearchOrchestrator:
             # ----------------------------------------------------
             # 2. Searching Phase (legacy fallback only)
             # ----------------------------------------------------
-            if not _use_runtime and not _use_market_engine and not _use_research_engine:
+            if not _use_runtime and not _use_market_engine and not _use_research_engine and not _use_people_engine:
                 self.run_repo.update_run_status(run.id, RunStatus.SEARCHING)
                 emit_event("phase.change", {
                     "phase": "SEARCHING",
@@ -934,7 +1120,7 @@ class ResearchOrchestrator:
             # (job-mode already has final_records from AgentRuntime above)
 
             # Cap runtime / market / research final_records to max_records as well
-            if (_use_runtime or _use_market_engine or _use_research_engine) and len(final_records) > task.max_records:
+            if (_use_runtime or _use_market_engine or _use_research_engine or _use_people_engine) and len(final_records) > task.max_records:
                 final_records = final_records[:task.max_records]
 
             # ----------------------------------------------------
@@ -969,8 +1155,24 @@ class ResearchOrchestrator:
                 summary_text = _result.get("job_matches_markdown")
             elif _result.get("market_report_markdown"):
                 summary_text = _result.get("market_report_markdown")
+            elif _result.get("people_report_markdown"):
+                summary_text = _result.get("people_report_markdown")
             elif _result.get("research_report_markdown"):
                 summary_text = _result.get("research_report_markdown")
+            elif _use_people_engine:
+                people_lines = [
+                    f"# People & Contact Intelligence: {task.request_text}\n",
+                    f"**Identified Candidates:** {len(final_records)}\n"
+                ]
+                for r in final_records:
+                    f_d = r.fields
+                    people_lines.append(f"### {f_d.get('person')} — {f_d.get('role_title', f_d.get('role'))}")
+                    people_lines.append(f"- **Company:** {f_d.get('company')}")
+                    people_lines.append(f"- **Role:** {f_d.get('role')}")
+                    people_lines.append(f"- **Profile:** {f_d.get('profile_url')}")
+                    people_lines.append(f"- **Public Contact Path:** {f_d.get('contact_path')}")
+                    people_lines.append(f"- **Why Relevant:** {f_d.get('why_relevant')}\n")
+                summary_text = "\n".join(people_lines)
             else:
                 try:
                     summary_text = self.client.summarize_run(

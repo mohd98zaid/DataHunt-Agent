@@ -1182,8 +1182,11 @@ class SearchTool:
         page: int = 1,
         freshness_days: Optional[int] = None,
         allowed_domains: Optional[List[str]] = None,
-        blocked_domains: Optional[List[str]] = None
+        blocked_domains: Optional[List[str]] = None,
+        **kwargs: Any
     ) -> ToolResult:
+        if "max_results" in kwargs:
+            limit = kwargs.pop("max_results")
         now = time.time()
         allowed_str = ",".join(sorted(allowed_domains or []))
         blocked_str = ",".join(sorted(blocked_domains or []))

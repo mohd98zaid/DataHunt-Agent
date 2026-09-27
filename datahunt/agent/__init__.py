@@ -49,7 +49,8 @@ __all__ = [
     "DiscoveryBudget", "DiscoveryRoundTelemetry", "SourceCoverageMatrix",
     "DiscoveryState", "DiscoveryEngine",
     "ResearchDiscoveryEngine", "classify_research_source", "ResearchSourceTier",
-    "MarketDiscoveryEngine",
+    "MarketDiscoveryEngine", "TaskController",
 ]
 from .market_discovery import MarketDiscoveryEngine
 from .discovery_engine import DiscoveryEngine
+from .task_controller import TaskController
