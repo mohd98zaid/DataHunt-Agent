@@ -11,6 +11,13 @@
   <!-- Three.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <!-- Post-processing for Neon Bloom -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
   <!-- Anime.js for UI animations -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js"></script>
 
@@ -279,20 +286,21 @@
   <!-- Bottom Control Deck -->
   <div class="nx-deck" id="nx-deck">
 
-    <!-- Row 1: Phase states -->
+    <!-- Row 1: Phase states (canonical + legacy aliases) -->
     <div class="deck-row">
       <div class="deck-lbl">AGENT PHASE</div>
       <div class="deck-btns" id="phase-btns">
-        <button class="dbtn active"     onclick="setPhase('STANDBY',    this)">👋 STANDBY</button>
-        <button class="dbtn"            onclick="setPhase('PLANNING',   this)">🤔 PLANNING</button>
+        <button class="dbtn active"     onclick="setPhase('IDLE',       this)">👋 IDLE</button>
+        <button class="dbtn"            onclick="setPhase('LISTENING',  this)">👂 LISTENING</button>
         <button class="dbtn"            onclick="setPhase('SEARCHING',  this)">🔍 SEARCHING</button>
-        <button class="dbtn"            onclick="setPhase('COLLECTING', this)">📥 COLLECTING</button>
-        <button class="dbtn"            onclick="setPhase('EXTRACTING', this)">🧩 EXTRACTING</button>
+        <button class="dbtn"            onclick="setPhase('ANALYZING',  this)">🧩 ANALYZING</button>
+        <button class="dbtn"            onclick="setPhase('RESPONDING', this)">📝 RESPONDING</button>
         <button class="dbtn"            onclick="setPhase('VERIFYING',  this)">🛡️ VERIFYING</button>
-        <button class="dbtn done-active" onclick="setPhase('COMPLETED', this)">🎉 COMPLETED</button>
-        <button class="dbtn fail-active" onclick="setPhase('FAILED',    this)">⚠️ FAILED</button>
+        <button class="dbtn done-active" onclick="setPhase('SUCCESS',   this)">🎉 SUCCESS</button>
+        <button class="dbtn fail-active" onclick="setPhase('ERROR',     this)">⚠️ ERROR</button>
       </div>
     </div>
+
 
     <!-- Row 2: OLED emotions -->
     <div class="deck-row">
@@ -334,7 +342,7 @@
 
   <!-- Bot avatar scripts -->
   <script src="js/sound_fx.js?v=1"></script>
-  <script src="js/bot_avatar.js?v=3"></script>
+  <script src="js/bot_avatar.js?v=4"></script>
 
   <script>
     let avatar = null;
