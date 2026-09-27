@@ -185,6 +185,36 @@ def _enrich_job_fields(fields: Dict[str, Any], doc_text: str, url: str) -> Dict[
     else:
         fields["job_id"] = None
 
+    # 7. Fallback Job Posted Date from text / HTML
+    if not fields.get("posted_at") or fields.get("posted_at") in ("Recent", "Unknown", ""):
+        # Check for <time datetime="..."> in doc_text
+        time_m = re.search(r'<time[^>]+datetime=[\'"]([^\'"]+)[\'"]', (doc_text or "")[:8000], re.I)
+        if time_m:
+            cand_time = time_m.group(1).strip()
+            iso_t, age_s, badge = parse_job_timestamp(cand_time)
+            if iso_t:
+                fields["posted_at"] = iso_t
+                if age_s is not None:
+                    fields["posted_age_seconds"] = age_s
+                if badge:
+                    fields["freshness_badge"] = badge
+        else:
+            # Check phrases like "Posted: 2 days ago", "Date Posted: Sep 25, 2026"
+            posted_m = re.search(
+                r'\b(?:posted|date\s+posted|published|posted\s+on)[:\s]+([A-Za-z0-9, /-]+|\d+\s*(?:days?|hours?|mins?|secs?)\s*ago)\b',
+                text_sample,
+                re.I
+            )
+            if posted_m:
+                cand_posted = posted_m.group(1).strip()
+                iso_t, age_s, badge = parse_job_timestamp(cand_posted)
+                if iso_t:
+                    fields["posted_at"] = iso_t
+                    if age_s is not None:
+                        fields["posted_age_seconds"] = age_s
+                    if badge:
+                        fields["freshness_badge"] = badge
+
     return fields
 
 

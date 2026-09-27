@@ -11,6 +11,17 @@ function sanitizeUrl(url) {
         return '#';
     }
 }
+function formatDateString(iso) {
+    if (!iso) return "Just now";
+    try {
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return iso;
+        return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + " " +
+               d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    } catch {
+        return iso;
+    }
+}
 
 window.trackCockpitApply = async function(recId, btnEl, event) {
   if (event) event.stopPropagation();
@@ -359,7 +370,8 @@ function renderJobRadarUI(summaryMarkdown, records) {
         <div class="job-card-meta-row">
           <span>📍 ${escapeHtml(location)}</span>
           ${salary ? `<span style="color: var(--neon-green); font-weight: 700;">💰 ${escapeHtml(salary)}</span>` : ''}
-          <span>🕒 Timestamp: ${escapeHtml(f.posted_at || 'Just now')}</span>
+          <span>📅 Posted: ${escapeHtml(formatDateString(f.posted_at || f.posted_date) || 'Recent')}</span>
+          ${rec.created_at || rec.scraped_at ? `<span>⚡ Scraped: ${escapeHtml(formatDateString(rec.created_at || rec.scraped_at))}</span>` : ''}
           <span>🛡️ Confidence: ${confScore}%</span>
         </div>
         <div style="display: flex; justify-content: flex-end; margin-top: 6px;">
@@ -719,7 +731,8 @@ function renderOnPageResults(summaryMarkdown, records, query, runData) {
                   <div class="job-card-meta-row">
                     <span>📍 ${escapeHtml(location)}</span>
                     ${salary ? `<span style="color: var(--neon-green); font-weight: 700;">💰 ${escapeHtml(salary)}</span>` : ''}
-                    <span>🕒 Timestamp: ${escapeHtml(f.posted_at || 'Just now')}</span>
+                    <span>📅 Posted: ${escapeHtml(formatDateString(f.posted_at || f.posted_date) || 'Recent')}</span>
+                    ${rec.created_at || rec.scraped_at ? `<span>⚡ Scraped: ${escapeHtml(formatDateString(rec.created_at || rec.scraped_at))}</span>` : ''}
                     <span>🛡️ Confidence: ${confScore}%</span>
                   </div>
                   <div style="display: flex; justify-content: flex-end; margin-top: 8px;">

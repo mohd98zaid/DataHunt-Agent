@@ -192,7 +192,7 @@ class DataNormalizer:
         clean_skills = list(dict.fromkeys([s.strip().title() for s in raw_skills if s.strip()]))
 
         # 7. Timestamps
-        posted_date = raw_fields.get("posted_date")
+        posted_date = raw_fields.get("posted_date") or raw_fields.get("posted_at") or raw_fields.get("date_posted") or raw_fields.get("date")
         posted_age_seconds = raw_fields.get("posted_age_seconds")
         freshness_label = raw_fields.get("freshness_label") or "Recent"
 

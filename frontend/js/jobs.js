@@ -140,7 +140,7 @@ function getDropdownConfig(type) {
   const meta = {
     company: { id: "company", pluralId: "companies", set: selectedCompanies, defaultLabel: "All Companies", unit: "Companies" },
     location: { id: "location", pluralId: "locations", set: selectedLocations, defaultLabel: "All Locations", unit: "Locations" },
-    date: { id: "date", pluralId: "date", set: selectedDates, defaultLabel: "Any Scraped Time", unit: "Timeframes" },
+    date: { id: "date", pluralId: "date", set: selectedDates, defaultLabel: "Any Date / Age", unit: "Timeframes" },
     interview: { id: "interview", pluralId: "interview", set: selectedInterviewStages, defaultLabel: "All Call Stages", unit: "Stages" }
   };
   return meta[type];
@@ -597,9 +597,12 @@ function applyFilters() {
     // 5. Multi-Select Date / Scraped Age Filter
     if (selectedDates.size > 0) {
       const scrapedTime = job.scraped_at ? new Date(job.scraped_at).getTime() : 0;
+      const postedRaw = f.posted_at || f.posted_date || job.posted_at;
+      const postedTime = postedRaw ? new Date(postedRaw).getTime() : 0;
       const ageSec = f.posted_age_seconds;
-      const diffSec = scrapedTime ? (nowMs - scrapedTime) / 1000 : Infinity;
-      const effectiveSec = Math.min(diffSec, ageSec !== undefined ? ageSec : Infinity);
+      const diffScrapedSec = scrapedTime && !isNaN(scrapedTime) ? (nowMs - scrapedTime) / 1000 : Infinity;
+      const diffPostedSec = postedTime && !isNaN(postedTime) ? (nowMs - postedTime) / 1000 : Infinity;
+      const effectiveSec = Math.min(diffScrapedSec, diffPostedSec, ageSec !== undefined ? ageSec : Infinity);
       const badge = f.freshness_badge || "";
       const is0sec = badge.includes("0-SEC") || badge.includes("JUST NOW") || effectiveSec < 3600;
 
@@ -713,7 +716,7 @@ function renderTable(jobs) {
   if (!tbody) return;
 
   if (!jobs || jobs.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="8" class="empty-table-cell">No job listings found matching the current criteria.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" class="empty-table-cell">No job listings found matching the current criteria.</td></tr>`;
     return;
   }
 
@@ -727,7 +730,11 @@ function renderTable(jobs) {
     const badge = f.freshness_badge || "Recent";
     const is0sec = badge.includes("0-SEC") || badge.includes("JUST NOW");
     const applyUrl = f.application_url || job.canonical_url || "#";
-    const scrapedDate = formatDate(job.scraped_at || f.posted_at);
+    
+    // Explicit Job Posted Date vs Scraped At timestamp
+    const postedDateRaw = f.posted_at || f.posted_date || job.posted_at;
+    const postedDate = formatPostedDate(postedDateRaw, badge);
+    const scrapedDate = formatDate(job.scraped_at || job.created_at);
 
     const appliedStatus = job.applied_status || "not_applied";
     const interviewStatus = job.interview_status || "no_call";
@@ -751,10 +758,16 @@ function renderTable(jobs) {
           <div class="salary-tag" style="margin-top: 2px;">💰 ${escapeHtml(salary)}</div>
         </td>
         <td>
-          <div style="font-family: 'Share Tech Mono', monospace; font-size: 11px; color: #fff;">
-            ${scrapedDate}
+          <div style="font-family: 'Share Tech Mono', monospace; font-size: 11px; color: var(--neon-cyan); font-weight: 600;">
+            📅 ${escapeHtml(postedDate)}
           </div>
           <div class="table-meta-sub">${escapeHtml(badge)}</div>
+        </td>
+        <td>
+          <div style="font-family: 'Share Tech Mono', monospace; font-size: 11px; color: #fff;">
+            ⚡ ${escapeHtml(scrapedDate)}
+          </div>
+          <div class="table-meta-sub" style="font-size: 10px; color: var(--text-muted);">Realtime Ingest</div>
         </td>
         <td onclick="event.stopPropagation();">
           <select id="applied-select-${job.id}" class="table-status-select ${appliedStatus}" onchange="updateJobApplied('${job.id}', this.value); this.className = 'table-status-select ' + this.value;">
@@ -873,6 +886,28 @@ async function bulkDeleteJobs() {
   } finally {
     updateBulkControls();
   }
+}
+
+function formatPostedDate(val, fallback = "Recent") {
+  if (!val) return fallback;
+  const s = String(val).trim();
+  if (!s || s.toLowerCase() === "recent" || s.toLowerCase() === "just now") return fallback;
+  if (/\b(?:ago|today|yesterday|just now)\b/i.test(s)) {
+    return s;
+  }
+  try {
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) {
+      const hasTime = s.includes("T") || s.includes(":") || /am|pm/i.test(s);
+      if (hasTime) {
+        return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + " " +
+               d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+      } else {
+        return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+      }
+    }
+  } catch (e) {}
+  return s;
 }
 
 function formatDate(iso) {
@@ -1004,7 +1039,10 @@ window.openJobDetail = async function(recordId) {
   document.getElementById("modal-job-company").textContent = `@ ${f.company || job.domain || 'Direct Employer'}`;
   document.getElementById("modal-job-location").textContent = formatLocationDisplay(f.location);
   document.getElementById("modal-job-salary").textContent = f.salary || "Competitive";
-  document.getElementById("modal-job-timestamp").textContent = formatDate(job.scraped_at || f.posted_at);
+  const postedDateVal = formatPostedDate(f.posted_at || f.posted_date || job.posted_at, "Recently posted");
+  const modalPosted = document.getElementById("modal-job-posted");
+  if (modalPosted) modalPosted.textContent = postedDateVal;
+  document.getElementById("modal-job-timestamp").textContent = formatDate(job.scraped_at || job.created_at);
   document.getElementById("modal-job-freshness").textContent = f.freshness_badge || "Verified";
 
   const applyLink = document.getElementById("modal-direct-apply-link");

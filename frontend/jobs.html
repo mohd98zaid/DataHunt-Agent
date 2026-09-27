@@ -109,11 +109,11 @@
           </div>
         </div>
 
-        <!-- Multi-Select Scraped Time -->
+        <!-- Multi-Select Date Filter -->
         <div class="multi-select-dropdown" id="dropdown-date">
-          <button type="button" class="multi-select-trigger" id="trigger-date" title="Filter by Scraped Time">
+          <button type="button" class="multi-select-trigger" id="trigger-date" title="Filter by Job Posted / Scraped Date">
             <span class="filter-group-icon">🗓️</span>
-            <span class="multi-select-label" id="label-date">Any Scraped Time</span>
+            <span class="multi-select-label" id="label-date">Any Date / Age</span>
             <span class="multi-select-badge" id="badge-date" style="display:none;">0</span>
             <span class="multi-select-arrow">▾</span>
           </button>
@@ -166,15 +166,16 @@
               <th style="width: 45px;">#</th>
               <th>JOB ROLE & COMPANY</th>
               <th>LOCATION & SALARY</th>
-              <th style="width: 170px;">SCRAPED AT</th>
-              <th style="width: 170px;">APPLIED STATUS</th>
-              <th style="width: 180px;">INTERVIEW CALL</th>
-              <th style="width: 160px; text-align: center;">ACTIONS</th>
+              <th style="width: 150px;">JOB POSTED</th>
+              <th style="width: 150px;">SCRAPED AT</th>
+              <th style="width: 160px;">APPLIED STATUS</th>
+              <th style="width: 170px;">INTERVIEW CALL</th>
+              <th style="width: 150px; text-align: center;">ACTIONS</th>
             </tr>
           </thead>
           <tbody id="jobs-table-body">
             <tr>
-              <td colspan="8" class="empty-table-cell">Loading verified jobs from database...</td>
+              <td colspan="9" class="empty-table-cell">Loading verified jobs from database...</td>
             </tr>
           </tbody>
         </table>
@@ -204,12 +205,16 @@
             <div class="meta-val highlight-green" id="modal-job-salary">Competitive</div>
           </div>
           <div class="detail-meta-card">
+            <div class="meta-label">JOB POSTED DATE</div>
+            <div class="meta-val highlight-cyan" id="modal-job-posted">-</div>
+          </div>
+          <div class="detail-meta-card">
             <div class="meta-label">SCRAPED TIMESTAMP</div>
             <div class="meta-val" id="modal-job-timestamp">-</div>
           </div>
           <div class="detail-meta-card">
             <div class="meta-label">FRESHNESS / AGE</div>
-            <div class="meta-val highlight-cyan" id="modal-job-freshness">-</div>
+            <div class="meta-val highlight-green" id="modal-job-freshness">-</div>
           </div>
         </div>
 
