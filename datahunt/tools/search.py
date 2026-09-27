@@ -568,11 +568,30 @@ def generate_technical_research_queries(topic: str) -> List[str]:
 
 def generate_market_research_queries(topic: str) -> List[str]:
     """
-    Generate authoritative market, SaaS pricing, and competitor comparison queries
-    targeting official pricing pages, feature matrices, and independent software reviews.
+    Generate authoritative market research queries.
+    Distinguishes between:
+    1) Financial / Equity / Stock Market Intelligence (e.g. NSE, BSE, Nifty, stocks, weekly performance)
+    2) SaaS competitor pricing & feature comparison.
     """
-    clean = re.sub(r"\b(find|search|analyze|compare|comparison of|pricing for|market analysis of)\b", "", topic, flags=re.IGNORECASE).strip()
+    lower = topic.lower()
+    is_equity_market = any(k in lower for k in ("stock", "stocks", "equity", "equities", "nse", "bse", "nifty", "sensex", "shares", "share price", "perform this week"))
+
+    clean = re.sub(r"\b(find|search|analyze|compare|comparison of|pricing for|market analysis of|give|top|best)\b", "", topic, flags=re.IGNORECASE).strip()
     clean = re.sub(r"\s+", " ", clean).strip() or topic.strip()
+
+    if is_equity_market:
+        market_label = "NSE" if "nse" in lower or "nifty" in lower else ("BSE" if "bse" in lower else "stock market")
+        return [
+            f"{market_label} benchmark index weekly trend performance breadth",
+            f"{market_label} top performing sectoral indices this week",
+            f"{market_label} weekly gainers high volume breakout momentum stocks",
+            f"{market_label} stocks RSI bullish breakout near 52 week high",
+            f"{market_label} corporate announcements order wins earnings capex",
+            f"{market_label} top stocks in news latest positive developments",
+            f"{market_label} stocks technical setup moving average support",
+            f"{market_label} stocks analyst targets and downside risks",
+        ]
+
     return [
         f"{clean} pricing plans tiers per user month official",
         f"{clean} features comparison matrix alternatives vs",
@@ -580,6 +599,7 @@ def generate_market_research_queries(topic: str) -> List[str]:
         f"{clean} pros cons limitations enterprise reviews",
         f"{clean} g2.com OR capterra.com OR trustradius.com reviews",
     ]
+
 
 class SearchProvider(Protocol):
     def search(

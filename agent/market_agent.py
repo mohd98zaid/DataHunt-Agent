@@ -4,9 +4,9 @@ from agent.orchestrator import ResearchOrchestrator
 
 class MarketIntelAgent(BaseAgent):
     """
-    Autonomous Market & Competitive Intelligence Agent.
-    Specialized in SaaS pricing models, feature comparison matrices,
-    competitor teardowns, and market differentiation analysis.
+    Autonomous Multi-Source Market & Competitive Intelligence Agent.
+    Specialized in equity research, stock candidate discovery, multi-source financial
+    evidence analysis, technical setups, as well as competitive and SaaS intelligence.
     """
     default_max_records: int = 25
     default_freshness_days: Optional[int] = 14
@@ -16,13 +16,15 @@ class MarketIntelAgent(BaseAgent):
         super().__init__(
             name="Market Intel AI Agent",
             mode="market",
-            description="Autonomous competitor landscape mapper analyzing SaaS pricing, feature matrices, and market positioning.",
+            description="Autonomous market intelligence engine analyzing equities, stock momentum, technical setups, fundamentals, and competitor landscapes.",
             capabilities=[
-                "Automated competitor discovery and feature matrix generation",
-                "SaaS and API pricing tier comparisons (seat, usage, token)",
-                "Market positioning, strengths, weaknesses & target audience analysis",
+                "Multi-wave stock & equity discovery across indices, sectors, and momentum channels",
+                "Deterministic technical indicator analysis (SMA, EMA, RSI, MACD, Volume ratio)",
+                "Multi-source evidence verification, risk analysis, and counter-evidence audits",
+                "Automated competitor discovery, SaaS pricing matrices, and positioning analysis",
                 "Downloadable structured exports in JSON, CSV, or Excel"
             ],
             orchestrator=orchestrator,
             model=model
         )
+

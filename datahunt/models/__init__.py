@@ -3,6 +3,11 @@ from datahunt.models.run import RunStatus, RunBudget, RunCounters, ResearchRun, 
 from datahunt.models.record import VerificationStatus, RetrievalStatus, SourceDocument, RecordEvidence, ExtractedRecord, ExportRecord
 from datahunt.models.intent import ResearchIntent, ResearchOutputType, ResearchIntentSpec
 from datahunt.models.job_spec import JobSearchSpec, JobSearchRequest
+from datahunt.models.market import (
+    MarketAssetType, MarketTimeHorizon, MarketRegime, ClaimType, SourceTier,
+    FreshnessCategory, MarketIntentSpec, MarketEvidence, MarketRecord,
+    CandidateStage, MarketCandidate, MarketCoverage
+)
 
 __all__ = [
     "TaskStatus", "ResearchSpec", "ResearchTask", "DateFilter", "Geography", "SourcePolicy",
@@ -10,4 +15,8 @@ __all__ = [
     "VerificationStatus", "RetrievalStatus", "SourceDocument", "RecordEvidence", "ExtractedRecord", "ExportRecord",
     "ResearchIntent", "ResearchOutputType", "ResearchIntentSpec",
     "JobSearchSpec", "JobSearchRequest",
+    "MarketAssetType", "MarketTimeHorizon", "MarketRegime", "ClaimType", "SourceTier",
+    "FreshnessCategory", "MarketIntentSpec", "MarketEvidence", "MarketRecord",
+    "CandidateStage", "MarketCandidate", "MarketCoverage",
 ]
+

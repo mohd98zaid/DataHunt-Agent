@@ -48,4 +48,6 @@ __all__ = [
     "SearchTaskType", "StopReason", "DiscoveredSourceType", "SearchTask",
     "DiscoveryBudget", "DiscoveryRoundTelemetry", "SourceCoverageMatrix",
     "DiscoveryState", "DiscoveryEngine",
+    "MarketDiscoveryEngine",
 ]
+from .market_discovery import MarketDiscoveryEngine

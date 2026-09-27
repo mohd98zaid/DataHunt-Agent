@@ -418,9 +418,112 @@ class ResearchOrchestrator:
                 )
 
             # ----------------------------------------------------
-            # 2. Searching Phase (skipped for job-mode — AgentRuntime handles it)
+            # NEW: Financial / Equity Market Intelligence uses MarketDiscoveryEngine
             # ----------------------------------------------------
-            if not _use_runtime:
+            is_equity_market = (task_mode == "market") or any(
+                k in (task.request_text or "").lower()
+                for k in ("stock", "stocks", "equity", "equities", "nse", "bse", "nifty", "sensex", "shares", "share price", "perform this week")
+            )
+            _use_market_engine = is_equity_market and not is_job_search
+
+            if _use_market_engine:
+                from datahunt.agent.market_discovery import MarketDiscoveryEngine
+                from datahunt.models.record import ExtractedRecord, RecordEvidence, VerificationStatus
+                import uuid
+
+                mkt_engine = MarketDiscoveryEngine(
+                    search_tool=self.search_tool,
+                    fetch_tool=self.fetch_tool,
+                    gemini_client=self.client,
+                )
+
+                def _mkt_emit(event_type: str, data: dict):
+                    if isinstance(data, dict):
+                        data["counters"] = counters.__dict__
+                    emit_event(event_type, data)
+
+                mkt_res = mkt_engine.run_market_research(
+                    query=task.request_text,
+                    max_runtime_seconds=settings.MAX_RUN_SECONDS,
+                    emit=_mkt_emit,
+                    run_id=run.id,
+                )
+
+                _result["market_report_markdown"] = mkt_res.get("report_markdown", "")
+                coverage_data = mkt_res.get("coverage", {})
+
+                for r_data in mkt_res.get("records", []):
+                    rec_id = f"mrec_{uuid.uuid4().hex[:12]}"
+                    fields = {
+                        "symbol": r_data.get("symbol"),
+                        "company_name": r_data.get("company_name"),
+                        "exchange": r_data.get("exchange", "NSE"),
+                        "current_price": r_data.get("current_price"),
+                        "change_1w": r_data.get("change_1w"),
+                        "sector": r_data.get("sector"),
+                        "signal_score": r_data.get("signal_score"),
+                        "evidence_confidence": r_data.get("evidence_confidence"),
+                        "signal_direction": r_data.get("signal_direction"),
+                        "bullish_evidence": r_data.get("bullish_evidence", []),
+                        "bearish_evidence": r_data.get("bearish_evidence", []),
+                        "risk_factors": r_data.get("risk_factors", []),
+                        "score_breakdown": r_data.get("score_breakdown", {}),
+                    }
+                    conf = 0.9 if r_data.get("evidence_confidence") == "HIGH" else (0.75 if r_data.get("evidence_confidence") == "MEDIUM" else 0.6)
+
+                    evi_items = []
+                    for e in r_data.get("source_evidence", []):
+                        evi_items.append(RecordEvidence(
+                            record_id=rec_id,
+                            source_document_id="",
+                            field_name="market_signal",
+                            evidence_text=e.get("claim"),
+                            locator={"source_url": e.get("source_url"), "source_tier": e.get("source_tier")},
+                        ))
+
+                    er = ExtractedRecord(
+                        id=rec_id,
+                        run_id=run.id,
+                        record_type="market_intel",
+                        identity_key=f"{r_data.get('exchange', 'NSE')}:{r_data.get('symbol')}",
+                        fields=fields,
+                        normalized_fields=fields,
+                        verification_status=VerificationStatus.VERIFIED,
+                        confidence=conf,
+                        warnings=r_data.get("risk_factors", []),
+                        evidence=evi_items,
+                    )
+                    verified_records.append(er)
+                    try:
+                        self.record_repo.insert_record(er)
+                    except Exception as re_err:
+                        logger.warning(f"Error inserting market record {er.id}: {re_err}")
+
+                final_records = verified_records
+                counters.records_extracted = coverage_data.get("candidate_count", len(final_records))
+                counters.records_verified = len(final_records)
+                counters.search_queries = len(coverage_data.get("sectors_checked", [])) + 6
+
+                for er in final_records:
+                    emit_event("record.verified", {
+                        "record_id": er.id,
+                        "status": er.verification_status.value,
+                        "confidence": er.confidence,
+                        "fields": er.fields,
+                        "warnings": er.warnings,
+                        "counters": counters.__dict__,
+                    })
+
+                logger.info(
+                    f"MarketDiscoveryEngine: {len(final_records)} verified market records "
+                    f"(stop_reason: {mkt_res.get('stop_reason', 'unknown')})",
+                    extra={"run_id": run.id},
+                )
+
+            # ----------------------------------------------------
+            # 2. Searching Phase (skipped for job-mode and market-mode)
+            # ----------------------------------------------------
+            if not _use_runtime and not _use_market_engine:
                 self.run_repo.update_run_status(run.id, RunStatus.SEARCHING)
                 emit_event("phase.change", {
                     "phase": "SEARCHING",
@@ -428,6 +531,7 @@ class ResearchOrchestrator:
                     "thought": "Running search queries",
                     "counters": counters.__dict__
                 })
+
                 candidate_urls = []
                 seen_urls = set()
 
@@ -762,8 +866,8 @@ class ResearchOrchestrator:
             # End of if not _use_runtime block
             # (job-mode already has final_records from AgentRuntime above)
 
-            # Cap runtime final_records to max_records as well
-            if _use_runtime and len(final_records) > task.max_records:
+            # Cap runtime / market final_records to max_records as well
+            if (_use_runtime or _use_market_engine) and len(final_records) > task.max_records:
                 final_records = final_records[:task.max_records]
 
             # ----------------------------------------------------
@@ -783,7 +887,7 @@ class ResearchOrchestrator:
                     text_snippet = (doc.extracted_text or "").strip()
                     if text_snippet:
                         source_excerpts.append(f"Source URL: {doc.requested_url}\n{text_snippet[:2000]}")
-                combined_source_texts = "\n\n---\n\n".join(source_excerpts)
+                    combined_source_texts = "\n\n---\n\n".join(source_excerpts)
 
             export_meta = {
                 "task_id": task.id,
@@ -796,6 +900,8 @@ class ResearchOrchestrator:
 
             if is_job_search and _use_runtime and _result.get("job_matches_markdown"):
                 summary_text = _result.get("job_matches_markdown")
+            elif _result.get("market_report_markdown"):
+                summary_text = _result.get("market_report_markdown")
             else:
                 try:
                     summary_text = self.client.summarize_run(
