@@ -97,3 +97,48 @@ def test_operator_mode_research_blocks_job_search():
     assert spec.intent == ResearchIntent.HOW_TO
     assert spec.requested_output == ResearchOutputType.ANSWER
     assert spec.intent != ResearchIntent.JOB_SEARCH
+
+
+def test_section_48_explain_software_engineers_spacecraft():
+    router = IntentRouter()
+    spec = router.classify("Explain how software engineers build spacecraft.")
+    assert spec.intent == ResearchIntent.EXPLANATION
+    assert spec.intent != ResearchIntent.JOB_SEARCH
+
+
+def test_section_48_research_spacex():
+    router = IntentRouter()
+    spec = router.classify("Research SpaceX.")
+    assert spec.intent == ResearchIntent.COMPANY_RESEARCH
+    assert spec.intent != ResearchIntent.JOB_SEARCH
+
+
+def test_section_48_what_is_langgraph():
+    router = IntentRouter()
+    spec = router.classify("What is LangGraph?")
+    assert spec.intent == ResearchIntent.EXPLANATION
+    assert spec.intent != ResearchIntent.JOB_SEARCH
+
+
+def test_section_48_find_langgraph_engineer_jobs():
+    router = IntentRouter()
+    spec = router.classify("Find LangGraph engineer jobs.")
+    assert spec.intent == ResearchIntent.JOB_SEARCH
+    assert spec.requested_output == ResearchOutputType.JOB_RESULTS
+
+
+def test_section_48_find_ai_engineer_jobs_in_uae():
+    router = IntentRouter()
+    spec = router.classify("Find AI Engineer jobs in UAE.")
+    assert spec.intent == ResearchIntent.JOB_SEARCH
+    assert spec.requested_output == ResearchOutputType.JOB_RESULTS
+
+
+def test_section_48_nse_stocks_momentum():
+    router = IntentRouter()
+    spec = router.classify("Give NSE stocks with strong momentum this week.")
+    assert spec.intent == ResearchIntent.MARKET_RESEARCH
+    assert spec.requested_output == ResearchOutputType.MARKET_INTEL
+    assert spec.intent != ResearchIntent.JOB_SEARCH
+    assert spec.intent != ResearchIntent.LIST_RESEARCH
+

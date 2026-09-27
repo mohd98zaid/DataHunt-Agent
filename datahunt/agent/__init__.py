@@ -21,7 +21,7 @@ from .discovery_models import (
     SourceCoverageMatrix,
     DiscoveryState,
 )
-from .discovery_engine import DiscoveryEngine
+from .research_discovery import ResearchDiscoveryEngine, classify_research_source, ResearchSourceTier
 from agent import (
     BaseAgent,
     ResearchOrchestrator,
@@ -48,6 +48,8 @@ __all__ = [
     "SearchTaskType", "StopReason", "DiscoveredSourceType", "SearchTask",
     "DiscoveryBudget", "DiscoveryRoundTelemetry", "SourceCoverageMatrix",
     "DiscoveryState", "DiscoveryEngine",
+    "ResearchDiscoveryEngine", "classify_research_source", "ResearchSourceTier",
     "MarketDiscoveryEngine",
 ]
 from .market_discovery import MarketDiscoveryEngine
+from .discovery_engine import DiscoveryEngine

@@ -240,6 +240,24 @@ class MarketDiscoveryEngine:
             )
             final_records.append(rec)
 
+        # Build canonical Evidence objects for shared cross-agent data layer
+        from datahunt.models.evidence import Evidence
+        canonical_evidence: List[Evidence] = []
+        for cand in final_candidates:
+            for me in cand.evidence_items:
+                tier_val = getattr(me.source_tier, "value", str(me.source_tier))
+                conf_val = 0.95 if tier_val in ("EXCHANGE_OFFICIAL", "REGULATORY_FILING") else 0.80
+                canonical_evidence.append(Evidence(
+                    claim=me.claim,
+                    source_url=me.source_url,
+                    source_title=me.source_name,
+                    source_type=tier_val,
+                    confidence=conf_val,
+                    sentiment=me.sentiment,
+                    is_counter_evidence=me.is_counter_evidence,
+                    metadata={"symbol": cand.symbol, "company": cand.company_name}
+                ))
+
         # ---------------------------------------------------------
         # STAGE 13: Final Synthesis (LangSmith: FinalSynthesis)
         # ---------------------------------------------------------
@@ -261,6 +279,7 @@ class MarketDiscoveryEngine:
             "intent": intent.model_dump(),
             "coverage": coverage.model_dump(),
             "records": [r.model_dump() for r in final_records],
+            "evidence": canonical_evidence,
             "report_markdown": synthesis_markdown,
             "stop_reason": stop_reason,
             "duration_seconds": round(duration, 2),

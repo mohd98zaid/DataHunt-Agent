@@ -9,14 +9,19 @@ from datahunt.models.market import (
     CandidateStage, MarketCandidate, MarketCoverage
 )
 
+from datahunt.models.evidence import Evidence
+from datahunt.models.job_record import JobRecord
+
 __all__ = [
     "TaskStatus", "ResearchSpec", "ResearchTask", "DateFilter", "Geography", "SourcePolicy",
     "RunStatus", "RunBudget", "RunCounters", "ResearchRun", "ToolEvent", "ToolEventStatus",
     "VerificationStatus", "RetrievalStatus", "SourceDocument", "RecordEvidence", "ExtractedRecord", "ExportRecord",
     "ResearchIntent", "ResearchOutputType", "ResearchIntentSpec",
-    "JobSearchSpec", "JobSearchRequest",
+    "JobSearchSpec", "JobSearchRequest", "JobRecord",
+    "Evidence",
     "MarketAssetType", "MarketTimeHorizon", "MarketRegime", "ClaimType", "SourceTier",
     "FreshnessCategory", "MarketIntentSpec", "MarketEvidence", "MarketRecord",
     "CandidateStage", "MarketCandidate", "MarketCoverage",
 ]
+
 

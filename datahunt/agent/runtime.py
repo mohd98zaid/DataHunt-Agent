@@ -64,23 +64,28 @@ class AgentRuntime:
         if state.mode in ("jobs", "job"):
             emit("status", {"message": "Intent: JOB_SEARCH", "phase": "PLANNING"})
             if not state.canonical_job_request:
-                try:
-                    from datahunt.agents import QueryUnderstandingAgent, JobSearchRequest
-                    qu_agent = QueryUnderstandingAgent(gemini_client=self.client)
-                    job_req = qu_agent.understand(state.request)
-                    if isinstance(job_req, JobSearchRequest):
-                        state.canonical_job_request = job_req
-                        state.explicit_titles = [job_req.job_title] if job_req.job_title else []
-                        state.explicit_skills = job_req.explicit_skills
-                        state.inferred_skills = job_req.inferred_skills
-                        state.locations = job_req.locations
-                        state.location_operator = job_req.location_operator
-                        state.explicit_location = job_req.location
-                        state.explicit_experience_min = job_req.experience_min
-                        state.explicit_experience_max = job_req.experience_max
-                        state.remote_allowed = job_req.remote_allowed
-                except Exception as e:
-                    logger.warning(f"Could not build canonical job request: {e}")
+                if not state.request or not state.request.strip():
+                    raise ValueError("Job search query (raw_query) cannot be empty")
+                from datahunt.agents import QueryUnderstandingAgent, JobSearchRequest
+                qu_agent = QueryUnderstandingAgent(gemini_client=self.client)
+                job_req = qu_agent.understand(state.request)
+                if not isinstance(job_req, JobSearchRequest):
+                    raise ValueError(f"Failed to parse valid JobSearchRequest from query: {state.request}")
+                state.canonical_job_request = job_req
+            else:
+                if not getattr(state.canonical_job_request, "raw_query", "").strip():
+                    raise ValueError("canonical_job_request.raw_query cannot be empty")
+                job_req = state.canonical_job_request
+
+            state.explicit_titles = [job_req.job_title] if job_req.job_title else []
+            state.explicit_skills = job_req.explicit_skills
+            state.inferred_skills = job_req.inferred_skills
+            state.locations = job_req.locations
+            state.location_operator = job_req.location_operator
+            state.explicit_location = job_req.location
+            state.explicit_experience_min = job_req.experience_min
+            state.explicit_experience_max = job_req.experience_max
+            state.remote_allowed = job_req.remote_allowed
 
             from .discovery_models import (
                 SearchTaskType,
@@ -610,26 +615,7 @@ class AgentRuntime:
 
         emit("status", {"message": f"Verifying {len(unverified)} candidates", "phase": "VERIFYING"})
         geo_name = state.explicit_location
-
-        # Ensure canonical job request exists for jobs mode
         job_req = state.canonical_job_request
-        if state.mode in ("jobs", "job") and not job_req:
-            try:
-                from datahunt.agents.query_understanding import JobSearchRequest
-                job_req = JobSearchRequest(
-                    raw_query=state.request,
-                    job_title=state.explicit_titles[0] if state.explicit_titles else "",
-                    locations=state.locations or ([state.explicit_location] if state.explicit_location else []),
-                    location_operator=state.location_operator or "OR",
-                    experience_min=state.explicit_experience_min,
-                    experience_max=state.explicit_experience_max,
-                    skills=state.explicit_skills,
-                    inferred_skills=state.inferred_skills,
-                    remote_allowed=state.remote_allowed if state.remote_allowed is not None else True,
-                )
-                state.canonical_job_request = job_req
-            except Exception as e:
-                logger.warning(f"Error creating fallback JobSearchRequest: {e}")
 
         for rec in unverified:
             if state.deadline > 0 and time.time() >= state.deadline:
@@ -686,25 +672,7 @@ class AgentRuntime:
         state.status = AgentStatus.ANALYZING
         target_records = state.qualified_records if state.qualified_records else state.verified_records
         emit("status", {"message": f"Analyzing {len(target_records)} results", "phase": "ANALYZING"})
-
         job_req = state.canonical_job_request
-        if not job_req and state.mode in ("jobs", "job"):
-            try:
-                from datahunt.agents.query_understanding import JobSearchRequest
-                job_req = JobSearchRequest(
-                    raw_query=state.request,
-                    job_title=state.explicit_titles[0] if state.explicit_titles else "",
-                    locations=state.locations or ([state.explicit_location] if state.explicit_location else []),
-                    location_operator=state.location_operator or "OR",
-                    experience_min=state.explicit_experience_min,
-                    experience_max=state.explicit_experience_max,
-                    skills=state.explicit_skills,
-                    inferred_skills=state.inferred_skills,
-                    remote_allowed=state.remote_allowed if state.remote_allowed is not None else True,
-                )
-                state.canonical_job_request = job_req
-            except Exception as e:
-                logger.warning(f"Error building JobSearchRequest for analysis: {e}")
 
         try:
             from datahunt.agents import DataNormalizer, HardFilter, JobAnalysisAgent
@@ -794,9 +762,70 @@ class AgentRuntime:
 
         result_status = "completed" if len(final_records) >= state.target_results else ("partial" if final_records else "failed")
 
+        # Transform to canonical JobRecord list if in jobs mode
+        canonical_job_records = []
+        if state.mode in ("jobs", "job"):
+            from datahunt.models.job_record import JobRecord
+            from datahunt.models.evidence import Evidence
+            import uuid
+            for r in final_records:
+                f = getattr(r, "fields", {}) or {}
+                ev_list = []
+                for ev in getattr(r, "evidence", []) or []:
+                    if isinstance(ev, Evidence):
+                        ev_list.append(ev)
+                    elif isinstance(ev, dict):
+                        ev_list.append(Evidence(
+                            claim=ev.get("claim") or ev.get("snippet", ""),
+                            source_url=ev.get("source_url") or ev.get("url", ""),
+                            source_title=ev.get("source_title", ""),
+                            source_type=ev.get("source_type", "web_page"),
+                            confidence=float(ev.get("confidence", 0.9)),
+                        ))
+                src_url = f.get("job_url") or f.get("apply_url") or getattr(r, "canonical_url", "")
+                if not ev_list and src_url:
+                    ev_list.append(Evidence(
+                        claim=f"{f.get('title', 'Job')} at {f.get('company', 'Company')} ({f.get('location', 'Location')})",
+                        source_url=src_url,
+                        source_title=f.get("source", "Job Posting"),
+                        source_type="job_board",
+                        confidence=float(getattr(r, "confidence", 0.85) or 0.85),
+                    ))
+
+                conf = getattr(r, "confidence", 0.0) or 0.0
+                m_score = round(conf * 100.0 if conf <= 1.0 else conf, 1)
+
+                canonical_job_records.append(JobRecord(
+                    id=getattr(r, "id", f"job_{uuid.uuid4().hex[:12]}"),
+                    title=f.get("title") or f.get("job_title", ""),
+                    company=f.get("company", ""),
+                    location=f.get("location", ""),
+                    url=src_url,
+                    canonical_url=getattr(r, "canonical_url", "") or src_url,
+                    source=f.get("source", "Web"),
+                    source_type=f.get("source_type", "job_board"),
+                    description=f.get("description"),
+                    posted_at=f.get("posted_at"),
+                    experience_min=f.get("experience_min"),
+                    experience_max=f.get("experience_max"),
+                    explicit_skills=f.get("explicit_skills") or [],
+                    responsibilities=f.get("responsibilities") or [],
+                    salary_min=f.get("salary_min"),
+                    salary_max=f.get("salary_max"),
+                    salary_currency=f.get("salary_currency", "USD"),
+                    verification_status=getattr(r, "verification_status", "verified") if isinstance(getattr(r, "verification_status", None), str) else getattr(getattr(r, "verification_status", None), "value", "verified"),
+                    qualification_status="QUALIFIED",
+                    qualification_reasons=f.get("match_explanation", "").split("; ") if f.get("match_explanation") else [],
+                    match_score=m_score,
+                    score_breakdown=f.get("score_breakdown") or {},
+                    evidence=ev_list,
+                    raw_fields=f,
+                ))
+
         return {
             "status": result_status,
             "records": final_records,
+            "job_records": canonical_job_records,
             "records_verified": len(state.verified_records),
             "records_qualified": len(final_records),
             "records_rejected": len(state.rejected_records),

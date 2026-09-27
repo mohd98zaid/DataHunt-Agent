@@ -123,7 +123,8 @@ class IntentRouter:
         return deterministic_spec
 
     def _classify_deterministic(self, query: str, mode: str) -> ResearchIntentSpec:
-        q_lower = query.lower()
+        q_clean = (query or "").strip(" .?!\"'")
+        q_lower = q_clean.lower()
 
         # Check for News / Current Status
         if re.search(r"\b(?:latest\s+news|recent\s+news|breaking\s+news|news\s+about|latest\s+updates?)\b", q_lower):
@@ -232,7 +233,13 @@ class IntentRouter:
             )
 
         # Check for Company Research
-        if re.search(r"\b(?:company\s+profile|valuation\s+of|who\s+owns|about\s+company|funding\s+round|revenue\s+of)\b", q_lower):
+        if (
+            re.search(r"\b(?:company\s+profile|valuation\s+of|who\s+owns|about\s+company|funding\s+round|revenue\s+of)\b", q_lower)
+            or (
+                re.search(r"^(?:research|deep\s+dive\s+into|profile\s+of|analyze)\s+([A-Za-z0-9_\-\s]+)$", q_clean, re.IGNORECASE)
+                and not re.search(r"\b(?:how\s+to|what\s+is|why|stocks?|market|nse|bse|jobs?|salary|vs|difference)\b", q_lower)
+            )
+        ):
             return ResearchIntentSpec(
                 raw_query=query,
                 intent=ResearchIntent.COMPANY_RESEARCH,
@@ -245,8 +252,19 @@ class IntentRouter:
                 reason="Matched company research pattern"
             )
 
-        # Check for Market Research
-        if re.search(r"\b(?:market\s+size|market\s+share|market\s+analysis|industry\s+trends|cagr|tam\b|sam\b)\b", q_lower):
+        # Check for Market Research / Equities / Stocks (before general list research)
+        is_market_query = bool(
+            re.search(
+                r"\b(?:market\s+size|market\s+share|market\s+analysis|industry\s+trends|cagr|tam\b|sam\b|stock\s+market|equity\s+market|financial\s+markets?)\b",
+                q_lower
+            )
+            or (
+                re.search(r"\b(?:stocks?|equit(?:y|ies)|shares?|momentum\s+stocks?|stock\s+picks?)\b", q_lower)
+                and re.search(r"\b(?:nse|bse|nifty|sensex|nasdaq|nyse|s&p|sp500|perform(?:ing)?|momentum|bullish|bearish|breakout|setup|picks?|market|weekly|portfolio|rally)\b", q_lower)
+            )
+            or re.search(r"\b(?:nse|bse|nifty|sensex)\b", q_lower)
+        )
+        if is_market_query:
             return ResearchIntentSpec(
                 raw_query=query,
                 intent=ResearchIntent.MARKET_RESEARCH,
@@ -256,7 +274,7 @@ class IntentRouter:
                 requires_current_information=True,
                 answer_style="dossier",
                 requested_output=ResearchOutputType.MARKET_INTEL,
-                reason="Matched market research pattern"
+                reason="Matched market / equity research pattern"
             )
 
         # Check for List Research
@@ -274,10 +292,16 @@ class IntentRouter:
             )
 
         # Check for Job Search (requires strong explicit job seeking verbs/phrases)
-        is_explicit_job_search = bool(re.search(
-            r"\b(?:find\s+(?:me\s+)?jobs?|job\s+(?:openings?|vacanc(?:y|ies)|listings?|opportunities|leads?|hunt|search)|hiring\s+(?:for|now)|open\s+positions?|apply\s+(?:for|to)\s+jobs?|careers?\s+at|recruiting\s+for|work\s+as\s+a(?:n)?)\b",
-            q_lower
-        ) or re.search(r"\b(?:jobs?\s+(?:in|for|at|around)|remote\s+[a-z\s]+jobs?|[a-z\s]+jobs?\s+hiring)\b", q_lower))
+        is_explicit_job_search = bool(
+            re.search(
+                r"\b(?:find\s+(?:me\s+)?(?:[a-z0-9_\-\s]{1,40}\s+)?jobs?|job\s+(?:openings?|vacanc(?:y|ies)|listings?|opportunities|leads?|hunt|search)|hiring\s+(?:for|now)|open\s+positions?|apply\s+(?:for|to)\s+jobs?|careers?\s+at|recruiting\s+for|work\s+as\s+a(?:n)?)\b",
+                q_lower
+            )
+            or re.search(
+                r"\b(?:jobs?\s+(?:in|for|at|around)|remote\s+[a-z\s]+jobs?|[a-z\s]+jobs?\s+hiring|(?:engineer|developer|scientist|manager|designer|architect|lead)\s+jobs?)\b",
+                q_lower
+            )
+        )
 
         if is_explicit_job_search and mode != "research":
             return ResearchIntentSpec(

@@ -521,9 +521,76 @@ class ResearchOrchestrator:
                 )
 
             # ----------------------------------------------------
-            # 2. Searching Phase (skipped for job-mode and market-mode)
+            # NEW: Technical & Deep Research uses ResearchDiscoveryEngine
             # ----------------------------------------------------
-            if not _use_runtime and not _use_market_engine:
+            _use_research_engine = not _use_runtime and not _use_market_engine
+            if _use_research_engine:
+                from datahunt.agent.research_discovery import ResearchDiscoveryEngine
+
+                res_engine = ResearchDiscoveryEngine(
+                    search_tool=self.search_tool,
+                    fetch_tool=self.fetch_tool,
+                    gemini_client=self.client,
+                )
+
+                def _res_emit(event_type: str, data: dict):
+                    if event_type == "phase.change":
+                        emit_event("phase.change", {
+                            "phase": data.get("phase", "RUNNING"),
+                            "message": data.get("message", ""),
+                            "thought": data.get("thought", ""),
+                            "counters": counters.__dict__,
+                        })
+                    else:
+                        emit_event(event_type, data)
+
+                remaining_sec = max(10, int(deadline - time.time()))
+                res_output = res_engine.run_research(
+                    query=task.request_text,
+                    intent_spec=intent_spec,
+                    max_runtime_seconds=remaining_sec,
+                    emit=_res_emit,
+                    run_id=run.id,
+                )
+
+                final_records = res_output.get("records", [])
+                verified_records = final_records
+                fetched_docs = res_output.get("source_documents", [])
+                synthesized_research_report = res_output.get("answer_markdown", "")
+                _result["research_report_markdown"] = synthesized_research_report
+
+                counters.search_queries = len(res_output.get("queries_executed", []))
+                counters.pages_fetched = res_output.get("pages_fetched", 0)
+                counters.records_verified = len(final_records)
+                counters.records_extracted = len(final_records)
+
+                for doc in fetched_docs:
+                    try:
+                        self.doc_repo.upsert_document(doc)
+                    except Exception as de:
+                        logger.warning(f"Error persisting source doc: {de}")
+
+                for rec in final_records:
+                    try:
+                        self.record_repo.insert_record(rec)
+                    except Exception as re:
+                        logger.warning(f"Error persisting research record: {re}")
+
+                for doc in fetched_docs[:8]:
+                    snippet = (doc.extracted_text or "").strip()
+                    if snippet:
+                        combined_source_texts += f"Source URL: {doc.requested_url}\n{snippet[:2000]}\n\n---\n\n"
+
+                logger.info(
+                    f"ResearchDiscoveryEngine: {len(final_records)} records, {counters.pages_fetched} pages "
+                    f"(stop_reason: {res_output.get('stop_reason', 'unknown')})",
+                    extra={"run_id": run.id},
+                )
+
+            # ----------------------------------------------------
+            # 2. Searching Phase (legacy fallback only)
+            # ----------------------------------------------------
+            if not _use_runtime and not _use_market_engine and not _use_research_engine:
                 self.run_repo.update_run_status(run.id, RunStatus.SEARCHING)
                 emit_event("phase.change", {
                     "phase": "SEARCHING",
@@ -866,8 +933,8 @@ class ResearchOrchestrator:
             # End of if not _use_runtime block
             # (job-mode already has final_records from AgentRuntime above)
 
-            # Cap runtime / market final_records to max_records as well
-            if (_use_runtime or _use_market_engine) and len(final_records) > task.max_records:
+            # Cap runtime / market / research final_records to max_records as well
+            if (_use_runtime or _use_market_engine or _use_research_engine) and len(final_records) > task.max_records:
                 final_records = final_records[:task.max_records]
 
             # ----------------------------------------------------
@@ -902,6 +969,8 @@ class ResearchOrchestrator:
                 summary_text = _result.get("job_matches_markdown")
             elif _result.get("market_report_markdown"):
                 summary_text = _result.get("market_report_markdown")
+            elif _result.get("research_report_markdown"):
+                summary_text = _result.get("research_report_markdown")
             else:
                 try:
                     summary_text = self.client.summarize_run(
