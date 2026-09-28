@@ -12,6 +12,44 @@ const selectedLocations = new Set();
 const selectedDates = new Set();
 const selectedInterviewStages = new Set();
 
+// ── Performance: debounce + caches ────────────────────────────────────
+/** Returns a debounced version of fn that fires after `wait` ms of inactivity. */
+function debounce(fn, wait) {
+  let timer;
+  return function(...args) {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn.apply(this, args), wait);
+  };
+}
+
+/** Cached formatted location strings keyed by raw location string. */
+const _locationCache = new Map();
+function formatLocationDisplayCached(rawLoc) {
+  if (_locationCache.has(rawLoc)) return _locationCache.get(rawLoc);
+  const result = formatLocationDisplay(rawLoc);
+  _locationCache.set(rawLoc, result);
+  return result;
+}
+
+/** Pending rAF handle for batched table renders. */
+let _renderPending = false;
+let _renderJobs = null;
+
+/** Schedule a renderTable via requestAnimationFrame to avoid mid-frame reflows. */
+function scheduleRender(jobs) {
+  _renderJobs = jobs;
+  if (!_renderPending) {
+    _renderPending = true;
+    requestAnimationFrame(() => {
+      _renderPending = false;
+      if (_renderJobs !== null) {
+        renderTable(_renderJobs);
+        _renderJobs = null;
+      }
+    });
+  }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   initTracker();
 });
@@ -66,7 +104,7 @@ function setupEventListeners() {
 
   const searchInput = document.getElementById("job-search-input");
   if (searchInput) {
-    searchInput.addEventListener("input", () => applyFilters());
+    searchInput.addEventListener("input", debounce(() => applyFilters(), 200));
   }
 
   // Filter chips (status)
@@ -287,6 +325,8 @@ function updateDropdownTrigger(cfg) {
   }
 }
 
+const _debouncedApplyFilters = debounce(() => applyFilters(), 80);
+
 window.handleOptionToggle = function(type, checkbox) {
   const cfg = getDropdownConfig(type);
   if (!cfg) return;
@@ -300,7 +340,7 @@ window.handleOptionToggle = function(type, checkbox) {
   }
 
   updateDropdownTrigger(cfg);
-  applyFilters();
+  _debouncedApplyFilters();  // batch rapid checkbox ticks into one render
 };
 
 function resetAllFilters() {
@@ -376,6 +416,7 @@ async function loadJobs() {
     const res = await fetch("/api/jobs?limit=500");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     allJobs = await res.json();
+    _locationCache.clear();  // invalidate cached location parses for new data
     populateFilterDropdowns(allJobs);
     updateStatPills(allJobs);
     applyFilters();
@@ -539,16 +580,17 @@ function applyFilters() {
     const f = job.fields || {};
     const title = (f.title || f.name || "").toLowerCase();
     const company = (f.company || job.domain || "").toLowerCase();
-    const cleanLocation = formatLocationDisplay(f.location);
+    // Use cached location parse — avoids JSON.parse on every filter call
+    const cleanLocation = formatLocationDisplayCached(f.location);
     const rawLocation = (f.location || "").toLowerCase();
     const domain = (job.domain || "").toLowerCase();
     const notes = (job.notes || "").toLowerCase();
 
     // 1. Text search
-    const matchesQuery = !query || 
-      title.includes(query) || 
-      company.includes(query) || 
-      cleanLocation.toLowerCase().includes(query) || 
+    const matchesQuery = !query ||
+      title.includes(query) ||
+      company.includes(query) ||
+      cleanLocation.toLowerCase().includes(query) ||
       rawLocation.includes(query) ||
       domain.includes(query) ||
       notes.includes(query);
@@ -577,19 +619,10 @@ function applyFilters() {
       let locMatched = false;
 
       for (const selLoc of selectedLocations) {
-        if (selLoc === "__remote__" && isRemote) {
-          locMatched = true;
-          break;
-        }
-        if (selLoc === "__onsite__" && !isRemote) {
-          locMatched = true;
-          break;
-        }
+        if (selLoc === "__remote__" && isRemote) { locMatched = true; break; }
+        if (selLoc === "__onsite__" && !isRemote) { locMatched = true; break; }
         const selLower = selLoc.toLowerCase();
-        if (cleanLocation.toLowerCase().includes(selLower) || rawLocation.includes(selLower)) {
-          locMatched = true;
-          break;
-        }
+        if (cleanLocation.toLowerCase().includes(selLower) || rawLocation.includes(selLower)) { locMatched = true; break; }
       }
       if (!locMatched) return false;
     }
@@ -608,22 +641,10 @@ function applyFilters() {
 
       let dateMatched = false;
       for (const selDate of selectedDates) {
-        if (selDate === "0sec" && is0sec) {
-          dateMatched = true;
-          break;
-        }
-        if (selDate === "24h" && effectiveSec <= 86400) {
-          dateMatched = true;
-          break;
-        }
-        if (selDate === "7d" && effectiveSec <= 7 * 86400) {
-          dateMatched = true;
-          break;
-        }
-        if (selDate === "30d" && effectiveSec <= 30 * 86400) {
-          dateMatched = true;
-          break;
-        }
+        if (selDate === "0sec" && is0sec)              { dateMatched = true; break; }
+        if (selDate === "24h" && effectiveSec <= 86400){ dateMatched = true; break; }
+        if (selDate === "7d"  && effectiveSec <= 604800){ dateMatched = true; break; }
+        if (selDate === "30d" && effectiveSec <= 2592000){ dateMatched = true; break; }
       }
       if (!dateMatched) return false;
     }
@@ -637,19 +658,20 @@ function applyFilters() {
     return true;
   });
 
-  // Update counter badge
+  // Update counter badge (cheap DOM text update)
   const countBadge = document.getElementById("filtered-count-badge");
-  if (countBadge) {
-    countBadge.textContent = `SHOWING ${filteredJobs.length} OF ${allJobs.length}`;
-  }
+  if (countBadge) countBadge.textContent = `SHOWING ${filteredJobs.length} OF ${allJobs.length}`;
 
-  // Update stat pills at the top
+  // Update stat pills (cheap, only reads pre-filtered arrays)
   updateStatPills(allJobs);
 
-  // Update select-all checkbox state
+  // Update bulk checkbox state
   updateBulkControls();
-  renderTable(filteredJobs);
+
+  // Defer full table DOM write to next animation frame to avoid mid-frame reflows
+  scheduleRender(filteredJobs);
 }
+
 
 function updateBulkControls() {
   const bulkBtn = document.getElementById("bulk-delete-btn");
@@ -725,7 +747,7 @@ function renderTable(jobs) {
     const f = job.fields || {};
     const title = f.title || f.name || "Open Position";
     const company = f.company || job.domain || "Direct Employer";
-    const location = formatLocationDisplay(f.location);
+    const location = formatLocationDisplayCached(f.location);
     const salary = f.salary || "Competitive";
     const badge = f.freshness_badge || "Recent";
     const is0sec = badge.includes("0-SEC") || badge.includes("JUST NOW");

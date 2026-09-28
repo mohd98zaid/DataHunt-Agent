@@ -190,15 +190,19 @@ class AIBotAvatar {
     const state = this.agentState;
     const col   = (this.STATE_COLORS[state] || this.STATE_COLORS.STANDBY).css;
 
-    // Background — shifts per state
+    // Background — use cached gradient per state to avoid allocating every frame
     ctx.clearRect(0, 0, w, h);
-    const bg = ctx.createRadialGradient(w / 2, h / 2, 10, w / 2, h / 2, w * 0.55);
-    if      (state === "VERIFYING"  || state === "ANALYZING")  { bg.addColorStop(0, "#1a1000"); bg.addColorStop(1, "#070400"); }
-    else if (state === "COMPLETED"  || state === "SUCCESS")    { bg.addColorStop(0, "#001a0a"); bg.addColorStop(1, "#000f05"); }
-    else if (state === "FAILED"     || state === "ERROR")      { bg.addColorStop(0, "#1a000a"); bg.addColorStop(1, "#0a0003"); }
-    else if (state === "PLANNING"   || state === "LISTENING")  { bg.addColorStop(0, "#0d0029"); bg.addColorStop(1, "#040010"); }
-    else                                                        { bg.addColorStop(0, "#091a3a"); bg.addColorStop(1, "#030a1e"); }
-    ctx.fillStyle = bg;
+    if (!this._bgGradCache || this._bgGradState !== state) {
+      const bg = ctx.createRadialGradient(w / 2, h / 2, 10, w / 2, h / 2, w * 0.55);
+      if      (state === "VERIFYING"  || state === "ANALYZING")  { bg.addColorStop(0, "#1a1000"); bg.addColorStop(1, "#070400"); }
+      else if (state === "COMPLETED"  || state === "SUCCESS")    { bg.addColorStop(0, "#001a0a"); bg.addColorStop(1, "#000f05"); }
+      else if (state === "FAILED"     || state === "ERROR")      { bg.addColorStop(0, "#1a000a"); bg.addColorStop(1, "#0a0003"); }
+      else if (state === "PLANNING"   || state === "LISTENING")  { bg.addColorStop(0, "#0d0029"); bg.addColorStop(1, "#040010"); }
+      else                                                        { bg.addColorStop(0, "#091a3a"); bg.addColorStop(1, "#030a1e"); }
+      this._bgGradCache = bg;
+      this._bgGradState = state;
+    }
+    ctx.fillStyle = this._bgGradCache;
     ctx.fillRect(0, 0, w, h);
 
     // Scanlines (subtle)
@@ -1075,7 +1079,7 @@ class AIBotAvatar {
   // ════════════════════════════════════════════════════════════════════
   animate() {
     requestAnimationFrame(() => this.animate());
-    if (document.hidden) return;
+    if (document.hidden) return;   // skip rendering entirely when tab is not visible
 
     const delta = this.clock.getDelta();
     const time  = this.clock.getElapsedTime();

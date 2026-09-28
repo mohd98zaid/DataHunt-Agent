@@ -24,39 +24,56 @@ class HUDController {
 
   resizeWaveform() {
     if (!this.waveformCanvas) return;
-    this.waveformCanvas.width = this.waveformCanvas.clientWidth * window.devicePixelRatio;
+    this.waveformCanvas.width  = this.waveformCanvas.clientWidth  * window.devicePixelRatio;
     this.waveformCanvas.height = this.waveformCanvas.clientHeight * window.devicePixelRatio;
+    // Pre-compute shared gradient so we never allocate inside the hot loop
+    this._cachedGrad = null;  // force regeneration on next paint
   }
 
   setWaveformActivity(level) {
     this.waveActivity = Math.max(0.2, Math.min(level, 1.5));
   }
 
+
+  _getGradient(y, barH) {
+    // Reuse a single gradient object (re-created only when canvas dimensions change)
+    if (!this._cachedGrad ||
+        this._gradY !== y || this._gradBarH !== barH) {
+      const h = this.waveformCanvas.height;
+      const midY = (h - barH) / 2;
+      this._cachedGrad = this.ctx.createLinearGradient(0, midY, 0, midY + barH);
+      this._cachedGrad.addColorStop(0, "rgba(0, 240, 255, 0.9)");
+      this._cachedGrad.addColorStop(1, "rgba(0, 114, 255, 0.4)");
+      this._gradY    = y;
+      this._gradBarH = barH;
+    }
+    return this._cachedGrad;
+  }
+
   animateWaveform() {
     requestAnimationFrame(() => this.animateWaveform());
+    // Skip rendering when tab is hidden — saves 60 canvas redraws/sec in background
+    if (document.hidden) return;
     if (!this.ctx || !this.waveformCanvas) return;
 
-    const width = this.waveformCanvas.width;
+    const width  = this.waveformCanvas.width;
     const height = this.waveformCanvas.height;
     this.ctx.clearRect(0, 0, width, height);
 
     const barWidth = width / this.waveformBars;
+    const now      = Date.now();
 
     for (let i = 0; i < this.waveformBars; i++) {
-      // Generate randomized organic waves influenced by waveActivity
-      const targetHeight = (Math.sin(Date.now() * 0.005 + i * 0.3) * 0.5 + 0.5) * (height * 0.7) * this.waveActivity + (Math.random() * 8);
+      const targetHeight = (Math.sin(now * 0.005 + i * 0.3) * 0.5 + 0.5) *
+                           (height * 0.7) * this.waveActivity + (Math.random() * 8);
       this.waveData[i] += (targetHeight - this.waveData[i]) * 0.2;
 
       const barH = Math.max(4, this.waveData[i]);
-      const x = i * barWidth;
-      const y = (height - barH) / 2;
+      const x    = i * barWidth;
+      const y    = (height - barH) / 2;
 
-      // Cyan to Blue Gradient
-      const grad = this.ctx.createLinearGradient(0, y, 0, y + barH);
-      grad.addColorStop(0, "rgba(0, 240, 255, 0.9)");
-      grad.addColorStop(1, "rgba(0, 114, 255, 0.4)");
-
-      this.ctx.fillStyle = grad;
+      // Use pre-computed gradient — no per-bar allocation
+      this.ctx.fillStyle = this._getGradient(y, barH);
       this.ctx.fillRect(x + 2, y, barWidth - 4, barH);
     }
   }

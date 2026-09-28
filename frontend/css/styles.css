@@ -45,6 +45,8 @@ body {
   height: 100%;
   z-index: 1;
   display: block;
+  will-change: transform;   /* GPU compositing layer — isolates Three.js from page reflows */
+  contain: strict;          /* paint + layout containment */
 }
 
 .scanline-overlay {

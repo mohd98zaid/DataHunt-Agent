@@ -521,6 +521,7 @@
 .table-scroll-area {
   overflow-x: auto;
   max-height: calc(100vh - 250px);
+  contain: content;     /* isolate table reflows from the rest of the page */
 }
 
 .jobs-table {
@@ -542,7 +543,8 @@
 .job-row {
   background: rgba(9, 14, 28, 0.6);
   border: 1px solid rgba(0, 240, 255, 0.1);
-  transition: all 0.2s ease;
+  transition: background 0.15s ease, border-color 0.15s ease;  /* was 'all 0.2s' — avoid transitioning layout props */
+  contain: layout style;  /* row self-contains its own reflows */
   cursor: pointer;
 }
 
