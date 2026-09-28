@@ -1,10 +1,10 @@
-﻿import tempfile
+import tempfile
 from pathlib import Path
 import pytest
 from datahunt.db import (
     get_connection, run_migrations,
     TaskRepository, RunRepository, DocumentRepository,
-    RecordRepository, ExportRepository
+    RecordRepository, ExportRepository, JobTrackingRepository
 )
 from datahunt.models import (
     ResearchTask, ResearchSpec, TaskStatus,
@@ -106,3 +106,64 @@ def test_repositories_crud(temp_db):
     exports = exp_repo.list_exports_for_run(run.id)
     assert len(exports) == 1
     assert exports[0].file_name == "export_test.json"
+
+
+def test_job_tracking_repository_list_jobs(temp_db):
+    run_migrations(db_path=temp_db)
+    conn_factory = lambda: get_connection(temp_db)
+    task_repo = TaskRepository(conn_factory=conn_factory)
+    run_repo = RunRepository(conn_factory=conn_factory)
+    rec_repo = RecordRepository(conn_factory=conn_factory)
+    job_repo = JobTrackingRepository(conn_factory=conn_factory)
+
+    task = ResearchTask(request_text="Jobs", normalized_spec=ResearchSpec(topic="Jobs"))
+    task_repo.create_task(task)
+    run = ResearchRun(task_id=task.id)
+    run_repo.create_run(run)
+
+    # 1. Insert multiple distinct jobs at the same company
+    r1 = ExtractedRecord(
+        id="rec_sw_ai",
+        run_id=run.id,
+        record_type="job_listing",
+        canonical_url="https://boards.greenhouse.io/devrev",
+        fields={"title": "Software Engineer - Applied AI", "company": "Devrev", "application_url": "https://job-boards.greenhouse.io/devrev/jobs/5722574004"},
+        verification_status=VerificationStatus.VERIFIED,
+        confidence=0.9
+    )
+    r2 = ExtractedRecord(
+        id="rec_fwd_ai",
+        run_id=run.id,
+        record_type="job_listing",
+        canonical_url="https://boards.greenhouse.io/devrev",
+        fields={"title": "Forward Deployed Engineer - Applied AI", "company": "Devrev", "application_url": "https://job-boards.greenhouse.io/devrev/jobs/5837052004"},
+        verification_status=VerificationStatus.NEEDS_REVIEW,
+        confidence=0.75
+    )
+    # A duplicate copy of r1
+    r1_dup = ExtractedRecord(
+        id="rec_sw_ai_dup",
+        run_id=run.id,
+        record_type="job_listing",
+        canonical_url="https://boards.greenhouse.io/devrev",
+        fields={"title": "Software Engineer - Applied AI", "company": "Devrev", "application_url": "https://job-boards.greenhouse.io/devrev/jobs/5722574004"},
+        verification_status=VerificationStatus.DUPLICATE,
+        confidence=0.9
+    )
+
+    rec_repo.insert_record(r1)
+    rec_repo.insert_record(r2)
+    rec_repo.insert_record(r1_dup)
+
+    # list_jobs with run_id
+    jobs_run = job_repo.list_jobs(run_id=run.id)
+    assert len(jobs_run) == 2  # exactly 2 unique jobs, duplicate is deduplicated
+    titles = {j["fields"]["title"] for j in jobs_run}
+    assert "Software Engineer - Applied AI" in titles
+    assert "Forward Deployed Engineer - Applied AI" in titles
+
+    # Check that the verified row was chosen for Software Engineer - Applied AI
+    sw_job = next(j for j in jobs_run if j["fields"]["title"] == "Software Engineer - Applied AI")
+    assert sw_job["id"] == "rec_sw_ai"
+    assert sw_job["verification_status"] == "verified"
+

@@ -638,7 +638,6 @@ class JobTrackingRepository:
                     OR r.fields_json LIKE '%"company"%'
                 )
                 AND r.verification_status != 'rejected'
-                AND r.verification_status != 'duplicate'
             """
             # Garbage-title exclusions at SQL level (belt-and-suspenders)
             garbage_filter = """
@@ -683,7 +682,10 @@ class JobTrackingRepository:
                                     JSON_EXTRACT(r.fields_json, '$.company_name'),
                                     d.domain, ''
                                 )))
-                            ORDER BY r.created_at DESC
+                            ORDER BY
+                                CASE WHEN r.verification_status != 'duplicate' THEN 0 ELSE 1 END,
+                                r.confidence DESC,
+                                r.created_at DESC
                         ) AS _rn
                     FROM extracted_records r
                     LEFT JOIN job_application_status s ON r.id = s.record_id

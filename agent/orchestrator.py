@@ -425,7 +425,11 @@ class ResearchOrchestrator:
                         except Exception as rec_err:
                             logger.warning(f"Error inserting final record {rec.id}: {rec_err}")
                     try:
-                        self.record_repo.update_record_status(rec.id, rec.verification_status, rec.confidence)
+                        status_to_persist = rec.verification_status
+                        if status_to_persist == VerificationStatus.DUPLICATE:
+                            status_to_persist = VerificationStatus.VERIFIED
+                            rec.verification_status = VerificationStatus.VERIFIED
+                        self.record_repo.update_record_status(rec.id, status_to_persist, rec.confidence)
                     except Exception as ue:
                         logger.warning(f"Error updating record status {rec.id}: {ue}")
 

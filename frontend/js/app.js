@@ -660,9 +660,32 @@ function renderOnPageResults(summaryMarkdown, records, query, runData) {
     queryBadge.title = queryText;
   }
 
-  const validRecords = (records || []).filter(isSubstantiveRecord);
+  const rawValid = (records || []).filter(isSubstantiveRecord);
   const isJob = isJobIntent(queryText, records);
   const isMarket = !isJob && isMarketIntent(queryText, records);
+
+  // In job mode, deduplicate cards by (title, company) so only unique opportunities are shown
+  let validRecords = rawValid;
+  if (isJob) {
+    const seenJobCards = new Set();
+    validRecords = rawValid.filter(rec => {
+      const f = rec.fields || {};
+      const t = (f.title || f.name || "").toLowerCase().trim();
+      const c = (f.company || "").toLowerCase().trim();
+      if (!t) return false;
+      const key = `${t}::${c}`;
+      if (seenJobCards.has(key)) return false;
+      seenJobCards.add(key);
+      return true;
+    });
+  }
+
+  const activeRunId = runData?.run_id || window.currentRunId || "";
+  const trackerUrl = activeRunId ? `/jobs.html?run_id=${encodeURIComponent(activeRunId)}` : '/jobs.html';
+  const trackerHeaderLink = document.getElementById("cockpit-header-tracker-link");
+  if (trackerHeaderLink && activeRunId) {
+    trackerHeaderLink.href = trackerUrl;
+  }
 
   // 1. Configure Header & Tab Labels based on Mode
   if (isJob) {
@@ -696,14 +719,20 @@ function renderOnPageResults(summaryMarkdown, records, query, runData) {
         `;
       } else {
         dossierContainer.innerHTML = `
-          <div class="job-radar-results-header">
-            <div class="job-radar-results-title">
-              <span>⚡ DIRECT ATS VERIFIED OPENINGS</span>
-              <span class="job-radar-results-count">${validRecords.length} OPPORTUNITIES LOCATED</span>
+          <div class="job-radar-results-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+            <div>
+              <div class="job-radar-results-title">
+                <span>⚡ DIRECT ATS VERIFIED OPENINGS</span>
+                <span class="job-radar-results-count">${validRecords.length} OPPORTUNITIES LOCATED</span>
+              </div>
+              <div style="font-family: 'Share Tech Mono', monospace; font-size: 12px; color: var(--text-muted); margin-top: 4px;">
+                Zero recruiter spam • High-precision radar filters applied • Direct Application Links
+              </div>
             </div>
-            <div style="font-family: 'Share Tech Mono', monospace; font-size: 12px; color: var(--text-muted); margin-top: 4px;">
-              Zero recruiter spam • High-precision radar filters applied • Direct Application Links
-            </div>
+            <a href="${trackerUrl}" target="_blank" rel="noopener noreferrer" class="table-apply-btn" style="text-decoration:none; padding: 7px 16px; font-size: 11px; display: inline-flex; align-items: center; gap: 6px; font-weight: 700; white-space: nowrap; margin-left: auto;" title="Track applications & interview stages in Job Tracker">
+              <span>⚡ VIEW IN JOB TRACKER</span>
+              <span style="font-size: 12px;">↗</span>
+            </a>
           </div>
           <div class="job-card-grid">
             ${validRecords.map(rec => {
@@ -1473,6 +1502,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
       // 2. Fetch full records to populate Knowledge Matrix and sync modal
       if (data.run_id) {
+        window.currentRunId = data.run_id;
+        const trackerHeaderLink = document.getElementById("cockpit-header-tracker-link");
+        if (trackerHeaderLink) trackerHeaderLink.href = `/jobs.html?run_id=${encodeURIComponent(data.run_id)}`;
         fetch(`/runs/${data.run_id}/records`)
           .then(res => res.json())
           .then(records => {
@@ -1667,6 +1699,9 @@ document.addEventListener("DOMContentLoaded", () => {
       const result = await response.json();
       console.log("[DataHunt] HTTP task accepted:", result);
       const runId = result.run_id;
+      window.currentRunId = runId;
+      const trackerHeaderLink = document.getElementById("cockpit-header-tracker-link");
+      if (trackerHeaderLink && runId) trackerHeaderLink.href = `/jobs.html?run_id=${encodeURIComponent(runId)}`;
 
       // Poll run status every 2 seconds until complete
       const pollInterval = setInterval(async () => {

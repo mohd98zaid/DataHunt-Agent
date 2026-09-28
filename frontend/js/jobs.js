@@ -424,14 +424,60 @@ function updateStatPills(jobs) {
   }
 }
 
-async function loadJobs() {
+function updateRunScopeBanner(runId) {
+  let banner = document.getElementById("run-scope-banner");
+  if (!runId) {
+    if (banner) banner.style.display = "none";
+    return;
+  }
+  if (!banner) {
+    const controls = document.querySelector(".tracker-controls");
+    if (controls) {
+      banner = document.createElement("div");
+      banner.id = "run-scope-banner";
+      banner.className = "run-scope-banner glass-panel";
+      banner.style.cssText = "margin-bottom: 12px; background: rgba(0, 240, 255, 0.08); border: 1px solid var(--neon-cyan); border-radius: 8px; padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;";
+      controls.parentNode.insertBefore(banner, controls);
+    }
+  }
+  if (banner) {
+    banner.style.display = "flex";
+    banner.innerHTML = `
+      <div style="display: flex; align-items: center; gap: 10px; font-family: 'Share Tech Mono', monospace; font-size: 12px; color: var(--neon-cyan);">
+        <span style="font-size: 16px;">🎯</span>
+        <span>RADAR DIRECTIVE ACTIVE: <strong style="color: #fff; letter-spacing: 0.5px;">${escapeHtml(runId)}</strong></span>
+        <span style="color: var(--text-muted); font-size: 11px;">(Showing opportunities discovered in this search)</span>
+      </div>
+      <button type="button" class="ms-btn" onclick="clearRunScopeFilter()" style="padding: 6px 14px; font-size: 11px; background: rgba(0, 240, 255, 0.15); border: 1px solid var(--neon-cyan); color: var(--neon-cyan); cursor: pointer; border-radius: 4px; font-family: 'Share Tech Mono', monospace; font-weight: 700;" title="View all tracked jobs in database">
+        <span>🌐 VIEW ALL TRACKED JOBS ➔</span>
+      </button>
+    `;
+  }
+}
+
+window.clearRunScopeFilter = function() {
+  const url = new URL(window.location);
+  url.searchParams.delete("run_id");
+  window.history.pushState({}, "", url);
+  loadJobs(null);
+};
+
+async function loadJobs(overrideRunId) {
   const tbody = document.getElementById("jobs-table-body");
   if (tbody) {
     tbody.innerHTML = `<tr><td colspan="8" class="empty-table-cell">Scanning neural database for verified jobs...</td></tr>`;
   }
 
   try {
-    const res = await fetch("/api/jobs?limit=500");
+    const urlParams = new URLSearchParams(window.location.search);
+    const runId = overrideRunId !== undefined ? overrideRunId : urlParams.get("run_id");
+    updateRunScopeBanner(runId);
+
+    const apiUrl = runId
+      ? `/api/jobs?run_id=${encodeURIComponent(runId)}&limit=500`
+      : `/api/jobs?limit=500`;
+
+    const res = await fetch(apiUrl);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     allJobs = await res.json();
     _locationCache.clear();  // invalidate cached location parses for new data

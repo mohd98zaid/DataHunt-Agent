@@ -1,8 +1,93 @@
+import re
+from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional
 from datahunt.logger import logger
 from datahunt.models import ExtractedRecord, VerificationStatus
 from datahunt.tools.base import ToolResult
 from datahunt.tools.search import canonicalize_url, generate_job_fingerprint
+
+
+def is_board_or_directory_url(url: Optional[str]) -> bool:
+    """
+    Return True if URL is an index, aggregate, board root, or multi-job listing page
+    rather than a direct, specific job opening.
+    Such URLs must never be used as standalone deduplication keys across individual jobs.
+    """
+    if not url:
+        return True
+    u_lower = str(url).lower().strip()
+    try:
+        parsed = urlparse(u_lower)
+    except Exception:
+        return True
+    hostname = parsed.hostname or ""
+    path = parsed.path.rstrip("/")
+    segments = [s for s in path.split("/") if s]
+
+    if not segments:
+        return True
+
+    # Greenhouse: boards.greenhouse.io/<company> is a board; specific job has /jobs/\d+ or gh_jid=\d+ or /job/
+    if "greenhouse.io" in hostname:
+        has_job_id = bool(
+            re.search(r"/jobs/\d+", path)
+            or re.search(r"gh_jid=\d+", parsed.query)
+            or re.search(r"/job\b", path)
+        )
+        return not has_job_id
+
+    # Lever: jobs.lever.co/<company> is a board; specific job has at least 2 segments
+    if "lever.co" in hostname:
+        return len(segments) < 2
+
+    # Ashby: jobs.ashbyhq.com/<company> is a board; specific job has at least 2 segments
+    if "ashbyhq.com" in hostname:
+        return len(segments) < 2
+
+    # Workable: apply.workable.com/<company> is a board; specific job has /j/<id>
+    if "workable.com" in hostname:
+        return not bool(re.search(r"/j/[a-z0-9]+", path))
+
+    # General directory/career board patterns
+    last_seg = segments[-1] if segments else ""
+    if last_seg in ("careers", "jobs", "openings", "vacancies", "all-jobs", "positions", "search", "browse"):
+        return True
+    if path in ("/careers", "/jobs", "/openings", "/vacancies", "/about/careers", "/en/careers", "/us/careers"):
+        return True
+
+    return False
+
+
+def are_titles_compatible(t1: Optional[str], t2: Optional[str]) -> bool:
+    """
+    Return True if two job titles represent the same or substantially compatible role.
+    Distinct roles (e.g. 'Customer Engineer' vs 'Software Engineer - Applied AI') return False.
+    """
+    if not t1 or not t2:
+        return True
+    str1 = str(t1).strip().lower()
+    str2 = str(t2).strip().lower()
+    if str1 == str2:
+        return True
+    c1 = re.sub(r'[^a-z0-9]', '', str1)
+    c2 = re.sub(r'[^a-z0-9]', '', str2)
+    if c1 == c2:
+        return True
+    # Substring match if length ratio is very close (e.g. title with vs without trailing location/seniority)
+    if (c1 in c2 or c2 in c1) and min(len(c1), len(c2)) / max(len(c1), len(c2)) >= 0.75:
+        return True
+    STOP_WORDS = {
+        'and', 'or', 'in', 'at', 'the', 'of', 'for', 'a', 'an', 'to', 'with', 'on', 'by',
+        'senior', 'sr', 'junior', 'jr', 'lead', 'staff', 'principal', 'intern', 'remote',
+        'hybrid', 'onsite', 'fulltime', 'parttime'
+    }
+    toks1 = set(re.findall(r'[a-z0-9]+', str1)) - STOP_WORDS
+    toks2 = set(re.findall(r'[a-z0-9]+', str2)) - STOP_WORDS
+    if not toks1 or not toks2:
+        return True
+    overlap = toks1.intersection(toks2)
+    union = toks1.union(toks2)
+    return len(overlap) / len(union) >= 0.5
 
 
 def is_preferred_application_url(url: Optional[str]) -> bool:
@@ -28,8 +113,8 @@ def deduplicate_normalized_jobs(jobs: List[Any]) -> List[Any]:
     """
     Multi-level job deduplication:
     Level 1: source + source_job_id (if both present)
-    Level 2: canonical apply_url
-    Level 3: canonical job_url
+    Level 2: canonical apply_url (specific job opening only)
+    Level 3: canonical job_url (specific job opening only)
     Level 4: normalized company + normalized title + normalized location
     Collapses duplicates into ONE job, preserving all sources and source URLs,
     and preferring company careers / direct ATS as primary application URL.
@@ -42,7 +127,6 @@ def deduplicate_normalized_jobs(jobs: List[Any]) -> List[Any]:
     merged_urls: Dict[str, List[str]] = {}
 
     for job in jobs:
-        # Determine candidate keys across tiers
         keys = []
         source = getattr(job, "source", None) or (job.raw_fields.get("source") if hasattr(job, "raw_fields") else None) or ""
         s_id = getattr(job, "source_job_id", None) or getattr(job, "job_id", None)
@@ -52,13 +136,13 @@ def deduplicate_normalized_jobs(jobs: List[Any]) -> List[Any]:
         apply_u = getattr(job, "apply_url", None) or getattr(job, "primary_application_url", None)
         if apply_u:
             c_apply = canonicalize_url(apply_u)
-            if c_apply:
+            if c_apply and not is_board_or_directory_url(c_apply):
                 keys.append(f"app::{c_apply}")
 
         job_u = getattr(job, "job_url", None) or getattr(job, "canonical_url", None) or getattr(job, "source_url", None)
         if job_u:
             c_job = canonicalize_url(job_u)
-            if c_job:
+            if c_job and not is_board_or_directory_url(c_job):
                 keys.append(f"url::{c_job}")
 
         comp = getattr(job, "normalized_company", None) or getattr(job, "company", "")
@@ -71,13 +155,18 @@ def deduplicate_normalized_jobs(jobs: List[Any]) -> List[Any]:
             if city:
                 fp_city = generate_job_fingerprint(comp, title, city)
                 keys.append(f"fp_city::{fp_city}")
+            fp_title = generate_job_fingerprint(comp, title, "")
+            keys.append(f"fpt::{fp_title}")
 
-        # Find existing primary record if any key matches
+        # Find existing primary record if any key matches with compatible title
         matched_primary_id = None
         for k in keys:
             if k in canonical_map:
-                matched_primary_id = canonical_map[k]
-                break
+                cand_prim = canonical_map[k]
+                cand_title = getattr(cand_prim, "normalized_title", None) or getattr(cand_prim, "title", "")
+                if are_titles_compatible(title, cand_title):
+                    matched_primary_id = cand_prim
+                    break
 
         job_sources = list(getattr(job, "sources", []) or ([source] if source else []))
         job_urls = list(getattr(job, "all_source_urls", []) or ([job_u] if job_u else []))
@@ -108,9 +197,10 @@ def deduplicate_normalized_jobs(jobs: List[Any]) -> List[Any]:
                 if hasattr(primary, "apply_url"):
                     primary.apply_url = new_candidate_app
 
-            # Register other keys to this primary
+            # Register missing keys to this primary
             for k in keys:
-                canonical_map[k] = primary
+                if k not in canonical_map:
+                    canonical_map[k] = primary
         else:
             p_key = keys[0] if keys else f"id::{getattr(job, 'raw_id', id(job))}"
             if not getattr(job, "sources", None):
@@ -151,6 +241,10 @@ class DedupeTool:
 
         for record in records:
             keys: List[str] = []
+            comp = record.fields.get("company") or record.fields.get("company_name") or ""
+            title = record.fields.get("title") or record.fields.get("job_title") or ""
+            loc = record.fields.get("location") or ""
+
             if record.identity_key and record.identity_key.strip():
                 keys.append(f"ident::{record.identity_key.strip().lower()}")
 
@@ -164,35 +258,37 @@ class DedupeTool:
                 u_raw = record.fields.get("source_url") or record.fields.get("url") or ""
                 if u_raw:
                     canon_url = canonicalize_url(u_raw)
-            if canon_url:
+            if canon_url and not is_board_or_directory_url(canon_url):
                 keys.append(f"url::{canon_url}")
                 keys.append(f"link::{canon_url}")
 
             apply_url = record.fields.get("application_url") or record.fields.get("apply_url") or record.fields.get("primary_application_url") or ""
             if apply_url:
                 c_apply = canonicalize_url(apply_url)
-                if c_apply:
+                if c_apply and not is_board_or_directory_url(c_apply):
                     keys.append(f"app::{c_apply}")
                     keys.append(f"link::{c_apply}")
 
-            comp = record.fields.get("company") or record.fields.get("company_name") or ""
-            title = record.fields.get("title") or record.fields.get("job_title") or ""
-            loc = record.fields.get("location") or ""
             if comp and title:
                 fp = generate_job_fingerprint(comp, title, loc)
                 keys.append(f"fp::{fp}")
+                fp_title = generate_job_fingerprint(comp, title, "")
+                keys.append(f"fpt::{fp_title}")
 
             if not keys:
                 keys.append(f"id::{record.id}")
 
-            # Check if any candidate key matches an existing primary record
+            # Check if any candidate key matches an existing primary record with compatible title
             primary: Optional[ExtractedRecord] = None
             matched_key: Optional[str] = None
             for k in keys:
                 if k in canonical_map:
-                    primary = canonical_map[k]
-                    matched_key = k
-                    break
+                    cand_prim = canonical_map[k]
+                    cand_title = cand_prim.fields.get("title") or cand_prim.fields.get("job_title") or ""
+                    if are_titles_compatible(title, cand_title):
+                        primary = cand_prim
+                        matched_key = k
+                        break
 
             if primary is not None:
                 record.verification_status = VerificationStatus.DUPLICATE
@@ -267,7 +363,8 @@ class DedupeTool:
                 clusters[primary.id].append(record.id)
                 logger.info(f"Collapsed duplicate record {record.id} into canonical {primary.id} under key: {matched_key}")
                 for k in keys:
-                    canonical_map[k] = primary
+                    if k not in canonical_map:
+                        canonical_map[k] = primary
             else:
                 # Initialize sources and URLs on primary
                 init_sources = list(record.fields.get("sources", []))
