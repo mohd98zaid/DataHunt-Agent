@@ -424,7 +424,7 @@ class RecordRepository:
 
             conn.execute(
                 """
-                INSERT INTO extracted_records (
+                INSERT OR REPLACE INTO extracted_records (
                     id, run_id, source_document_id, record_type, identity_key,
                     canonical_url, fields_json, normalized_fields_json,
                     verification_status, confidence, warnings_json,
@@ -456,7 +456,7 @@ class RecordRepository:
                         ev_doc_id = doc_id
                     conn.execute(
                         """
-                        INSERT INTO record_evidence (
+                        INSERT OR REPLACE INTO record_evidence (
                             id, record_id, source_document_id, field_name, evidence_text,
                             locator_json, evidence_type, supports_value, created_at
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);

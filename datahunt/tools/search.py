@@ -1024,6 +1024,11 @@ class LLMSearchProvider:
             if not self.client.is_live:
                 return []
 
+            from datahunt.llm.gemini_client import is_model_cooling, ALL_FREE_TIER_MODELS
+            if all(is_model_cooling(m) for m in ALL_FREE_TIER_MODELS):
+                logger.debug(f"LLM search skipped for '{query}': all Gemini models in cooldown")
+                return []
+
             prompt = (
                 f"You are a web search index for research and job hunting.\n"
                 f"For the search query: '{query}'\n"
@@ -1099,34 +1104,10 @@ class HybridSearchProvider:
             return hits
 
         q_low = query.lower()
-        is_site_query = "site:" in q_low
-        is_regional = any(k in q_low for k in (
-            "saudi", "riyadh", "jeddah", "ksa", "uae", "dubai", "abu dhabi", "gulf", "qatar", "doha",
-            "kuwait", "bahrain", "oman", "mena", "india", "bangalore", "bengaluru", "mumbai", "pune",
-            "hyderabad", "delhi", "london", "uk", "singapore", "germany", "berlin", "canada", "toronto",
-            "bayt", "gulftalent", "naukri", "foundit", "reed", "totaljobs"
-        ))
         is_job = any(k in q_low for k in ("job", "jobs", "hiring", "career", "careers", "intern", "vacancy", "openings", "engineer", "developer", "remote", "architect", "lead"))
 
-        # 2. For regional or site: queries or non-job research, try LLM-assisted search discovery first
-        if is_regional or is_site_query or not is_job:
-            try:
-                hits = self.llm_search.search(
-                    query,
-                    limit=limit,
-                    page=page,
-                    freshness_days=freshness_days,
-                    allowed_domains=allowed_domains,
-                    blocked_domains=blocked_domains
-                )
-                if hits:
-                    logger.info(f"Retrieved {len(hits)} live candidate hits via LLM search provider for '{query}'")
-                    return hits
-            except Exception as e:
-                logger.debug(f"LLM search fallback failed for '{query}': {e}")
-
-        # 3. Direct job board APIs for generic/remote job queries
-        if is_job and not is_site_query:
+        # 2. For job queries: try direct live job board endpoints first (zero LLM quota cost)
+        if is_job:
             hits = self.job_board.search(
                 query,
                 limit=limit,
@@ -1139,24 +1120,23 @@ class HybridSearchProvider:
                 logger.info(f"Retrieved {len(hits)} live hits via direct job board endpoints for '{query}'")
                 return hits
 
-        # 4. If not tried yet, try LLM-assisted search discovery
-        if not (is_regional or is_site_query or not is_job):
-            try:
-                hits = self.llm_search.search(
-                    query,
-                    limit=limit,
-                    page=page,
-                    freshness_days=freshness_days,
-                    allowed_domains=allowed_domains,
-                    blocked_domains=blocked_domains
-                )
-                if hits:
-                    logger.info(f"Retrieved {len(hits)} live candidate hits via LLM search provider for '{query}'")
-                    return hits
-            except Exception as e:
-                logger.debug(f"LLM search fallback failed for '{query}': {e}")
+        # 3. Try LLM-assisted search discovery if models are available
+        try:
+            hits = self.llm_search.search(
+                query,
+                limit=limit,
+                page=page,
+                freshness_days=freshness_days,
+                allowed_domains=allowed_domains,
+                blocked_domains=blocked_domains
+            )
+            if hits:
+                logger.info(f"Retrieved {len(hits)} live candidate hits via LLM search provider for '{query}'")
+                return hits
+        except Exception as e:
+            logger.debug(f"LLM search fallback failed for '{query}': {e}")
 
-        # 5. Final deterministic fallback (mock)
+        # 4. Final deterministic fallback (mock)
         logger.info("Live search returned 0 hits across all live providers, utilizing fallback")
         return self.mock.search(
             query,

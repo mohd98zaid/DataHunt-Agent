@@ -105,6 +105,24 @@ function setupEventListeners() {
   const searchInput = document.getElementById("job-search-input");
   if (searchInput) {
     searchInput.addEventListener("input", debounce(() => applyFilters(), 200));
+    searchInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const q = searchInput.value.trim();
+        if (q && filteredJobs.length === 0) {
+          window.location.href = `/cockpit.html?mode=jobs&q=${encodeURIComponent(q)}`;
+        }
+      }
+    });
+  }
+
+  const huntLiveBtn = document.getElementById("hunt-live-btn");
+  if (huntLiveBtn) {
+    huntLiveBtn.addEventListener("click", () => {
+      const q = searchInput ? searchInput.value.trim() : "";
+      const targetQuery = q || "Find latest software engineer jobs 0-sec";
+      window.location.href = `/cockpit.html?mode=jobs&q=${encodeURIComponent(targetQuery)}`;
+    });
   }
 
   // Filter chips (status)
@@ -738,7 +756,22 @@ function renderTable(jobs) {
   if (!tbody) return;
 
   if (!jobs || jobs.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="9" class="empty-table-cell">No job listings found matching the current criteria.</td></tr>`;
+    const searchInput = document.getElementById("job-search-input");
+    const qVal = searchInput ? searchInput.value.trim() : "";
+    if (qVal) {
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="9" class="empty-table-cell" style="padding: 40px 20px; text-align: center;">
+            <div style="font-size: 15px; color: #fff; margin-bottom: 8px;">No local jobs matching "<strong>${escapeHtml(qVal)}</strong>"</div>
+            <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 18px;">The AI Agent can crawl live ATS boards (Greenhouse, Lever, Ashby, Workable) right now.</div>
+            <a href="/cockpit.html?mode=jobs&q=${encodeURIComponent(qVal)}" class="table-apply-btn" style="display: inline-flex; align-items: center; gap: 8px; padding: 10px 22px; font-size: 12px; text-decoration: none;">
+              <span>⚡ HUNT "${escapeHtml(qVal)}" LIVE ON WEB</span> ➔
+            </a>
+          </td>
+        </tr>`;
+    } else {
+      tbody.innerHTML = `<tr><td colspan="9" class="empty-table-cell">No job listings found matching the current criteria.</td></tr>`;
+    }
     return;
   }
 

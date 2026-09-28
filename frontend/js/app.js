@@ -1167,9 +1167,13 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // WebSocket
+  // WebSocket & API Base (Port & Protocol awareness)
+  const isDevPort = window.location.port && !["8000"].includes(window.location.port);
+  const isFileProto = window.location.protocol === "file:";
+  const backendHost = (isFileProto || isDevPort) ? "127.0.0.1:8000" : window.location.host;
   const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const wsUrl = `${wsProtocol}//${window.location.host}/ws/agent-stream`;
+  const wsUrl = `${wsProtocol}//${backendHost}/ws/agent-stream`;
+  window.__datahunt_apiBase = (isFileProto || isDevPort) ? "http://127.0.0.1:8000" : "";
   socket = null;
 
   let wsReconnectAttempts = 0;
@@ -1641,7 +1645,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     try {
-      const response = await fetch("/tasks", {
+      const apiBase = window.__datahunt_apiBase || "";
+      const response = await fetch(`${apiBase}/tasks`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1651,7 +1656,7 @@ document.addEventListener("DOMContentLoaded", () => {
           output_format: currentAgentMode === "research" ? "md" : "json",
           model: currentModel,
           agent_mode: currentAgentMode,
-          run_in_background: false
+          run_in_background: true
         })
       });
 
@@ -1660,24 +1665,42 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       const result = await response.json();
-      console.log("[DataHunt] HTTP run result:", result);
+      console.log("[DataHunt] HTTP task accepted:", result);
+      const runId = result.run_id;
 
-      handleAgentEvent({
-        event: "run.completed",
-        data: {
-          task_id: result.task_id,
-          run_id: result.run_id,
-          status: result.status,
-          records_verified: result.records_verified,
-          records_rejected: result.records_rejected,
-          confidence: result.confidence,
-          model: result.model,
-          model_mode: result.model_mode,
-          export_file: result.export_file,
-          summary: result.summary,
-          pages_fetched: 1
+      // Poll run status every 2 seconds until complete
+      const pollInterval = setInterval(async () => {
+        try {
+          const runRes = await fetch(`${apiBase}/runs/${runId}`);
+          if (!runRes.ok) return;
+          const runData = await runRes.json();
+          if (runData.counters) updateCounters(runData.counters);
+          if (["completed", "partial", "failed"].includes(runData.status)) {
+            clearInterval(pollInterval);
+            const recRes = await fetch(`${apiBase}/runs/${runId}/records`);
+            const records = recRes.ok ? await recRes.json() : [];
+            handleAgentEvent({
+              event: runData.status === "failed" ? "run.failed" : "run.completed",
+              data: {
+                task_id: result.task_id,
+                run_id: runId,
+                status: runData.status,
+                records_verified: runData.counters?.records_verified || records.length,
+                records_rejected: runData.counters?.records_rejected || 0,
+                confidence: runData.counters?.records_verified > 0 ? 0.95 : 0.0,
+                model: currentModel,
+                model_mode: "auto",
+                export_file: runData.exports?.[0]?.file_path || "",
+                summary: `Mission ${runData.status}. Discovered and verified ${records.length} records.`,
+                pages_fetched: runData.counters?.pages_fetched || 1
+              }
+            });
+          }
+        } catch (pollErr) {
+          console.warn("[DataHunt] Polling error:", pollErr);
         }
-      });
+      }, 2000);
+
     } catch (err) {
       console.error("[DataHunt] Run execution error:", err);
       handleAgentEvent({

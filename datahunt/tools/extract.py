@@ -1367,21 +1367,25 @@ class ExtractTool:
 
                 # 3. Try LLM extraction only if fast-path deterministic extraction found no records
                 if not raw_records and self.client and getattr(self.client, "is_live", False):
-                    try:
-                        result = self.client.extract_from_document(
-                            spec=spec,
-                            doc_text=document.extracted_text,
-                            doc_metadata=doc_meta,
-                            record_schema=record_schema
-                        )
-                        if isinstance(result, list):
-                            raw_records = result
-                        elif isinstance(result, dict):
-                            raw_records = result.get("records", [])
-                            doc_warnings = result.get("document_warnings", [])
-                    except Exception as e:
-                        logger.warning(f"Model extraction exception on document {document.id}: {e}")
-                        doc_warnings = [str(e)]
+                    from datahunt.llm.gemini_client import is_model_cooling, ALL_FREE_TIER_MODELS
+                    if all(is_model_cooling(m) for m in ALL_FREE_TIER_MODELS):
+                        logger.debug(f"Skipping LLM extraction on {document.id}: all Gemini models in cooldown")
+                    else:
+                        try:
+                            result = self.client.extract_from_document(
+                                spec=spec,
+                                doc_text=document.extracted_text,
+                                doc_metadata=doc_meta,
+                                record_schema=record_schema
+                            )
+                            if isinstance(result, list):
+                                raw_records = result
+                            elif isinstance(result, dict):
+                                raw_records = result.get("records", [])
+                                doc_warnings = result.get("document_warnings", [])
+                        except Exception as e:
+                            logger.warning(f"Model extraction exception on document {document.id}: {e}")
+                            doc_warnings = [str(e)]
 
                 # 4. Fallback for market intelligence or technical knowledge if still 0 records
                 if not raw_records:
