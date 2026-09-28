@@ -465,7 +465,7 @@ window.clearRunScopeFilter = function() {
 async function loadJobs(overrideRunId) {
   const tbody = document.getElementById("jobs-table-body");
   if (tbody) {
-    tbody.innerHTML = `<tr><td colspan="8" class="empty-table-cell">Scanning neural database for verified jobs...</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" class="empty-table-cell">Scanning neural database for verified jobs...</td></tr>`;
   }
 
   try {
@@ -487,7 +487,7 @@ async function loadJobs(overrideRunId) {
   } catch (err) {
     console.error("Failed to load jobs:", err);
     if (tbody) {
-      tbody.innerHTML = `<tr><td colspan="8" class="empty-table-cell" style="color: var(--neon-magenta);">Failed to connect to jobs database: ${err.message}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="9" class="empty-table-cell" style="color: var(--neon-magenta);">Failed to connect to jobs database: ${escapeHtml(err.message)}</td></tr>`;
     }
   }
 }
@@ -797,9 +797,21 @@ function escapeHtml(str) {
     .replace(/'/g, "&#039;");
 }
 
+function sanitizeUrl(url) {
+  if (!url) return "#";
+  try {
+    const u = new URL(url, window.location.origin);
+    return ["http:", "https:"].includes(u.protocol) ? url : "#";
+  } catch {
+    return "#";
+  }
+}
+
 function renderTable(jobs) {
   const tbody = document.getElementById("jobs-table-body");
   if (!tbody) return;
+
+  try {
 
   if (!jobs || jobs.length === 0) {
     const searchInput = document.getElementById("job-search-input");
@@ -929,7 +941,11 @@ function renderTable(jobs) {
     `;
   });
 
-  tbody.innerHTML = html;
+    tbody.innerHTML = html;
+  } catch (err) {
+    console.error("renderTable error:", err);
+    tbody.innerHTML = `<tr><td colspan="9" class="empty-table-cell" style="color: var(--neon-magenta);">Error rendering jobs: ${escapeHtml(err.message)}</td></tr>`;
+  }
 }
 
 window.deleteJob = async function(recordId, event) {
