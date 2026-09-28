@@ -622,17 +622,13 @@ class JobTrackingRepository:
     def list_jobs(self, run_id: Optional[str] = None, limit: int = 200) -> List[Dict[str, Any]]:
         conn = self.conn_factory()
         try:
-            sql = """
-                SELECT 
-                    r.id, r.run_id, r.source_document_id, r.canonical_url,
-                    r.fields_json, r.confidence, r.verification_status, r.created_at as scraped_at,
-                    s.applied_status, s.applied_at, s.interview_status, s.notes,
-                    d.title as doc_title, d.domain
-                FROM extracted_records r
-                LEFT JOIN job_application_status s ON r.id = s.record_id
-                LEFT JOIN source_documents d ON r.source_document_id = d.id
-                WHERE (
-                    r.record_type = 'job_listing' 
+            # Inner query selects all candidate job records.
+            # Outer query deduplicates by (normalized_title, company) using ROW_NUMBER so only the
+            # most recent record per (title+company) pair is returned — even if duplicates reached DB.
+            # Also filters out garbage/artifact records (title too short, known navigation artifacts).
+            base_filter = """
+                (
+                    r.record_type = 'job_listing'
                     OR r.canonical_url LIKE '%greenhouse.io%'
                     OR r.canonical_url LIKE '%lever.co%'
                     OR r.canonical_url LIKE '%ashbyhq.com%'
@@ -641,23 +637,91 @@ class JobTrackingRepository:
                     OR r.fields_json LIKE '%"employment_type"%'
                     OR r.fields_json LIKE '%"company"%'
                 )
+                AND r.verification_status != 'rejected'
+                AND r.verification_status != 'duplicate'
             """
-            params = []
+            # Garbage-title exclusions at SQL level (belt-and-suspenders)
+            garbage_filter = """
+                AND COALESCE(
+                    JSON_EXTRACT(r.fields_json, '$.title'),
+                    JSON_EXTRACT(r.fields_json, '$.name'),
+                    ''
+                ) NOT IN ('', 'Current', '# Deps', '#', 'N/A', 'None', 'Null', 'Undefined', 'Unknown')
+                AND LENGTH(TRIM(COALESCE(
+                    JSON_EXTRACT(r.fields_json, '$.title'),
+                    JSON_EXTRACT(r.fields_json, '$.name'),
+                    ''
+                ))) >= 3
+            """
+            run_filter = "AND r.run_id = :run_id" if run_id else ""
+            sql = f"""
+                SELECT * FROM (
+                    SELECT
+                        r.id, r.run_id, r.source_document_id, r.canonical_url,
+                        r.fields_json, r.confidence, r.verification_status,
+                        r.created_at as scraped_at,
+                        s.applied_status, s.applied_at, s.interview_status, s.notes,
+                        d.title as doc_title, d.domain,
+                        -- Dedup key: lower-cased (title, company) pair
+                        LOWER(TRIM(COALESCE(
+                            JSON_EXTRACT(r.fields_json, '$.title'),
+                            JSON_EXTRACT(r.fields_json, '$.name'), ''
+                        ))) AS _norm_title,
+                        LOWER(TRIM(COALESCE(
+                            JSON_EXTRACT(r.fields_json, '$.company'),
+                            JSON_EXTRACT(r.fields_json, '$.company_name'),
+                            d.domain, ''
+                        ))) AS _norm_company,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY
+                                LOWER(TRIM(COALESCE(
+                                    JSON_EXTRACT(r.fields_json, '$.title'),
+                                    JSON_EXTRACT(r.fields_json, '$.name'), ''
+                                ))),
+                                LOWER(TRIM(COALESCE(
+                                    JSON_EXTRACT(r.fields_json, '$.company'),
+                                    JSON_EXTRACT(r.fields_json, '$.company_name'),
+                                    d.domain, ''
+                                )))
+                            ORDER BY r.created_at DESC
+                        ) AS _rn
+                    FROM extracted_records r
+                    LEFT JOIN job_application_status s ON r.id = s.record_id
+                    LEFT JOIN source_documents d ON r.source_document_id = d.id
+                    WHERE {base_filter} {garbage_filter} {run_filter}
+                ) sub
+                WHERE sub._rn = 1
+                ORDER BY sub.scraped_at DESC
+                LIMIT :limit;
+            """
+            params: Dict[str, Any] = {"limit": limit}
             if run_id:
-                sql += " AND r.run_id = ?"
-                params.append(run_id)
-
-            sql += " ORDER BY r.created_at DESC LIMIT ?;"
-            params.append(limit)
+                params["run_id"] = run_id
 
             rows = conn.execute(sql, params).fetchall()
             jobs = []
             for row in rows:
                 fields = json.loads(row["fields_json"]) if row["fields_json"] else {}
+                # Prefer canonical_url (stable scrape URL) over application_url which
+                # may contain ephemeral ATS session tokens (Workable, Greenhouse, etc.)
+                raw_app_url = fields.get("application_url") or ""
+                # If the application_url is clearly a broken redirect (e.g. /oops, root domain),
+                # fall back to canonical_url so the APPLY button still goes somewhere useful.
+                def _is_good_url(u: str) -> bool:
+                    if not u or len(u) < 10:
+                        return False
+                    bad_endings = ("/oops", "/404", "/not-found", "/error")
+                    return not any(u.rstrip("/").lower().endswith(e) for e in bad_endings)
+
+                display_url = (
+                    row["canonical_url"]
+                    if _is_good_url(row["canonical_url"]) and not _is_good_url(raw_app_url)
+                    else (raw_app_url or row["canonical_url"])
+                )
                 jobs.append({
                     "id": row["id"],
                     "run_id": row["run_id"],
-                    "canonical_url": row["canonical_url"] or fields.get("application_url"),
+                    "canonical_url": display_url,
                     "fields": fields,
                     "confidence": row["confidence"],
                     "verification_status": row["verification_status"],

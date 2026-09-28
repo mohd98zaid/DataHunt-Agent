@@ -770,17 +770,59 @@ def is_substantive_record(fields: Dict[str, Any]) -> bool:
     """Validate that an extracted record contains actual factual data, not all-null or model refusal text."""
     if not fields:
         return False
+
+    # ── Garbage title / company heuristics ──────────────────────────────
+    # These patterns appear when the scraper picks up navigation links,
+    # changelog headings, or dependency-list artifacts from job-board pages.
+    _GARBAGE_VALUES = frozenset({
+        "current", "deps", "# deps", "n/a", "none", "null", "undefined",
+        "unknown", "unspecified", "tbd", "tba", "see description",
+        "competitive", "negotiable",  # alone these aren't enough
+    })
+    _GARBAGE_PREFIXES = ("#", "//", "- ", "* ", "•")
+
+    def _is_garbage_value(val: str) -> bool:
+        v = val.strip().lower()
+        if not v or len(v) < 2:
+            return True
+        if v in _GARBAGE_VALUES:
+            return True
+        if any(v.startswith(p) for p in _GARBAGE_PREFIXES):
+            return True
+        # Pure digit strings like "17" or "42" are not real job titles
+        if v.replace(".", "").isdigit():
+            return True
+        return False
+
+    title = str(fields.get("title") or fields.get("job_title") or fields.get("name") or "").strip()
+    company = str(fields.get("company") or fields.get("company_name") or "").strip()
+
+    # For records that have both title and company set, both must be non-garbage
+    if title and _is_garbage_value(title):
+        return False
+    if company and _is_garbage_value(company):
+        return False
+
+    # A job record MUST have a meaningful title (≥4 chars, not garbage)
+    # A title like "Current" (7 chars) passes the length check but fails _is_garbage_value above.
+    if title and len(title) < 3:
+        return False
+
+    # ── General substantive field count ─────────────────────────────────
     substantive_count = 0
+    _SKIP_KEYS = frozenset({"posted_age_seconds", "freshness_badge", "warnings",
+                             "reasons", "checks", "record", "evidence", "field_evidence"})
     for k, v in fields.items():
-        if k in ("posted_age_seconds", "freshness_badge", "warnings", "reasons", "checks", "record", "evidence", "field_evidence"):
+        if k in _SKIP_KEYS:
             continue
         if v is None:
             continue
         val_str = str(v).strip().lower()
         if not val_str or val_str in ("null", "none", "unknown", "unspecified", "n/a", "undefined", "{}", "[]"):
             continue
-        # Check if value is a refusal or negative finding explanation
-        if "no matching" in val_str or "all fields are correctly set to null" in val_str or "no job records exist" in val_str:
+        # Model refusal / negative finding text
+        if ("no matching" in val_str or "all fields are correctly set to null" in val_str
+                or "no job records exist" in val_str):
             continue
         substantive_count += 1
     return substantive_count >= 1
