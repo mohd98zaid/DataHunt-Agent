@@ -1181,6 +1181,13 @@ def test_repository_any_import():
     assert hasattr(repos, "RunRepository")
 
 
+def test_api_set_import():
+    """Verify that datahunt.api imports cleanly and stream_clients Set annotation does not raise NameError."""
+    import datahunt.api as api
+    assert hasattr(api, "stream_clients")
+    assert isinstance(api.stream_clients, set)
+
+
 def test_job_target_uses_qualified_not_verified():
     """
     Scenario:
