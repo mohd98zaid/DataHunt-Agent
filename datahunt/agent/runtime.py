@@ -652,6 +652,8 @@ class AgentRuntime:
                             "warnings": rec.warnings,
                         })
                     else:
+                        rec.verification_status = VerificationStatus.REJECTED
+                        rec.confidence = min(q_res.score, 0.2)
                         state.disqualified_records.append(rec)
                         state.rejected_records.append(rec)
                         disqualify_reason = "; ".join(q_res.reasons) if not q_res.qualified else "Verification status rejected"
@@ -660,17 +662,21 @@ class AgentRuntime:
                     if rec.verification_status in (VerificationStatus.VERIFIED, VerificationStatus.NEEDS_REVIEW):
                         state.verified_records.append(rec)
                     else:
+                        rec.verification_status = VerificationStatus.REJECTED
                         state.rejected_records.append(rec)
 
             except Exception as e:
                 logger.warning(f"Verify error: {e}")
+                rec.verification_status = VerificationStatus.REJECTED
                 rec.warnings.append(f"Verification error: {e}")
                 state.rejected_records.append(rec)
 
     def _act_analyze(self, state: AgentState, emit):
         """Run job analysis and ranking with deterministic qualification fallback."""
         state.status = AgentStatus.ANALYZING
-        target_records = state.qualified_records if state.qualified_records else state.verified_records
+        target_records = state.qualified_records if state.qualified_records else (
+            [] if state.mode in ("jobs", "job") else state.verified_records
+        )
         emit("status", {"message": f"Analyzing {len(target_records)} results", "phase": "ANALYZING"})
         job_req = state.canonical_job_request
 
@@ -734,6 +740,12 @@ class AgentRuntime:
             try:
                 dedup_res = self.dedupe.execute(records_to_dedupe)
                 final_records = dedup_res.data.get("unique_records", records_to_dedupe)
+                unique_ids = {r.id for r in final_records}
+                for r in records_to_dedupe:
+                    if r.id not in unique_ids:
+                        r.verification_status = VerificationStatus.DUPLICATE
+                        if hasattr(state, "duplicate_records"):
+                            state.duplicate_records.append(r)
             except Exception as e:
                 logger.warning(f"Dedupe error: {e}")
                 final_records = records_to_dedupe

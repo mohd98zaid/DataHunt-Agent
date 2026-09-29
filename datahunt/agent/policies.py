@@ -20,11 +20,18 @@ GEO_ALIAS_GROUPS = {
     "kuwait": ["kuwait", "kuwait city"],
     "bahrain": ["bahrain", "manama"],
     "oman": ["oman", "muscat"],
+    "gcc": ["gcc", "gulf", "arabian gulf", "khaleej", "remote - gcc", "remote gcc"],
+    "mena": ["mena", "middle east", "middle-east", "middle east and north africa", "near east", "remote - mena", "remote mena", "remote - middle east", "remote middle east"],
     "india": ["india", "bangalore", "bengaluru", "mumbai", "delhi", "hyderabad", "pune", "chennai", "gurgaon", "noida", "kolkata"],
     "uk": ["uk", "united kingdom", "britain", "england", "london", "manchester", "birmingham", "edinburgh", "scotland"],
     "us": ["us", "usa", "united states", "america", "san francisco", "new york", "seattle", "austin", "boston", "denver", "chicago", "california", "texas", "colorado"],
     "eu": ["germany", "france", "netherlands", "ireland", "spain", "italy", "berlin", "paris", "amsterdam", "dublin"],
     "remote": ["remote", "worldwide", "global", "anywhere", "work from home", "wfh"],
+}
+
+REGIONAL_MEMBERS = {
+    "gcc": {"saudi", "uae", "qatar", "kuwait", "bahrain", "oman", "gcc"},
+    "mena": {"saudi", "uae", "qatar", "kuwait", "bahrain", "oman", "egypt", "gcc", "mena"},
 }
 
 COUNTRY_CLUSTER_FOR = {alias: cluster for cluster, aliases in GEO_ALIAS_GROUPS.items() for alias in aliases}
@@ -100,6 +107,16 @@ def match_location(requested: Optional[Any], actual: Optional[str], remote_ok: b
     if req_clusters and act_cluster:
         if act_cluster in req_clusters:
             return MatchStatus.MATCH, f"Same region cluster: {act_cluster.upper()}"
+
+        # Regional cluster hierarchy matching (e.g. GCC/MENA)
+        if act_cluster in REGIONAL_MEMBERS:
+            if any(rc in REGIONAL_MEMBERS[act_cluster] for rc in req_clusters):
+                return MatchStatus.MATCH, f"Job region '{act_cluster.upper()}' encompasses requested location"
+
+        for rc in req_clusters:
+            if rc in REGIONAL_MEMBERS and act_cluster in REGIONAL_MEMBERS[rc]:
+                return MatchStatus.MATCH, f"Job in '{act_cluster.upper()}' is within requested region '{rc.upper()}'"
+
         return MatchStatus.MISMATCH, f"Location cluster mismatch: requested={list(req_clusters)}, found={act_cluster.upper()}"
 
     if req_clusters and not act_cluster:
@@ -159,31 +176,56 @@ def match_title_relevance(
         ("human_resources", ["hr ", "recruiter", "talent acquisition", "human resources", "people operations"]),
         ("finance_accounting", ["accountant", "auditor", "finance manager", "bookkeeper"]),
         ("qa_test", ["qa engineer", "quality assurance", "test automation", "sdit", "manual tester"]),
-        ("network_it", ["network engineer", "sysadmin", "system administrator", "desktop support", "it support"]),
+        ("network_it", ["network engineer", "sysadmin", "system administrator", "desktop support", "it support", "service desk"]),
     ]
 
     is_ai_search = any(k in req_t for k in ("genai", "generative ai", "ai engineer", "llm", "machine learning", "ml engineer", "data scientist"))
+
+    AI_OVERRIDE_TERMS = (
+        "genai", "gen ai", "generative ai", "generative-ai", "llm", "large language model",
+        "foundation model", "ai engineer", "ai developer", "ai solutions", "ai architect",
+        "ai platform", "ai researcher", "ai research", "prompt engineer", "applied ai",
+        "machine learning", "ml engineer", "deep learning", "artificial intelligence", "ai consultant"
+    )
 
     if is_ai_search:
         # Check if job title is an anti-role and does not contain GenAI/AI/LLM explicit keywords
         for track_name, bad_terms in DISQUALIFYING_TRACKS:
             if any(re.search(r'\b' + re.escape(t) + r'\b', job_t) for t in bad_terms):
-                if not any(k in job_t for k in ("genai", "generative ai", "llm", "ai engineer")):
+                if not any(k in job_t for k in AI_OVERRIDE_TERMS):
                     return MatchStatus.MISMATCH, 0.0, f"Title '{job_title}' belongs to '{track_name}' track, not requested AI/GenAI role"
 
     # GenAI specific semantic matching
     if any(k in req_t for k in ("genai", "generative ai")):
-        STRONG_GENAI_TERMS = ["genai", "gen ai", "generative ai", "generative-ai", "llm", "large language model", "foundation model"]
+        STRONG_GENAI_TERMS = [
+            "genai", "gen ai", "generative ai", "generative-ai", "llm", "large language model",
+            "large language models", "foundation model", "foundation models", "prompt engineer",
+            "prompt engineering", "rag engineer", "agentic", "ai agent", "ai agents"
+        ]
         if any(term in job_t for term in STRONG_GENAI_TERMS):
             return MatchStatus.MATCH, 1.0, f"Strong GenAI title match: '{job_title}'"
 
-        AI_ENG_TERMS = ["applied ai", "ai engineer", "artificial intelligence engineer", "ai platform engineer"]
+        AI_ENG_TERMS = [
+            "applied ai", "ai engineer", "artificial intelligence engineer", "ai platform engineer",
+            "ai developer", "ai software engineer", "ai solutions engineer", "ai solutions architect",
+            "ai architect", "ai consultant", "artificial intelligence consultant", "generative ai consultant",
+            "ai technical lead", "ai lead", "head of ai", "director of ai", "ai specialist",
+            "ai application developer", "ai infrastructure engineer", "ai systems engineer", "ai research engineer"
+        ]
         if any(term in job_t for term in AI_ENG_TERMS):
-            return MatchStatus.MATCH, 0.9, f"AI engineering role matches GenAI request: '{job_title}'"
+            return MatchStatus.MATCH, 0.95, f"AI engineering role matches GenAI request: '{job_title}'"
 
-        ML_TERMS = ["machine learning engineer", "ml engineer", "software engineer - ai", "deep learning engineer"]
+        ML_TERMS = [
+            "machine learning engineer", "ml engineer", "software engineer - ai", "deep learning engineer",
+            "nlp engineer", "natural language processing", "computer vision engineer", "ml platform engineer",
+            "mlops engineer", "applied scientist", "research scientist - ai", "ai researcher"
+        ]
         if any(term in job_t for term in ML_TERMS):
             return MatchStatus.MATCH, 0.85, f"Related ML/AI role aligns with GenAI request: '{job_title}'"
+
+        # General whole-word AI role pattern (e.g. "Software Engineer, AI" or "Engineer - AI")
+        if re.search(r'\bai\b', job_t) or re.search(r'\bgen\s*ai\b', job_t):
+            return MatchStatus.MATCH, 0.85, f"AI-focused role matches GenAI request: '{job_title}'"
 
         if "data scientist" in job_t:
             return MatchStatus.UNKNOWN, 0.4, f"Data science title '{job_title}' may have partial GenAI overlap"
@@ -205,10 +247,16 @@ def match_title_relevance(
     if req_words:
         matched_words = [w for w in req_words if w in job_t]
         overlap_ratio = len(matched_words) / len(req_words)
-        if overlap_ratio >= 0.6:
+        if overlap_ratio >= 0.5:
             return MatchStatus.MATCH, round(0.5 + 0.4 * overlap_ratio, 2), f"Title partially matches: {', '.join(matched_words)}"
         elif overlap_ratio > 0:
             return MatchStatus.UNKNOWN, 0.4, f"Weak token overlap in title: {', '.join(matched_words)}"
+    else:
+        # If all words were stop words (e.g. 'Lead Engineer', 'Senior Developer')
+        all_words = [w for w in req_t.split() if len(w) > 2]
+        matched = [w for w in all_words if w in job_t]
+        if matched and len(matched) / len(all_words) >= 0.5:
+            return MatchStatus.MATCH, 0.7, f"Title matches role terms: {', '.join(matched)}"
 
     return MatchStatus.MISMATCH, 0.0, f"Title '{job_title}' does not match requested '{req_title}'"
 
@@ -393,6 +441,8 @@ def qualify_job(
         inf_modifier = round((inf_ratio - 0.5) * 0.10, 2)
 
     total_score = round(min(max(0.40 * t_val + 0.30 * l_val + 0.15 * e_val + 0.15 * s_val + inf_modifier, 0.05), 1.0), 2)
+    if not is_qualified:
+        total_score = min(total_score, 0.20)
     score_breakdown = {
         "title": {"status": t_status.value, "score": t_val},
         "location": {"status": l_status.value, "score": l_val},

@@ -915,6 +915,11 @@ class LiveJobBoardSearchProvider:
         keywords = [w for w in search_terms.split() if w not in noise_words]
         primary_kw = keywords[0] if keywords else "software"
 
+        # Extract search query tokens and detect domain constraints
+        query_tokens = [w for w in search_terms.split() if len(w) >= 2 and w not in noise_words]
+        ai_query_terms = {"genai", "ai", "llm", "rag", "gpt", "agent", "agents", "machine", "learning", "ml", "nlp"}
+        has_ai_constraint = any(t in ai_query_terms for t in query_tokens)
+
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             "Accept": "application/json, text/plain, */*"
@@ -940,6 +945,16 @@ class LiveJobBoardSearchProvider:
                         except DataHuntError:
                             continue
                         clean_desc = re.sub(r"<[^>]+>", " ", desc).strip()
+                        combined_text = f"{title} {clean_desc}".lower()
+
+                        if has_ai_constraint:
+                            if not any(re.search(r'\b' + re.escape(t) + r'\b', combined_text) for t in ai_query_terms):
+                                continue
+                        elif query_tokens:
+                            meaningful = [t for t in query_tokens if t not in ("software", "engineer", "developer")]
+                            if meaningful and not any(t in combined_text for t in meaningful):
+                                continue
+
                         snippet_text = clean_desc[:250].strip()
                         hits.append(SearchHit(
                             url=url,
@@ -977,6 +992,16 @@ class LiveJobBoardSearchProvider:
                             except DataHuntError:
                                 continue
                             clean_desc = re.sub(r"<[^>]+>", " ", desc).strip()
+                            combined_text = f"{title} {clean_desc}".lower()
+
+                            if has_ai_constraint:
+                                if not any(re.search(r'\b' + re.escape(t) + r'\b', combined_text) for t in ai_query_terms):
+                                    continue
+                            elif query_tokens:
+                                meaningful = [t for t in query_tokens if t not in ("software", "engineer", "developer")]
+                                if meaningful and not any(t in combined_text for t in meaningful):
+                                    continue
+
                             snippet_text = clean_desc[:250].strip()
                             hits.append(SearchHit(
                                 url=url,

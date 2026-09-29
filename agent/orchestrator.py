@@ -425,13 +425,23 @@ class ResearchOrchestrator:
                         except Exception as rec_err:
                             logger.warning(f"Error inserting final record {rec.id}: {rec_err}")
                     try:
-                        status_to_persist = rec.verification_status
-                        if status_to_persist == VerificationStatus.DUPLICATE:
-                            status_to_persist = VerificationStatus.VERIFIED
-                            rec.verification_status = VerificationStatus.VERIFIED
-                        self.record_repo.update_record_status(rec.id, status_to_persist, rec.confidence)
+                        self.record_repo.update_record_status(rec.id, rec.verification_status, rec.confidence)
                     except Exception as ue:
                         logger.warning(f"Error updating record status {rec.id}: {ue}")
+
+                # Update disqualified/rejected records to REJECTED in database
+                for rec in (agent_state.rejected_records or []):
+                    try:
+                        self.record_repo.update_record_status(rec.id, VerificationStatus.REJECTED, getattr(rec, "confidence", 0.0) or 0.0)
+                    except Exception as ue:
+                        logger.warning(f"Error updating rejected record status {rec.id}: {ue}")
+
+                # Update duplicate records to DUPLICATE in database
+                for rec in (getattr(agent_state, "duplicate_records", []) or []):
+                    try:
+                        self.record_repo.update_record_status(rec.id, VerificationStatus.DUPLICATE, getattr(rec, "confidence", 0.0) or 0.0)
+                    except Exception as ue:
+                        logger.warning(f"Error updating duplicate record status {rec.id}: {ue}")
 
                 counters.records_extracted = len(persisted_record_ids)
                 counters.records_verified = len(final_records)

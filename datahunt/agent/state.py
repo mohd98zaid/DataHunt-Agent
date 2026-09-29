@@ -83,6 +83,7 @@ class AgentState:
     qualified_records: List[Any] = field(default_factory=list)
     disqualified_records: List[Any] = field(default_factory=list)
     rejected_records: List[Any] = field(default_factory=list)
+    duplicate_records: List[Any] = field(default_factory=list)
     
     observations: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
