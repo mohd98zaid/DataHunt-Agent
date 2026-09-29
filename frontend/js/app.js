@@ -331,7 +331,7 @@ function renderJobRadarUI(summaryMarkdown, records) {
   let html = `
     <div class="job-radar-results-header">
       <div class="job-radar-results-title">
-        <span>⚡ DIRECT ATS VERIFIED OPENINGS</span>
+        <span>⚡ VERIFIED JOB OPPORTUNITIES</span>
         <span class="job-radar-results-count">${validRecords.length} OPPORTUNITIES LOCATED</span>
       </div>
       <div style="font-family: 'Share Tech Mono', monospace; font-size: 12px; color: var(--text-muted); margin-top: 4px;">
@@ -344,7 +344,7 @@ function renderJobRadarUI(summaryMarkdown, records) {
   if (validRecords.length === 0) {
     html += `
       <div style="grid-column: 1 / -1; padding: 24px; text-align: center; color: var(--text-muted); font-family: 'Share Tech Mono', monospace;">
-        NO DIRECT ATS OPENINGS DETECTED FOR CURRENT QUERY.
+        NO QUALIFIED JOBS FOUND YET.
       </div>
     `;
   }
@@ -697,6 +697,76 @@ function renderOnPageResults(summaryMarkdown, records, query, runData) {
     });
   }
 
+function renderZeroResultDiagnostics(runData) {
+  const diag = runData?.diagnostics || {};
+  const c = diag.counters || {
+    search_queries: runData?.counters?.search_queries || runData?.search_iterations || 0,
+    pages_fetched: runData?.counters?.pages_fetched || runData?.pages_fetched || 0,
+    candidates: runData?.candidates || 0,
+    jobs_extracted: runData?.counters?.records_extracted || 0,
+    duplicates: runData?.counters?.records_duplicate || runData?.records_duplicate || 0,
+    verified: runData?.counters?.records_verified || runData?.records_verified || 0,
+    qualified: 0,
+    rejected: runData?.counters?.records_rejected || runData?.records_rejected || 0,
+  };
+  const rej = diag.rejection_reasons || {};
+  const src = diag.source_distribution || {};
+
+  return `
+    <div style="padding: 24px; max-width: 800px; margin: 0 auto; color: var(--text-muted); font-family: 'Share Tech Mono', monospace;">
+      <div style="font-size: 32px; margin-bottom: 8px; text-align: center;">🎯</div>
+      <div style="font-size: 16px; font-weight: 700; color: #fff; margin-bottom: 6px; text-align: center;">NO QUALIFIED JOBS FOUND YET</div>
+      <div style="font-size: 12px; margin-bottom: 20px; text-align: center; color: var(--text-muted);">
+        The agent searched regional boards, direct ATS platforms, and company career pages, but no openings met all strict qualification criteria.
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-bottom: 20px;">
+        <!-- Pipeline Counters -->
+        <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(0, 240, 255, 0.2); border-radius: 6px; padding: 14px;">
+          <div style="font-size: 11px; font-weight: 700; color: var(--neon-cyan); margin-bottom: 10px; border-bottom: 1px solid rgba(0, 240, 255, 0.15); padding-bottom: 4px;">
+            📊 EXECUTION & PIPELINE COUNTERS
+          </div>
+          <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;"><span>Search Queries:</span><strong style="color: #fff;">${escapeHtml(c.search_queries || 0)}</strong></div>
+          <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;"><span>Pages Fetched:</span><strong style="color: #fff;">${escapeHtml(c.pages_fetched || 0)}</strong></div>
+          <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;"><span>Candidates Located:</span><strong style="color: #fff;">${escapeHtml(c.candidates || 0)}</strong></div>
+          <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;"><span>Jobs Extracted:</span><strong style="color: #fff;">${escapeHtml(c.jobs_extracted || 0)}</strong></div>
+          <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;"><span>Duplicates Skipped:</span><strong style="color: #fff;">${escapeHtml(c.duplicates || 0)}</strong></div>
+          <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;"><span>Verified Records:</span><strong style="color: #fff;">${escapeHtml(c.verified || 0)}</strong></div>
+          <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;"><span>Qualified Matches:</span><strong style="color: var(--neon-green); font-weight: bold;">0</strong></div>
+          <div style="display: flex; justify-content: space-between; font-size: 11px;"><span>Rejected Candidates:</span><strong style="color: #ff5555;">${escapeHtml(c.rejected || 0)}</strong></div>
+        </div>
+
+        <!-- Rejection Reasons -->
+        <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(255, 100, 100, 0.2); border-radius: 6px; padding: 14px;">
+          <div style="font-size: 11px; font-weight: 700; color: #ff8888; margin-bottom: 10px; border-bottom: 1px solid rgba(255, 100, 100, 0.15); padding-bottom: 4px;">
+            🚫 REJECTION REASONS BREAKDOWN
+          </div>
+          <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;"><span>Location Mismatch:</span><strong style="color: #fff;">${escapeHtml(rej.location_mismatch || 0)}</strong></div>
+          <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;"><span>Title / Role Mismatch:</span><strong style="color: #fff;">${escapeHtml(rej.title_mismatch || 0)}</strong></div>
+          <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;"><span>Experience Mismatch:</span><strong style="color: #fff;">${escapeHtml(rej.experience_mismatch || 0)}</strong></div>
+          <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;"><span>Missing Explicit Skill:</span><strong style="color: #fff;">${escapeHtml(rej.missing_explicit_skill || 0)}</strong></div>
+          <div style="display: flex; justify-content: space-between; font-size: 11px;"><span>Insufficient Evidence:</span><strong style="color: #fff;">${escapeHtml(rej.insufficient_evidence || 0)}</strong></div>
+        </div>
+
+        <!-- Source Distribution -->
+        <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(168, 85, 247, 0.2); border-radius: 6px; padding: 14px;">
+          <div style="font-size: 11px; font-weight: 700; color: #c084fc; margin-bottom: 10px; border-bottom: 1px solid rgba(168, 85, 247, 0.15); padding-bottom: 4px;">
+            🌐 SOURCE DISTRIBUTION
+          </div>
+          <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;"><span>Direct ATS:</span><strong style="color: #fff;">${escapeHtml(src.direct_ats || 0)}</strong></div>
+          <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;"><span>Regional Job Boards:</span><strong style="color: #fff;">${escapeHtml(src.regional_board || 0)}</strong></div>
+          <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;"><span>Company Career Pages:</span><strong style="color: #fff;">${escapeHtml(src.company_careers || 0)}</strong></div>
+          <div style="display: flex; justify-content: space-between; font-size: 11px;"><span>Major Job Boards:</span><strong style="color: #fff;">${escapeHtml(src.major_board || 0)}</strong></div>
+        </div>
+      </div>
+
+      <div style="background: rgba(0, 240, 255, 0.05); border-left: 3px solid var(--neon-cyan); padding: 10px 14px; font-size: 11px; color: #b8cde6;">
+        💡 <strong>Suggestions:</strong> Try searching for broader titles like <em>"AI Engineer"</em> or <em>"Machine Learning Engineer"</em>, or broaden the location filters.
+      </div>
+    </div>
+  `;
+}
+
   const activeRunId = runData?.run_id || window.currentRunId || "";
   const trackerUrl = (activeRunId && validRecords.length > 0)
     ? `/jobs.html?run_id=${encodeURIComponent(activeRunId)}`
@@ -705,10 +775,10 @@ function renderOnPageResults(summaryMarkdown, records, query, runData) {
 
   // 1. Configure Header & Tab Labels based on Mode
   if (isJob) {
-    if (panelTitle) panelTitle.textContent = "🎯 0-SEC LIVE JOB RADAR & ATS DIRECTORY";
-    if (tabBtnDossier) tabBtnDossier.innerHTML = `<span>⚡ ATS JOB RADAR (<span id="tab-jobs-count">${validRecords.length}</span>)</span>`;
+    if (panelTitle) panelTitle.textContent = "🎯 LIVE JOB RADAR & VERIFIED DIRECTORY";
+    if (tabBtnDossier) tabBtnDossier.innerHTML = `<span>⚡ VERIFIED JOBS (<span id="tab-jobs-count">${validRecords.length}</span>)</span>`;
     if (tabBtnEntities) tabBtnEntities.innerHTML = `<span>📑 EXECUTIVE SUMMARY</span>`;
-    if (tabBtnSources) tabBtnSources.innerHTML = `<span>🌐 ATS PORTALS & CITATIONS (<span id="tab-sources-count">0</span>)</span>`;
+    if (tabBtnSources) tabBtnSources.innerHTML = `<span>🌐 DISCOVERED SOURCES (<span id="tab-sources-count">0</span>)</span>`;
   } else if (isMarket) {
     if (panelTitle) panelTitle.textContent = "📊 MARKET & COMPETITIVE INTELLIGENCE DOSSIER";
     if (tabBtnDossier) tabBtnDossier.innerHTML = `<span>📊 MARKET REPORT</span>`;
@@ -726,19 +796,13 @@ function renderOnPageResults(summaryMarkdown, records, query, runData) {
     // Tab 1: Render Interactive ATS Job Radar Grid
     if (dossierContainer) {
       if (validRecords.length === 0) {
-        dossierContainer.innerHTML = `
-          <div style="padding: 36px; text-align: center; color: var(--text-muted); font-family: 'Share Tech Mono', monospace;">
-            <div style="font-size: 32px; margin-bottom: 12px;">🎯</div>
-            <div style="font-size: 14px; color: #fff; margin-bottom: 6px;">NO DIRECT ATS OPENINGS DETECTED FOR CURRENT QUERY</div>
-            Try searching for broader roles like <em>"AI Engineer"</em>, <em>"Staff Python Roles"</em>, or <em>"ML Engineer"</em>.
-          </div>
-        `;
+        dossierContainer.innerHTML = renderZeroResultDiagnostics(runData);
       } else {
         dossierContainer.innerHTML = `
           <div class="job-radar-results-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
             <div>
               <div class="job-radar-results-title">
-                <span>⚡ DIRECT ATS VERIFIED OPENINGS</span>
+                <span>⚡ VERIFIED JOB OPPORTUNITIES</span>
                 <span class="job-radar-results-count">${validRecords.length} OPPORTUNITIES LOCATED</span>
               </div>
               <div style="font-family: 'Share Tech Mono', monospace; font-size: 12px; color: var(--text-muted); margin-top: 4px;">

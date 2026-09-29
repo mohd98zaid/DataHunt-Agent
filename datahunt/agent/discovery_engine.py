@@ -95,13 +95,13 @@ class DiscoveryEngine:
         target_locations: List[str] = []
         if is_gulf:
             if has_uae and not has_saudi:
-                target_locations = ["Dubai", "Abu Dhabi", "UAE"]
+                target_locations = ["Dubai", "Abu Dhabi", "Sharjah", "UAE"]
             elif has_saudi and not has_uae:
-                target_locations = ["Riyadh", "Jeddah", "Saudi Arabia"]
+                target_locations = ["Riyadh", "Jeddah", "Dammam", "Khobar", "NEOM", "Saudi Arabia"]
             elif has_qatar and not has_uae and not has_saudi:
                 target_locations = ["Doha", "Qatar"]
             else:
-                target_locations = ["Dubai", "Riyadh", "UAE", "Saudi Arabia"]
+                target_locations = ["Dubai", "Abu Dhabi", "Sharjah", "Riyadh", "Jeddah", "UAE", "Saudi Arabia"]
         elif state.locations:
             for loc in state.locations:
                 parts = re.split(r"\s+or\s+|\s*,\s*", str(loc), flags=re.IGNORECASE)
@@ -121,89 +121,7 @@ class DiscoveryEngine:
         # Alternative high-yield title for expanded discovery
         alt_role = "Generative AI Engineer" if "genai" in role_clean.lower() else ("AI Engineer" if "generative" in role_clean.lower() else None)
 
-        # 1. ATS Portals (Priority 1)
-        # Query primary hubs individually so search engines match discrete ATS postings
-        ats_hubs = target_locations[:2] if target_locations else ([primary_loc] if primary_loc else [""])
-        for hub in ats_hubs:
-            hub_suffix = f" {hub.strip()}" if hub and hub.strip() else ""
-            tasks.append(SearchTask(
-                id=f"r1_ats_{len(tasks)}",
-                task_type=SearchTaskType.ATS_SEARCH,
-                query=f'site:boards.greenhouse.io "{role_clean}"{hub_suffix}',
-                source="boards.greenhouse.io",
-                source_type=DiscoveredSourceType.ATS_PORTAL,
-                priority=1,
-                depth=0,
-                round=1,
-                reason=f"Direct ATS harvest on Greenhouse ({hub or 'Global'})",
-                location=hub or loc_str,
-            ))
-            tasks.append(SearchTask(
-                id=f"r1_ats_{len(tasks)}",
-                task_type=SearchTaskType.ATS_SEARCH,
-                query=f'site:jobs.lever.co "{role_clean}"{hub_suffix}',
-                source="jobs.lever.co",
-                source_type=DiscoveredSourceType.ATS_PORTAL,
-                priority=1,
-                depth=0,
-                round=1,
-                reason=f"Direct ATS harvest on Lever ({hub or 'Global'})",
-                location=hub or loc_str,
-            ))
-            tasks.append(SearchTask(
-                id=f"r1_ats_{len(tasks)}",
-                task_type=SearchTaskType.ATS_SEARCH,
-                query=f'site:apply.workable.com "{role_clean}"{hub_suffix}',
-                source="apply.workable.com",
-                source_type=DiscoveredSourceType.ATS_PORTAL,
-                priority=1,
-                depth=0,
-                round=1,
-                reason=f"Direct ATS harvest on Workable ({hub or 'Global'})",
-                location=hub or loc_str,
-            ))
-            tasks.append(SearchTask(
-                id=f"r1_ats_{len(tasks)}",
-                task_type=SearchTaskType.ATS_SEARCH,
-                query=f'site:jobs.ashbyhq.com "{role_clean}"{hub_suffix}',
-                source="jobs.ashbyhq.com",
-                source_type=DiscoveredSourceType.ATS_PORTAL,
-                priority=1,
-                depth=0,
-                round=1,
-                reason=f"Direct ATS harvest on Ashby ({hub or 'Global'})",
-                location=hub or loc_str,
-            ))
-
-        # Secondary ATS title sweep for high-demand AI roles
-        if alt_role:
-            primary_suffix = f" {primary_loc.strip()}" if primary_loc and primary_loc.strip() else ""
-            tasks.append(SearchTask(
-                id=f"r1_ats_alt_{len(tasks)}",
-                task_type=SearchTaskType.ATS_SEARCH,
-                query=f'site:boards.greenhouse.io "{alt_role}"{primary_suffix}',
-                source="boards.greenhouse.io",
-                source_type=DiscoveredSourceType.ATS_PORTAL,
-                priority=1,
-                depth=0,
-                round=1,
-                reason=f"Direct ATS harvest on Greenhouse for '{alt_role}' ({primary_loc or 'Global'})",
-                location=primary_loc or loc_str,
-            ))
-            tasks.append(SearchTask(
-                id=f"r1_ats_alt_{len(tasks)}",
-                task_type=SearchTaskType.ATS_SEARCH,
-                query=f'site:jobs.lever.co "{alt_role}"{primary_suffix}',
-                source="jobs.lever.co",
-                source_type=DiscoveredSourceType.ATS_PORTAL,
-                priority=1,
-                depth=0,
-                round=1,
-                reason=f"Direct ATS harvest on Lever for '{alt_role}' ({primary_loc or 'Global'})",
-                location=primary_loc or loc_str,
-            ))
-
-        # 2. Regional Job Boards (Priority 1 for region-specific searches)
+        # 1. Regional Job Boards (Priority 1 for Gulf/Regional sweeps)
         if is_gulf:
             regional_targets = [
                 ("naukrigulf.com", f'site:naukrigulf.com "{role_clean}" {primary_loc}'.strip()),
@@ -214,6 +132,8 @@ class DiscoveryEngine:
                 regional_targets.append(("linkedin.com", f'site:linkedin.com/jobs "{role_clean}" Dubai'))
                 if "Abu Dhabi" in target_locations:
                     regional_targets.append(("linkedin.com", f'site:linkedin.com/jobs "{role_clean}" "Abu Dhabi"'))
+                if "Sharjah" in target_locations:
+                    regional_targets.append(("linkedin.com", f'site:linkedin.com/jobs "{role_clean}" Sharjah'))
                 if alt_role:
                     regional_targets.append(("linkedin.com", f'site:linkedin.com/jobs "{alt_role}" Dubai'))
             if has_saudi or is_generic_gulf:
@@ -235,29 +155,13 @@ class DiscoveryEngine:
                     location=loc_str,
                 ))
 
-        # 3. Direct In-Depth Web Search (Priority 1)
-        sweep_locs = target_locations[:3] if target_locations else ([loc_str] if loc_str else [""])
-        for sloc in sweep_locs:
-            s_suffix = f" {sloc.strip()}" if sloc and sloc.strip() else ""
-            tasks.append(SearchTask(
-                id=f"r1_direct_{len(tasks)}",
-                task_type=SearchTaskType.BOARD_SEARCH,
-                query=f'"{role_clean}"{s_suffix} jobs',
-                source="direct_search",
-                source_type=DiscoveredSourceType.MAJOR_BOARD,
-                priority=1,
-                depth=0,
-                round=1,
-                reason=f"High-recall direct web search for {role_clean} in {sloc or 'Global'}",
-                location=sloc or loc_str,
-            ))
-
-        # 4. Major Job Boards (Priority 2)
+        # 2. Major Job Boards (Priority 2, or Priority 1 for LinkedIn when non-gulf)
         major_targets = [
+            ("indeed.com", f'site:indeed.com/jobs "{role_clean}" {primary_loc}'.strip()),
             ("glassdoor.com", f'site:glassdoor.com "{role_clean}" {primary_loc}'.strip()),
         ]
         if not is_gulf:
-            major_targets.append(("linkedin.com", f'site:linkedin.com/jobs "{role_clean}" {primary_loc}'.strip()))
+            major_targets.insert(0, ("linkedin.com", f'site:linkedin.com/jobs "{role_clean}" {primary_loc}'.strip()))
 
         for src, q in major_targets:
             tasks.append(SearchTask(
@@ -273,7 +177,120 @@ class DiscoveryEngine:
                 location=loc_str,
             ))
 
-        # 5. Niche AI / Tech Boards (Priority 2)
+        # 3. Direct Natural Language Career Page Sweep (Priority 2)
+        tasks.append(SearchTask(
+            id=f"r1_careers_{len(tasks)}",
+            task_type=SearchTaskType.CAREER_PAGE_SEARCH,
+            query=f'"{role_clean}" {primary_loc} (careers OR "open positions" OR "we are hiring")'.strip(),
+            source="company_career_page",
+            source_type=DiscoveredSourceType.COMPANY_CAREER_PAGE,
+            priority=2,
+            depth=0,
+            round=1,
+            reason="Direct employer career portal discovery",
+            location=primary_loc or loc_str,
+        ))
+
+        # 4. ATS Portals (Priority 2)
+        # Query primary hubs individually so search engines match discrete ATS postings
+        ats_hubs = target_locations[:2] if target_locations else ([primary_loc] if primary_loc else [""])
+        for hub in ats_hubs:
+            hub_suffix = f" {hub.strip()}" if hub and hub.strip() else ""
+            tasks.append(SearchTask(
+                id=f"r1_ats_{len(tasks)}",
+                task_type=SearchTaskType.ATS_SEARCH,
+                query=f'site:boards.greenhouse.io "{role_clean}"{hub_suffix}',
+                source="boards.greenhouse.io",
+                source_type=DiscoveredSourceType.ATS_PORTAL,
+                priority=2,
+                depth=0,
+                round=1,
+                reason=f"Direct ATS harvest on Greenhouse ({hub or 'Global'})",
+                location=hub or loc_str,
+            ))
+            tasks.append(SearchTask(
+                id=f"r1_ats_{len(tasks)}",
+                task_type=SearchTaskType.ATS_SEARCH,
+                query=f'site:jobs.lever.co "{role_clean}"{hub_suffix}',
+                source="jobs.lever.co",
+                source_type=DiscoveredSourceType.ATS_PORTAL,
+                priority=2,
+                depth=0,
+                round=1,
+                reason=f"Direct ATS harvest on Lever ({hub or 'Global'})",
+                location=hub or loc_str,
+            ))
+            tasks.append(SearchTask(
+                id=f"r1_ats_{len(tasks)}",
+                task_type=SearchTaskType.ATS_SEARCH,
+                query=f'site:apply.workable.com "{role_clean}"{hub_suffix}',
+                source="apply.workable.com",
+                source_type=DiscoveredSourceType.ATS_PORTAL,
+                priority=2,
+                depth=0,
+                round=1,
+                reason=f"Direct ATS harvest on Workable ({hub or 'Global'})",
+                location=hub or loc_str,
+            ))
+            tasks.append(SearchTask(
+                id=f"r1_ats_{len(tasks)}",
+                task_type=SearchTaskType.ATS_SEARCH,
+                query=f'site:jobs.ashbyhq.com "{role_clean}"{hub_suffix}',
+                source="jobs.ashbyhq.com",
+                source_type=DiscoveredSourceType.ATS_PORTAL,
+                priority=2,
+                depth=0,
+                round=1,
+                reason=f"Direct ATS harvest on Ashby ({hub or 'Global'})",
+                location=hub or loc_str,
+            ))
+
+        # Secondary ATS title sweep for high-demand AI roles
+        if alt_role:
+            primary_suffix = f" {primary_loc.strip()}" if primary_loc and primary_loc.strip() else ""
+            tasks.append(SearchTask(
+                id=f"r1_ats_alt_{len(tasks)}",
+                task_type=SearchTaskType.ATS_SEARCH,
+                query=f'site:boards.greenhouse.io "{alt_role}"{primary_suffix}',
+                source="boards.greenhouse.io",
+                source_type=DiscoveredSourceType.ATS_PORTAL,
+                priority=2,
+                depth=0,
+                round=1,
+                reason=f"Direct ATS harvest on Greenhouse for '{alt_role}' ({primary_loc or 'Global'})",
+                location=primary_loc or loc_str,
+            ))
+            tasks.append(SearchTask(
+                id=f"r1_ats_alt_{len(tasks)}",
+                task_type=SearchTaskType.ATS_SEARCH,
+                query=f'site:jobs.lever.co "{alt_role}"{primary_suffix}',
+                source="jobs.lever.co",
+                source_type=DiscoveredSourceType.ATS_PORTAL,
+                priority=2,
+                depth=0,
+                round=1,
+                reason=f"Direct ATS harvest on Lever for '{alt_role}' ({primary_loc or 'Global'})",
+                location=primary_loc or loc_str,
+            ))
+
+        # 5. Direct In-Depth Web Search (Priority 2)
+        sweep_locs = target_locations[:3] if target_locations else ([loc_str] if loc_str else [""])
+        for sloc in sweep_locs:
+            s_suffix = f" {sloc.strip()}" if sloc and sloc.strip() else ""
+            tasks.append(SearchTask(
+                id=f"r1_direct_{len(tasks)}",
+                task_type=SearchTaskType.BOARD_SEARCH,
+                query=f'"{role_clean}"{s_suffix} jobs',
+                source="direct_search",
+                source_type=DiscoveredSourceType.MAJOR_BOARD,
+                priority=2,
+                depth=0,
+                round=1,
+                reason=f"High-recall direct web search for {role_clean} in {sloc or 'Global'}",
+                location=sloc or loc_str,
+            ))
+
+        # 6. Niche AI / Tech Boards (Priority 2)
         tasks.append(SearchTask(
             id=f"r1_niche_{len(tasks)}",
             task_type=SearchTaskType.BOARD_SEARCH,
@@ -287,7 +304,7 @@ class DiscoveryEngine:
             location="Remote/Global",
         ))
 
-        # 6. Remote / Global Portals (Priority 3 - Only when remote is explicitly requested or no location given)
+        # 7. Remote / Global Portals (Priority 3 - Only when remote is explicitly requested or no location given)
         is_explicit_remote = any(r in (getattr(state, "request", "") or "").lower() for r in ("remote", "anywhere", "worldwide", "wfh", "telecommute"))
         if state.remote_allowed and (is_explicit_remote or not target_locations):
             remote_targets = [
@@ -307,20 +324,6 @@ class DiscoveryEngine:
                     reason=f"Remote job portal sweep on {src}",
                     location="Remote",
                 ))
-
-        # 7. Natural Language Direct Career Page Sweep (Priority 2)
-        tasks.append(SearchTask(
-            id=f"r1_careers_{len(tasks)}",
-            task_type=SearchTaskType.CAREER_PAGE_SEARCH,
-            query=f'"{role_clean}" {primary_loc} (careers OR "open positions" OR "we are hiring")'.strip(),
-            source="company_career_page",
-            source_type=DiscoveredSourceType.COMPANY_CAREER_PAGE,
-            priority=2,
-            depth=0,
-            round=1,
-            reason="Direct employer career portal discovery",
-            location=primary_loc or loc_str,
-        ))
 
         return tasks
 
@@ -502,125 +505,134 @@ class DiscoveryEngine:
         Round 6: Residual Depth & Freshness (past 7-30 days)
         """
         round_num = discovery_state.current_round
-        tasks: List[SearchTask] = []
         loc_str = " ".join(state.locations) if state.locations else (state.explicit_location or "")
         role = state.explicit_titles[0] if state.explicit_titles else "GenAI Engineer"
         role_clean = re.sub(r"\b(with|requiring)?\s*\d+[-–\sto]+\d*\s*(?:years?|yrs?)(?:\s*exp(?:erience)?)?\b", "", role, flags=re.IGNORECASE).strip() or role
 
-        # Round 2: Source Expansion & Pagination
-        if round_num == 2:
-            # Paginate high-yielding tasks from Round 1, favoring productive sources (Section 14 & 15)
-            completed = list(discovery_state.completed_tasks)
-            completed.sort(key=lambda pt: (
-                pt.priority,
-                -discovery_state.source_productivity.get(pt.source.lower(), {}).get("productivity_score", 1.0)
-            ))
-            for pt in completed[:4]:
-                src_stat = discovery_state.source_productivity.get(pt.source.lower(), {})
-                # Skip page 2 if source produced only duplicates and zero qualified jobs
-                if src_stat.get("duplicate_jobs", 0) > 0 and src_stat.get("qualified_jobs", 0) == 0:
-                    continue
-                p2_task = SearchTask(
-                    id=f"r2_page2_{pt.id}",
-                    task_type=pt.task_type,
-                    query=pt.query,
-                    source=pt.source,
-                    source_type=pt.source_type,
-                    priority=pt.priority,
-                    depth=pt.depth + 1,
-                    round=2,
-                    page=2,
-                    reason=f"Page 2 expansion on productive source {pt.source}",
-                    company=pt.company,
-                    location=pt.location,
-                )
-                tasks.append(p2_task)
+        while round_num <= self.budget.max_expansion_rounds:
+            tasks: List[SearchTask] = []
 
-        # Round 3: Company & ATS Deep Dive
-        elif round_num == 3:
-            for comp_slug, comp_info in list(discovery_state.discovered_ats.items())[:6]:
-                ats_domain = comp_info.get("domain", "boards.greenhouse.io")
-                q = f'site:{ats_domain}/{comp_slug} ("{role_clean}" OR engineer OR AI OR LLM)'
-                if q not in discovery_state.executed_queries:
-                    tasks.append(SearchTask(
-                        id=f"r3_ats_{comp_slug}",
-                        task_type=SearchTaskType.ATS_SEARCH,
-                        query=q,
-                        source=ats_domain,
-                        source_type=DiscoveredSourceType.ATS_PORTAL,
-                        priority=1,
-                        depth=2,
-                        round=3,
-                        company=comp_slug,
-                        reason=f"Deep dive ATS search for company {comp_slug}",
-                        location=loc_str,
-                    ))
+            # Round 2: Source Expansion & Pagination
+            if round_num == 2:
+                # Paginate high-yielding tasks from Round 1, favoring productive sources (Section 14 & 15)
+                completed = list(discovery_state.completed_tasks)
+                completed.sort(key=lambda pt: (
+                    pt.priority,
+                    -discovery_state.source_productivity.get(pt.source.lower(), {}).get("productivity_score", 1.0)
+                ))
+                for pt in completed[:4]:
+                    src_stat = discovery_state.source_productivity.get(pt.source.lower(), {})
+                    # Skip page 2 if source produced only duplicates and zero qualified jobs
+                    if src_stat.get("duplicate_jobs", 0) > 0 and src_stat.get("qualified_jobs", 0) == 0:
+                        continue
+                    p2_task = SearchTask(
+                        id=f"r2_page2_{pt.id}",
+                        task_type=pt.task_type,
+                        query=pt.query,
+                        source=pt.source,
+                        source_type=pt.source_type,
+                        priority=pt.priority,
+                        depth=pt.depth + 1,
+                        round=2,
+                        page=2,
+                        reason=f"Page 2 expansion on productive source {pt.source}",
+                        company=pt.company,
+                        location=pt.location,
+                    )
+                    tasks.append(p2_task)
 
-        # Round 4: Geographic Expansion / Specific City Drilling
-        elif round_num == 4:
-            cities: List[str] = []
-            if any(k in loc_str.lower() for k in ("saudi", "ksa")):
-                cities.extend(["Riyadh", "Jeddah", "Dammam", "NEOM"])
-            if any(k in loc_str.lower() for k in ("uae", "emirates", "dubai")):
-                cities.extend(["Dubai", "Abu Dhabi"])
-            if not cities and loc_str:
-                cities.append(loc_str)
-
-            for city in cities[:4]:
-                q_city = f'"{role_clean}" "{city}" hiring apply careers'
-                if q_city not in discovery_state.executed_queries:
-                    tasks.append(SearchTask(
-                        id=f"r4_geo_{city.lower()}",
-                        task_type=SearchTaskType.GENERAL_SEARCH,
-                        query=q_city,
-                        source="regional_hub",
-                        source_type=DiscoveredSourceType.REGIONAL_BOARD,
-                        priority=2,
-                        depth=2,
-                        round=4,
-                        reason=f"Targeted city-level search for {city}",
-                        location=city,
-                    ))
-
-        # Round 5: Title & Skill Variations
-        elif round_num == 5:
-            synonyms = ["Generative AI Engineer", "LLM Engineer", "AI Engineer", "Foundation Model Engineer", "Machine Learning Engineer"]
-            for syn in synonyms[:3]:
-                if syn.lower() != role_clean.lower():
-                    q_syn = f'"{syn}" {loc_str} (careers OR apply)'
-                    if q_syn not in discovery_state.executed_queries:
+            # Round 3: Company & ATS Deep Dive
+            elif round_num == 3:
+                for comp_slug, comp_info in list(discovery_state.discovered_ats.items())[:6]:
+                    ats_domain = comp_info.get("domain", "boards.greenhouse.io")
+                    q = f'site:{ats_domain}/{comp_slug} ("{role_clean}" OR engineer OR AI OR LLM)'
+                    if q not in discovery_state.executed_queries:
                         tasks.append(SearchTask(
-                            id=f"r5_syn_{len(tasks)}",
-                            task_type=SearchTaskType.GENERAL_SEARCH,
-                            query=q_syn,
-                            source="title_synonym",
-                            source_type=DiscoveredSourceType.MAJOR_BOARD,
-                            priority=2,
-                            depth=3,
-                            round=5,
-                            reason=f"Role synonym expansion: '{syn}'",
+                            id=f"r3_ats_{comp_slug}",
+                            task_type=SearchTaskType.ATS_SEARCH,
+                            query=q,
+                            source=ats_domain,
+                            source_type=DiscoveredSourceType.ATS_PORTAL,
+                            priority=1,
+                            depth=2,
+                            round=3,
+                            company=comp_slug,
+                            reason=f"Deep dive ATS search for company {comp_slug}",
                             location=loc_str,
                         ))
 
-        # Round 6: Freshness & Residual Depth
-        elif round_num == 6:
-            q_fresh = f'"{role_clean}" {loc_str} careers apply 2026'
-            if q_fresh not in discovery_state.executed_queries:
-                tasks.append(SearchTask(
-                    id="r6_freshness",
-                    task_type=SearchTaskType.GENERAL_SEARCH,
-                    query=q_fresh,
-                    source="freshness_sweep",
-                    source_type=DiscoveredSourceType.MAJOR_BOARD,
-                    priority=2,
-                    depth=3,
-                    round=6,
-                    metadata={"freshness_days": 30},
-                    reason="Freshness residual search for recent openings",
-                    location=loc_str,
-                ))
+            # Round 4: Geographic Expansion / Specific City Drilling
+            elif round_num == 4:
+                cities: List[str] = []
+                if any(k in loc_str.lower() for k in ("saudi", "ksa")):
+                    cities.extend(["Riyadh", "Jeddah", "Dammam", "Khobar", "NEOM"])
+                if any(k in loc_str.lower() for k in ("uae", "emirates", "dubai", "sharjah", "abu dhabi")):
+                    cities.extend(["Dubai", "Abu Dhabi", "Sharjah"])
+                if not cities and loc_str:
+                    cities.append(loc_str)
 
-        return tasks
+                for city in cities[:4]:
+                    q_city = f'"{role_clean}" "{city}" hiring apply careers'
+                    if q_city not in discovery_state.executed_queries:
+                        tasks.append(SearchTask(
+                            id=f"r4_geo_{city.lower().replace(' ', '_')}",
+                            task_type=SearchTaskType.GENERAL_SEARCH,
+                            query=q_city,
+                            source="regional_hub",
+                            source_type=DiscoveredSourceType.REGIONAL_BOARD,
+                            priority=2,
+                            depth=2,
+                            round=4,
+                            reason=f"Targeted city-level search for {city}",
+                            location=city,
+                        ))
+
+            # Round 5: Title & Skill Variations
+            elif round_num == 5:
+                synonyms = ["Generative AI Engineer", "LLM Engineer", "AI Engineer", "Foundation Model Engineer", "Machine Learning Engineer"]
+                for syn in synonyms[:3]:
+                    if syn.lower() != role_clean.lower():
+                        q_syn = f'"{syn}" {loc_str} (careers OR apply)'
+                        if q_syn not in discovery_state.executed_queries:
+                            tasks.append(SearchTask(
+                                id=f"r5_syn_{len(tasks)}",
+                                task_type=SearchTaskType.GENERAL_SEARCH,
+                                query=q_syn,
+                                source="title_synonym",
+                                source_type=DiscoveredSourceType.MAJOR_BOARD,
+                                priority=2,
+                                depth=3,
+                                round=5,
+                                reason=f"Role synonym expansion: '{syn}'",
+                                location=loc_str,
+                            ))
+
+            # Round 6: Freshness & Residual Depth
+            elif round_num == 6:
+                q_fresh = f'"{role_clean}" {loc_str} careers apply 2026'
+                if q_fresh not in discovery_state.executed_queries:
+                    tasks.append(SearchTask(
+                        id="r6_freshness",
+                        task_type=SearchTaskType.GENERAL_SEARCH,
+                        query=q_fresh,
+                        source="freshness_sweep",
+                        source_type=DiscoveredSourceType.MAJOR_BOARD,
+                        priority=2,
+                        depth=3,
+                        round=6,
+                        metadata={"freshness_days": 30},
+                        reason="Freshness residual search for recent openings",
+                        location=loc_str,
+                    ))
+
+            if tasks:
+                discovery_state.current_round = round_num
+                return tasks
+
+            round_num += 1
+
+        discovery_state.current_round = min(round_num, self.budget.max_expansion_rounds)
+        return []
 
     def prioritize_tasks(self, tasks: List[SearchTask], discovery_state: DiscoveryState) -> List[SearchTask]:
         """
@@ -696,6 +708,10 @@ class DiscoveryEngine:
                 )
                 if any(r.id not in already_done for r in state.raw_records):
                     return False, StopReason.TARGET_QUALIFIED_REACHED, ""
+
+            # Do not stop early if more rounds can be expanded
+            if discovery_state.current_round < self.budget.max_expansion_rounds:
+                return False, StopReason.TARGET_QUALIFIED_REACHED, ""
 
             if effective_count > 0:
                 return True, StopReason.COVERAGE_COMPLETE_WITH_SATISFACTION, f"Completed discovery universe with {effective_count} qualified jobs"

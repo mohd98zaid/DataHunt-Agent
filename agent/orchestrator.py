@@ -1355,6 +1355,9 @@ class ResearchOrchestrator:
                 "summary": summary_text
             }
 
+            if _result.get("diagnostics"):
+                final_payload["diagnostics"] = _result["diagnostics"]
+
             event_payload = dict(final_payload)
             event_payload["records"] = [
                 {

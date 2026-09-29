@@ -70,11 +70,19 @@ class DecisionEngine:
                     return AgentAction.VERIFY, f"{len(unverified)} records need verification"
 
         # Check search availability across search plan or dynamic discovery queue
-        has_search_tasks = (state.search_plan_index < len(state.search_plan)) or (
-            state.discovery_state is not None and bool(state.discovery_state.task_queue)
+        max_rounds = getattr(state.discovery_budget, "max_expansion_rounds", 6) if state.discovery_budget else 6
+        can_advance_discovery = (
+            state.discovery_state is not None
+            and (
+                bool(state.discovery_state.task_queue)
+                or state.discovery_state.current_round < max_rounds
+            )
         )
+        has_search_tasks = (state.search_plan_index < len(state.search_plan)) or can_advance_discovery
         if has_search_tasks and state.search_calls < state.max_search_calls:
-            msg = f"Searching discovery queue ({len(state.discovery_state.task_queue)} tasks)" if (state.discovery_state and state.discovery_state.task_queue) else f"Searching tier {state.search_plan_index + 1}/{len(state.search_plan)}"
+            msg = f"Searching discovery queue ({len(state.discovery_state.task_queue)} tasks)" if (state.discovery_state and state.discovery_state.task_queue) else (
+                f"Advancing discovery round (R{state.discovery_state.current_round + 1})" if (state.discovery_state and state.discovery_state.current_round < max_rounds) else f"Searching tier {state.search_plan_index + 1}/{len(state.search_plan)}"
+            )
             return AgentAction.SEARCH, msg
 
         if effective_count > 0:

@@ -289,13 +289,44 @@ def is_valid_job_url(url: str) -> bool:
         if "/j/" not in path:
             return False
 
+    # 6.1 SmartRecruiters ATS Validation:
+    # Must have at least 2 segments in path: /<company>/<job_id_or_slug>
+    if "smartrecruiters.com" in hostname:
+        path_segments = [seg for seg in path.strip("/").split("/") if seg]
+        if len(path_segments) < 2:
+            return False
+        if path_segments[0] in ("signin", "login"):
+            return False
+
+    # 6.2 Workday ATS Validation:
+    # Must have /job/ or /jobs/ in path
+    if "myworkdayjobs.com" in hostname:
+        if "/job/" not in path and "/jobs/" not in path:
+            return False
+
+    # 6.3 BambooHR ATS Validation:
+    # Must have /jobs/view.php, /careers/, /jobs/<id>, or id query param
+    if "bamboohr.com" in hostname:
+        has_bamboo_job = bool(
+            "/jobs/view.php" in path
+            or "/careers/" in path
+            or re.search(r"/jobs/\d+", path)
+            or re.search(r"\bid=\d+", parsed.query)
+        )
+        if not has_bamboo_job:
+            return False
+
     # 7. Check for specific job posting patterns on aggregators and company sites
     is_specific_posting = bool(
         re.search(r"/(?:view|jobs?|job-listing|careers?|position|role)/[a-zA-Z0-9_\-]+", path)
-        or re.search(r"\b(?:vjk|jk|jid|jobid|job_id|gh_jid)=[a-zA-Z0-9_\-]+", parsed.query)
+        or re.search(r"\b(?:vjk|jk|jid|jl|jobid|job_id|gh_jid|joblistingid)=[a-zA-Z0-9_\-]+", parsed.query)
+        or re.search(r"[-_/](?:jid|jl|job)[-_/]?\d+", path, re.IGNORECASE)
         or re.search(r"-\d+/?$", path)
         or re.search(r"/\d+/?$", path)
         or "viewjob" in path
+        or "job-listings" in path
+        or "-jid-" in path
+        or "job-detail" in path
     )
 
     # 8. Aggregators: allow specific job detail pages with IDs, but reject generic empty search forms
