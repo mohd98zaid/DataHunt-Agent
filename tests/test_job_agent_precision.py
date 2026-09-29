@@ -1158,3 +1158,296 @@ def test_test_16_golden_query_end_to_end():
     assert results[2].qualified is False  # London
     assert results[3].qualified is False  # Missing LangChain
     assert results[4].qualified is False  # Product Manager
+
+
+# =============================================================================
+# SECTION 18 TARGETED REGRESSION TESTS
+# =============================================================================
+
+def test_policy_any_import():
+    """Verify that datahunt.policy imports cleanly and escape_csv_formula handles Any typed input."""
+    import datahunt.policy as policy
+    assert hasattr(policy, "escape_csv_formula")
+    assert policy.escape_csv_formula(12345) == "12345"
+    assert policy.escape_csv_formula("=CMD('calc')") == "'=CMD('calc')"
+    assert policy.escape_csv_formula(None) == ""
+
+
+def test_repository_any_import():
+    """Verify that datahunt.db.repositories imports cleanly without NameError."""
+    import datahunt.db.repositories as repos
+    assert hasattr(repos, "TaskRepository")
+    assert hasattr(repos, "RecordRepository")
+    assert hasattr(repos, "RunRepository")
+
+
+def test_job_target_uses_qualified_not_verified():
+    """
+    Scenario:
+        target_results = 5
+        qualified_records = 0
+        verified_records = 10
+    Expected:
+        should_stop() == False
+    Job Agent must never treat verified records as satisfying job target when none qualified.
+    """
+    engine = DiscoveryEngine()
+    disc_state = DiscoveryState()
+    state = AgentState(
+        request="Find 5 GenAI Engineers in Dubai",
+        run_id="run_stop_test",
+        task_id="task_stop_test",
+        mode="jobs",
+        target_results=5,
+    )
+    state.verified_records = [
+        ExtractedRecord(id=f"rec_{i}", run_id="run_stop_test", fields={"title": f"Job {i}"})
+        for i in range(10)
+    ]
+    state.qualified_records = []
+
+    should_stop, reason, msg = engine.should_stop(disc_state, state)
+    assert should_stop is False, f"Job agent should not stop when qualified_records is empty! Reason: {reason}, Msg: {msg}"
+
+
+def test_final_job_record_does_not_default_currency_to_usd():
+    """
+    Missing salary currency must NEVER silently become USD in final JobRecord.
+    When a multi-region query has no explicit currency, salary_currency remains None.
+    """
+    runtime = AgentRuntime(
+        client=None, search=MagicMock(), fetch=MagicMock(),
+        extract=MagicMock(), verify=MagicMock(), dedupe=DedupeTool(), export=MagicMock()
+    )
+    state = AgentState(
+        request="Find GenAI Engineer in Saudi Arabia or UAE",
+        run_id="run_curr_test",
+        task_id="task_curr_test",
+        mode="jobs",
+    )
+    runtime._init_state(state, lambda ev, d: None)
+    assert state.canonical_job_request.salary_currency is None
+
+    rec = ExtractedRecord(
+        id="job_no_curr",
+        run_id="run_curr_test",
+        fields={"title": "GenAI Engineer", "company": "Noor", "location": "Saudi Arabia or UAE"},
+        verification_status=VerificationStatus.VERIFIED,
+    )
+    state.qualified_records = [rec]
+    res = runtime._finalize(state, lambda ev, d: None)
+    job_records = res.get("canonical_job_records", [])
+    assert len(job_records) == 1
+    assert job_records[0].salary_currency is None, f"Expected None, got {job_records[0].salary_currency}"
+
+
+def test_saudi_uae_currency_remains_none():
+    """Multi-region Saudi Arabia or UAE query must have salary_currency=None and source='unspecified'."""
+    spec = JobSearchSpec(raw_query="GenAI Engineer in Saudi Arabia or UAE")
+    assert spec.salary_currency is None
+    assert spec.salary_currency_source == "unspecified"
+
+
+def test_source_productivity_uses_qualified_jobs():
+    """Adaptive discovery tracks useful qualified yield = qualified_jobs / unique_jobs."""
+    disc_state = DiscoveryState()
+    disc_state.record_task_productivity(
+        source="boards.greenhouse.io",
+        raw_hits=20,
+        candidate_jobs=10,
+        unique_jobs=10,
+        qualified_jobs=8,
+        duplicate_jobs=2,
+    )
+    stats = disc_state.source_productivity["boards.greenhouse.io"]
+    assert stats["qualified_jobs"] == 8
+    assert stats["unique_jobs"] == 10
+    assert stats["qualified_yield"] == 0.8
+    assert stats["productivity_score"] > 1.5
+
+
+def test_duplicate_heavy_source_is_deprioritized():
+    """Sources that produce mostly duplicates and 0 qualified jobs must receive a low productivity score."""
+    disc_state = DiscoveryState()
+    disc_state.record_task_productivity(
+        source="spambogusboard.com",
+        raw_hits=100,
+        candidate_jobs=5,
+        unique_jobs=5,
+        qualified_jobs=0,
+        duplicate_jobs=50,
+    )
+    stats = disc_state.source_productivity["spambogusboard.com"]
+    assert stats["qualified_jobs"] == 0
+    assert stats["duplicate_jobs"] == 50
+    assert stats["productivity_score"] <= 0.20
+
+
+def test_low_qualified_yield_source_is_deprioritized():
+    """A high qualified-yield source is prioritized over a low qualified-yield source."""
+    engine = DiscoveryEngine()
+    disc_state = DiscoveryState()
+    disc_state.record_task_productivity(
+        source="high_yield_src",
+        raw_hits=10, candidate_jobs=6, unique_jobs=6, qualified_jobs=5, duplicate_jobs=0
+    )
+    disc_state.record_task_productivity(
+        source="low_yield_src",
+        raw_hits=30, candidate_jobs=10, unique_jobs=10, qualified_jobs=0, duplicate_jobs=5
+    )
+    tasks = [
+        SearchTask(id="t_low", task_type=SearchTaskType.GENERAL_SEARCH, query="q_low", source="low_yield_src", source_type=DiscoveredSourceType.MAJOR_BOARD, priority=2),
+        SearchTask(id="t_high", task_type=SearchTaskType.ATS_SEARCH, query="q_high", source="high_yield_src", source_type=DiscoveredSourceType.ATS_PORTAL, priority=2),
+    ]
+    prioritized = engine.prioritize_tasks(tasks, disc_state)
+    assert prioritized[0].source == "high_yield_src"
+    assert prioritized[1].source == "low_yield_src"
+
+
+def test_missing_explicit_skill_rejected():
+    """Missing an explicit user skill must cause qualification rejection."""
+    spec = JobSearchSpec(raw_query="GenAI Engineer requiring Python and PyTorch")
+    job = ExtractedRecord(
+        id="job_skill_miss",
+        run_id="run_test",
+        fields={"title": "GenAI Engineer", "company": "AI Co", "location": "Dubai, UAE", "skills": ["Python"]},
+        verification_status=VerificationStatus.VERIFIED,
+    )
+    res = qualify_job(job, spec)
+    assert res.qualified is False
+    assert any("pytorch" in r for r in res.rejection_reasons)
+
+
+def test_missing_inferred_skill_allowed():
+    """Missing an inferred skill (soft skill) must NOT cause disqualification."""
+    spec = JobSearchSpec(
+        raw_query="GenAI Engineer",
+        explicit_skills=["Python"],
+        inferred_skills=["LangChain", "VectorDB", "RAG"]
+    )
+    job = ExtractedRecord(
+        id="job_inf_ok",
+        run_id="run_test",
+        fields={"title": "GenAI Engineer", "company": "AI Co", "location": "Dubai, UAE", "skills": ["Python"]},
+        verification_status=VerificationStatus.VERIFIED,
+    )
+    res = qualify_job(job, spec)
+    assert res.qualified is True
+    assert res.eligibility_status == "ELIGIBLE"
+
+
+def test_saudi_or_uae():
+    """Saudi Arabia or UAE allows locations in Saudi Arabia or UAE, rejecting unrelated regions."""
+    spec = JobSearchSpec(raw_query="GenAI Engineer in Saudi Arabia or UAE")
+    job_ksa = ExtractedRecord(id="j1", run_id="r", fields={"title": "GenAI Engineer", "location": "Riyadh, Saudi Arabia"})
+    job_uae = ExtractedRecord(id="j2", run_id="r", fields={"title": "GenAI Engineer", "location": "Dubai, UAE"})
+    job_other = ExtractedRecord(id="j3", run_id="r", fields={"title": "GenAI Engineer", "location": "Cairo, Egypt"})
+
+    assert qualify_job(job_ksa, spec).qualified is True
+    assert qualify_job(job_uae, spec).qualified is True
+    assert qualify_job(job_other, spec).qualified is False
+
+
+def test_unknown_geography_rejected():
+    """When searching with strict geography, unknown locations are rejected."""
+    spec = JobSearchSpec(raw_query="GenAI Engineer in Riyadh, Saudi Arabia")
+    job_unk = ExtractedRecord(id="j_unk", run_id="r", fields={"title": "GenAI Engineer", "location": "Unknown Location"})
+    assert qualify_job(job_unk, spec).qualified is False
+
+
+def test_us_remote_rejected_for_saudi_uae():
+    """US-only remote job is rejected for a Saudi Arabia or UAE search."""
+    spec = JobSearchSpec(raw_query="GenAI Engineer in Saudi Arabia or UAE")
+    job_us_remote = ExtractedRecord(
+        id="j_us_rem",
+        run_id="r",
+        fields={"title": "GenAI Engineer", "location": "Remote - US Only", "remote": True}
+    )
+    assert qualify_job(job_us_remote, spec).qualified is False
+
+
+def test_unrelated_title_family_rejected():
+    """Unrelated job families (Product Manager, Sales, Accountant) must be rejected for engineering search."""
+    spec = JobSearchSpec(raw_query="GenAI Engineer")
+    for bad_title in ["AI Product Manager", "Enterprise Sales Director", "Chief Accountant", "Technical Writer"]:
+        job = ExtractedRecord(id=f"j_{bad_title}", run_id="r", fields={"title": bad_title, "skills": ["AI"]})
+        res = qualify_job(job, spec)
+        assert res.qualified is False, f"Expected {bad_title} to be rejected"
+
+
+def test_cross_source_duplicate_merged():
+    """Duplicate vacancies across LinkedIn, Greenhouse, and Company Career are merged into one canonical record."""
+    norm = DataNormalizer()
+    v1 = norm.normalize({"title": "Staff GenAI Engineer", "company": "Noor Labs", "location": "Dubai, UAE", "source": "LinkedIn", "job_url": "https://www.linkedin.com/jobs/view/999"}, record_id="r1")
+    v2 = norm.normalize({"title": "Staff GenAI Engineer", "company": "Noor Labs", "location": "Dubai, UAE", "source": "Greenhouse", "job_url": "https://boards.greenhouse.io/noorlabs/jobs/999"}, record_id="r2")
+    v3 = norm.normalize({"title": "Staff GenAI Engineer", "company": "Noor Labs", "location": "Dubai, UAE", "source": "Company Career", "job_url": "https://noorlabs.ai/careers/staff-genai"}, record_id="r3")
+    deduped = deduplicate_normalized_jobs([v1, v2, v3])
+    assert len(deduped) == 1
+    assert len(deduped[0].sources) == 3
+
+
+def test_dedupe_is_idempotent():
+    """Deduplication must be idempotent: dedupe(dedupe(records)) == dedupe(records)."""
+    norm = DataNormalizer()
+    jobs = [
+        norm.normalize({"title": "GenAI Engineer", "company": "Alpha", "location": "Riyadh", "job_url": "https://alpha.com/j1"}, record_id="1"),
+        norm.normalize({"title": "GenAI Engineer", "company": "Alpha", "location": "Riyadh", "job_url": "https://linkedin.com/jobs/alpha1"}, record_id="2"),
+        norm.normalize({"title": "Data Scientist", "company": "Beta", "location": "Dubai", "job_url": "https://beta.com/j2"}, record_id="3"),
+    ]
+    p1 = deduplicate_normalized_jobs(jobs)
+    p2 = deduplicate_normalized_jobs(p1)
+    assert len(p1) == len(p2) == 2
+    assert [j.normalized_title for j in p1] == [j.normalized_title for j in p2]
+
+
+def test_company_research_no_evidence_returns_unavailable():
+    """Company research with no evidence returns is_available=False and UNVERIFIED."""
+    mock_search = MagicMock()
+    mock_search.execute.return_value = MagicMock(success=True, data=[])
+    agent = CompanyResearchAgent(search_tool=mock_search)
+    profile = agent.research("NonExistentGhostCorp999", force_refresh=True)
+    assert profile.is_available is False
+    assert profile.verification_status == "UNVERIFIED"
+
+
+def test_company_research_does_not_fabricate():
+    """Company research with no evidence has zero company facts."""
+    mock_search = MagicMock()
+    mock_search.execute.return_value = MagicMock(success=True, data=[])
+    agent = CompanyResearchAgent(search_tool=mock_search)
+    profile = agent.research("NonExistentGhostCorp999", force_refresh=True)
+    assert len(profile.company_facts) == 0
+
+
+def test_search_planner_not_used_by_job_runtime():
+    """In Job Mode, runtime does not call SearchPlannerAgent.plan()."""
+    runtime = AgentRuntime(client=None, search=MagicMock(), fetch=MagicMock(), extract=MagicMock(), verify=MagicMock(), dedupe=MagicMock(), export=MagicMock())
+    state = AgentState(request="Find GenAI Engineer in Riyadh", run_id="r_sp", task_id="t_sp", mode="jobs")
+    with patch("datahunt.agents.search_planner.SearchPlannerAgent.plan") as mock_plan:
+        mock_plan.side_effect = RuntimeError("Should not be called in Job Mode!")
+        runtime._init_state(state, lambda ev, d: None)
+        assert mock_plan.call_count == 0
+
+
+def test_no_legacy_queries_injected_into_job_discovery():
+    """DiscoveryState task_queue contains only DiscoveryEngine tasks, not injected legacy query strings."""
+    runtime = AgentRuntime(client=None, search=MagicMock(), fetch=MagicMock(), extract=MagicMock(), verify=MagicMock(), dedupe=MagicMock(), export=MagicMock())
+    state = AgentState(request="Find GenAI Engineer in Riyadh", run_id="r_no_inj", task_id="t_no_inj", mode="jobs")
+    runtime._init_state(state, lambda ev, d: None)
+    for task in state.discovery_state.task_queue:
+        assert not task.id.startswith("injected_")
+
+
+def test_final_output_contains_only_qualified_jobs():
+    """Final output must only contain jobs that pass QualificationPolicy with ELIGIBLE status."""
+    runtime = AgentRuntime(client=None, search=MagicMock(), fetch=MagicMock(), extract=MagicMock(), verify=MagicMock(), dedupe=DedupeTool(), export=MagicMock())
+    state = AgentState(request="Find GenAI Engineer in Riyadh requiring Python", run_id="r_final", task_id="t_final", mode="jobs")
+    runtime._init_state(state, lambda ev, d: None)
+    good = ExtractedRecord(id="good", run_id="r_final", fields={"title": "GenAI Engineer", "location": "Riyadh, Saudi Arabia", "skills": ["Python"]}, verification_status=VerificationStatus.VERIFIED)
+    bad = ExtractedRecord(id="bad", run_id="r_final", fields={"title": "GenAI Engineer", "location": "London, UK", "skills": ["Python"]}, verification_status=VerificationStatus.VERIFIED)
+    state.qualified_records = [good, bad]
+    res = runtime._finalize(state, lambda ev, d: None)
+    out_ids = [r.id for r in res.get("records", [])]
+    assert "good" in out_ids
+    assert "bad" not in out_ids
+

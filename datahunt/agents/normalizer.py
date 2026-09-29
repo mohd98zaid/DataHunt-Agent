@@ -40,7 +40,7 @@ class NormalizedJob(BaseModel):
     salary_max: Optional[float] = None
     salary_min_annual: Optional[float] = None
     salary_max_annual: Optional[float] = None
-    salary_currency: str = "USD"
+    salary_currency: Optional[str] = None
     salary_period: str = "annual"  # annual | monthly | hourly
 
     # Requirements
@@ -273,7 +273,7 @@ class DataNormalizer:
 
     def _parse_salary(self, text: str, location: str = ""):
         """Parse compensation text into annualized numbers and local regional currency."""
-        default_curr = detect_local_currency(location, default="USD") if location else "USD"
+        default_curr = detect_local_currency(location, default=None) if location else None
         if not text:
             return None, None, default_curr, "annual"
 

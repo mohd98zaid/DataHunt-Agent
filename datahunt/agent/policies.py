@@ -612,7 +612,7 @@ class QualificationPolicy:
         # Parse salary from fields
         sal_min = fields.get("salary_min") or fields.get("salary_min_annual")
         sal_max = fields.get("salary_max") or fields.get("salary_max_annual")
-        sal_curr = fields.get("salary_currency") or "USD"
+        sal_curr = fields.get("salary_currency") or fields.get("currency")
 
         # Canonical request attributes
         req_title = getattr(job_req, "job_title", "") or (job_req.titles[0] if getattr(job_req, "titles", None) else "")

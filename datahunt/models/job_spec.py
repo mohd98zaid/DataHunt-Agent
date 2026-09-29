@@ -136,6 +136,32 @@ class JobSearchSpec(BaseModel):
 
     def model_post_init(self, __context: Any) -> None:
         """Synchronize canonical and compatibility fields."""
+        # 0. Deterministically extract attributes from raw_query if titles and job_title omitted
+        if self.raw_query and (not self.titles and not self.job_title):
+            try:
+                from datahunt.agents.query_understanding import _deterministic_parse
+                parsed = _deterministic_parse(self.raw_query)
+                if not self.titles and not self.job_title and parsed.get("job_title"):
+                    self.job_title = parsed["job_title"]
+                    self.titles = [parsed["job_title"]]
+                if not self.locations and not self.location and parsed.get("locations"):
+                    self.locations = parsed["locations"]
+                    self.location = parsed.get("location")
+                    self.location_operator = parsed.get("location_operator", self.location_operator)
+                if not self.explicit_skills and not self.skills and parsed.get("explicit_skills"):
+                    self.explicit_skills = parsed["explicit_skills"]
+                    self.skills = list(self.explicit_skills)
+                if not self.inferred_skills and parsed.get("inferred_skills"):
+                    self.inferred_skills = parsed["inferred_skills"]
+                if self.experience_min is None and parsed.get("experience_min") is not None:
+                    self.experience_min = parsed["experience_min"]
+                if self.experience_max is None and parsed.get("experience_max") is not None:
+                    self.experience_max = parsed["experience_max"]
+                if self.salary_min is None and parsed.get("salary_min") is not None:
+                    self.salary_min = parsed["salary_min"]
+            except Exception:
+                pass
+
         # 1. Sync titles and job_title / alternative_titles
         if self.job_title and self.job_title.strip():
             jt = self.job_title.strip()

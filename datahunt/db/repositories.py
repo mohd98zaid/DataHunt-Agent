@@ -1,7 +1,7 @@
 import json
 import sqlite3
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from datahunt.db.connection import get_connection, db_transaction
 from datahunt.models import (
     ResearchTask, ResearchSpec, TaskStatus,

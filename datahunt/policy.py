@@ -2,7 +2,7 @@ import ipaddress
 import re
 import socket
 from urllib.parse import urlparse
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 from datahunt.errors import DataHuntError, ErrorCode
 
 # Standard non-routable / sensitive IP networks for SSRF protection

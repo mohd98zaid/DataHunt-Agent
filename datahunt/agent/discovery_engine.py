@@ -528,7 +528,10 @@ class DiscoveryEngine:
         if discovery_state.current_round > self.budget.max_expansion_rounds:
             return True, StopReason.BUDGET_EXHAUSTED, f"Max discovery rounds ({self.budget.max_expansion_rounds}) completed"
 
-        effective_count = len(state.qualified_records) if (state.mode in ("jobs", "job") and state.qualified_records) else len(state.verified_records)
+        if state.mode in ("jobs", "job"):
+            effective_count = len(state.qualified_records)
+        else:
+            effective_count = len(state.verified_records)
 
         # Target results reached
         if effective_count >= state.target_results:

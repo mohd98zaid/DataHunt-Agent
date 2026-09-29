@@ -167,39 +167,90 @@ class DiscoveryState:
     def record_task_productivity(
         self,
         source: str,
-        hits: int = 0,
-        valid_jobs: int = 0,
+        raw_hits: int = 0,
+        candidate_jobs: int = 0,
         unique_jobs: int = 0,
+        verified_jobs: int = 0,
         qualified_jobs: int = 0,
         duplicate_jobs: int = 0,
         rejected_jobs: int = 0,
+        fetch_failures: int = 0,
+        extraction_failures: int = 0,
+        verification_failures: int = 0,
+        hits: int = 0,
+        valid_jobs: int = 0,
         failed: bool = False,
+        queries_executed: int = 0,
     ):
-        """Record search yield metrics for adaptive discovery (Sections 13 & 14)."""
+        """
+        Record search and qualification yield metrics for adaptive discovery.
+        Tracks useful qualified jobs and penalizes duplicate-heavy and low-yield sources.
+        """
         s = source.lower().strip()
         if s not in self.source_productivity:
             self.source_productivity[s] = {
                 "queries_executed": 0,
+                "raw_hits": 0,
                 "hits": 0,
+                "candidate_jobs": 0,
                 "valid_jobs": 0,
                 "unique_jobs": 0,
+                "verified_jobs": 0,
                 "qualified_jobs": 0,
                 "duplicate_jobs": 0,
                 "rejected_jobs": 0,
+                "fetch_failures": 0,
+                "extraction_failures": 0,
+                "verification_failures": 0,
                 "failures": 0,
+                "qualified_yield": 0.0,
+                "duplicate_rate": 0.0,
+                "rejection_rate": 0.0,
                 "productivity_score": 1.0,
             }
         data = self.source_productivity[s]
-        data["queries_executed"] += 1
-        data["hits"] += hits
-        data["valid_jobs"] += valid_jobs
+        data["queries_executed"] += queries_executed if queries_executed > 0 else (1 if (raw_hits or hits or failed) else 0)
+
+        effective_raw_hits = raw_hits or hits
+        effective_candidates = candidate_jobs or valid_jobs
+
+        data["raw_hits"] += effective_raw_hits
+        data["hits"] = data["raw_hits"]
+        data["candidate_jobs"] += effective_candidates
+        data["valid_jobs"] = data["candidate_jobs"]
         data["unique_jobs"] += unique_jobs
+        data["verified_jobs"] += verified_jobs
         data["qualified_jobs"] += qualified_jobs
         data["duplicate_jobs"] += duplicate_jobs
         data["rejected_jobs"] += rejected_jobs
+        data["fetch_failures"] += fetch_failures
+        data["extraction_failures"] += extraction_failures
+        data["verification_failures"] += verification_failures
         if failed:
             data["failures"] += 1
 
-        dup_penalty = (data["duplicate_jobs"] / max(data["unique_jobs"] + data["duplicate_jobs"], 1)) * 0.5
-        base_score = (data["qualified_jobs"] * 2.0 + data["unique_jobs"]) / max(data["hits"], 1)
-        data["productivity_score"] = max(round(base_score - dup_penalty, 3), 0.05)
+        total_unique = max(data["unique_jobs"], 1)
+        qualified_yield = data["qualified_jobs"] / total_unique
+        data["qualified_yield"] = round(qualified_yield, 3)
+
+        total_discovered = max(data["unique_jobs"] + data["duplicate_jobs"], 1)
+        duplicate_rate = data["duplicate_jobs"] / total_discovered
+        data["duplicate_rate"] = round(duplicate_rate, 3)
+
+        total_evaluated = max(data["verified_jobs"] + data["rejected_jobs"], 1)
+        rejection_rate = data["rejected_jobs"] / total_evaluated
+        data["rejection_rate"] = round(rejection_rate, 3)
+
+        # Useful yield-driven productivity score (Section 5)
+        if data["qualified_jobs"] > 0:
+            base_score = 1.0 + (qualified_yield * 2.0)
+        elif data["duplicate_jobs"] > 0 and data["unique_jobs"] == 0:
+            base_score = 0.05
+        elif data["rejected_jobs"] > 0 or data["duplicate_jobs"] > 0:
+            base_score = 0.20
+        else:
+            base_score = 1.0
+
+        dup_penalty = duplicate_rate * 0.4
+        rej_penalty = rejection_rate * 0.3
+        data["productivity_score"] = max(round(base_score - dup_penalty - rej_penalty, 3), 0.05)

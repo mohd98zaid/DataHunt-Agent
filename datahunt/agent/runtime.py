@@ -265,6 +265,7 @@ class AgentRuntime:
                     res = self.search.execute(query=query, limit=15, page=page)
                     state.search_calls += 1
                     new_candidates = 0
+                    dup_candidates = 0
                     initial_companies = len(state.discovery_state.discovered_companies)
                     initial_ats = len(state.discovery_state.discovered_ats)
 
@@ -276,6 +277,7 @@ class AgentRuntime:
                                 continue
                             canon = canonicalize_url(url)
                             if not canon or canon in state.seen_canonical_urls:
+                                dup_candidates += 1
                                 continue
                             if state.mode in ("jobs", "job") and not is_valid_job_url(url):
                                 continue
@@ -341,9 +343,10 @@ class AgentRuntime:
                     if hasattr(state.discovery_state, "record_task_productivity"):
                         state.discovery_state.record_task_productivity(
                             source=task.source,
-                            hits=len(res.data) if res.success else 0,
-                            valid_jobs=new_candidates,
+                            raw_hits=len(res.data) if res.success else 0,
+                            candidate_jobs=new_candidates,
                             unique_jobs=new_candidates,
+                            duplicate_jobs=dup_candidates,
                         )
 
                     self.decision_engine.record_search_iteration(
@@ -574,6 +577,9 @@ class AgentRuntime:
                             r.verification_status = VerificationStatus.DUPLICATE
                             if hasattr(state, "duplicate_records"):
                                 state.duplicate_records.append(r)
+                            r_src = r.fields.get("source") or "web"
+                            if hasattr(state, "discovery_state") and hasattr(state.discovery_state, "record_task_productivity"):
+                                state.discovery_state.record_task_productivity(source=r_src, duplicate_jobs=1)
                     unverified = unique_candidates
             except Exception as e:
                 logger.warning(f"Early deduplication error before verification: {e}")
@@ -587,6 +593,7 @@ class AgentRuntime:
                 state.add_warning("Verification stopped: deadline reached")
                 break
 
+            rec_src = rec.fields.get("source") or "web"
             try:
                 v_res = self.verify.execute(
                     record=rec,
@@ -616,6 +623,10 @@ class AgentRuntime:
                             "fields": rec.fields,
                             "warnings": rec.warnings,
                         })
+                        if hasattr(state, "discovery_state") and hasattr(state.discovery_state, "record_task_productivity"):
+                            state.discovery_state.record_task_productivity(
+                                source=rec_src, verified_jobs=1, qualified_jobs=1
+                            )
                     else:
                         rec.verification_status = VerificationStatus.REJECTED
                         rec.confidence = min(q_res.score, 0.2)
@@ -623,18 +634,30 @@ class AgentRuntime:
                         state.rejected_records.append(rec)
                         disqualify_reason = "; ".join(q_res.reasons) if not q_res.qualified else "Verification status rejected"
                         state.add_observation(f"Disqualified '{rec.fields.get('title', '?')}': {disqualify_reason}")
+                        if hasattr(state, "discovery_state") and hasattr(state.discovery_state, "record_task_productivity"):
+                            state.discovery_state.record_task_productivity(
+                                source=rec_src, rejected_jobs=1
+                            )
                 else:
                     if rec.verification_status in (VerificationStatus.VERIFIED, VerificationStatus.NEEDS_REVIEW):
                         state.verified_records.append(rec)
+                        if hasattr(state, "discovery_state") and hasattr(state.discovery_state, "record_task_productivity"):
+                            state.discovery_state.record_task_productivity(source=rec_src, verified_jobs=1)
                     else:
                         rec.verification_status = VerificationStatus.REJECTED
                         state.rejected_records.append(rec)
+                        if hasattr(state, "discovery_state") and hasattr(state.discovery_state, "record_task_productivity"):
+                            state.discovery_state.record_task_productivity(source=rec_src, rejected_jobs=1)
 
             except Exception as e:
                 logger.warning(f"Verify error: {e}")
                 rec.verification_status = VerificationStatus.REJECTED
                 rec.warnings.append(f"Verification error: {e}")
                 state.rejected_records.append(rec)
+                if hasattr(state, "discovery_state") and hasattr(state.discovery_state, "record_task_productivity"):
+                    state.discovery_state.record_task_productivity(
+                        source=rec_src, verification_failures=1, rejected_jobs=1
+                    )
 
     def _act_analyze(self, state: AgentState, emit):
         """Run job analysis and ranking with deterministic qualification fallback."""
@@ -823,7 +846,7 @@ class AgentRuntime:
                     responsibilities=f.get("responsibilities") or [],
                     salary_min=f.get("salary_min"),
                     salary_max=f.get("salary_max"),
-                    salary_currency=f.get("salary_currency", "USD"),
+                    salary_currency=f.get("salary_currency"),
                     verification_status=getattr(r, "verification_status", "verified") if isinstance(getattr(r, "verification_status", None), str) else getattr(getattr(r, "verification_status", None), "value", "verified"),
                     qualification_status="QUALIFIED",
                     qualification_reasons=f.get("match_explanation", "").split("; ") if f.get("match_explanation") else [],
@@ -837,6 +860,7 @@ class AgentRuntime:
             "status": result_status,
             "records": final_records,
             "job_records": canonical_job_records,
+            "canonical_job_records": canonical_job_records,
             "records_verified": len(state.verified_records),
             "records_qualified": len(final_records),
             "records_rejected": len(state.rejected_records),

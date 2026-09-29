@@ -147,7 +147,7 @@ def _enrich_job_fields(fields: Dict[str, Any], doc_text: str, url: str) -> Dict[
         fields["currency"] = "USD"
     else:
         from datahunt.agents.query_understanding import detect_local_currency
-        fields["currency"] = detect_local_currency(loc, default="USD")
+        fields["currency"] = detect_local_currency(loc, default=None)
 
     # 3. Experience range
     exp_m = re.search(r'(\d+)\s*[-–to]+\s*(\d+)\s*(?:years?|yrs?)', text_sample, re.I)

@@ -42,7 +42,7 @@ class JobRecord(BaseModel):
 
     salary_min: Optional[float] = None
     salary_max: Optional[float] = None
-    salary_currency: Optional[str] = "USD"
+    salary_currency: Optional[str] = None
 
     verification_status: str = "verified"  # verified | unverified | rejected
     qualification_status: str = "QUALIFIED"  # QUALIFIED | DISQUALIFIED | NEEDS_REVIEW
