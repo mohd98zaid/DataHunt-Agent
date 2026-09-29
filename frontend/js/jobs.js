@@ -772,6 +772,7 @@ function toggleSelectAll(isChecked) {
   updateBulkControls();
   renderTable(filteredJobs);
 }
+window.toggleSelectAll = toggleSelectAll;
 
 function toggleJobSelection(recordId, isChecked) {
   if (isChecked) {
@@ -786,6 +787,7 @@ function toggleJobSelection(recordId, isChecked) {
     else row.classList.remove("selected-row");
   }
 }
+window.toggleJobSelection = toggleJobSelection;
 
 function escapeHtml(str) {
   if (!str) return "";
@@ -964,8 +966,6 @@ window.deleteJob = async function(recordId, event) {
       throw new Error(errData.detail || `HTTP ${res.status}`);
     }
 
-    // Remove from local collections
-    allJobs = allJobs.filter(j => j.id !== recordId);
     selectedJobIds.delete(recordId);
 
     // Close modal if open for this job
@@ -975,9 +975,8 @@ window.deleteJob = async function(recordId, event) {
       activeJobId = null;
     }
 
-    updateStatPills(allJobs);
-    populateFilterDropdowns(allJobs);
-    applyFilters();
+    // Refresh from DB so the job and all its duplicate snapshots disappear
+    await loadJobs();
   } catch (err) {
     console.error("Delete job error:", err);
     alert("Failed to delete job: " + err.message);
@@ -992,7 +991,10 @@ async function bulkDeleteJobs() {
   if (!confirmed) return;
 
   const bulkBtn = document.getElementById("bulk-delete-btn");
-  if (bulkBtn) bulkBtn.textContent = "DELETING...";
+  if (bulkBtn) {
+    bulkBtn.disabled = true;
+    bulkBtn.innerHTML = `<span>⏳ DELETING (${ids.length})...</span>`;
+  }
 
   try {
     const res = await fetch("/api/jobs/bulk-delete", {
@@ -1006,27 +1008,28 @@ async function bulkDeleteJobs() {
       throw new Error(errData.detail || `HTTP ${res.status}`);
     }
 
-    // Remove deleted IDs from allJobs
-    const deletedSet = new Set(ids);
-    allJobs = allJobs.filter(j => !deletedSet.has(j.id));
     selectedJobIds.clear();
 
     const modal = document.getElementById("job-detail-modal");
-    if (modal && deletedSet.has(activeJobId)) {
+    if (modal && ids.includes(activeJobId)) {
       modal.style.display = "none";
       activeJobId = null;
     }
 
-    updateStatPills(allJobs);
-    populateFilterDropdowns(allJobs);
-    applyFilters();
+    // Refresh from DB so all deleted jobs and duplicate clones are purged from view
+    await loadJobs();
   } catch (err) {
     console.error("Bulk delete error:", err);
     alert("Failed to bulk delete jobs: " + err.message);
   } finally {
+    if (bulkBtn) {
+      bulkBtn.disabled = false;
+      bulkBtn.innerHTML = `<span>🗑️ DELETE (<span id="selected-count">0</span>)</span>`;
+    }
     updateBulkControls();
   }
 }
+window.bulkDeleteJobs = bulkDeleteJobs;
 
 function formatPostedDate(val, fallback = "Recent") {
   if (!val) return fallback;

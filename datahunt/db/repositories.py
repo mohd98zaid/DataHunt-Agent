@@ -792,32 +792,85 @@ class JobTrackingRepository:
         finally:
             conn.close()
 
-    def delete_job(self, record_id: str) -> bool:
-        """Permanently delete a job record, its tracking status, and associated evidence."""
-        conn = self.conn_factory()
-        try:
-            with conn:
-                conn.execute("DELETE FROM job_application_status WHERE record_id = ?;", (record_id,))
-                conn.execute("DELETE FROM record_evidence WHERE record_id = ?;", (record_id,))
-                cur = conn.execute("DELETE FROM extracted_records WHERE id = ?;", (record_id,))
-                return cur.rowcount > 0
-        finally:
-            conn.close()
-
     def delete_jobs(self, record_ids: List[str]) -> int:
-        """Permanently bulk delete multiple job records within a transaction."""
+        """
+        Permanently bulk delete multiple job records, including all historical clone snapshots
+        (matching identity_key, canonical_url, or normalized title + company) within a transaction.
+        """
         if not record_ids:
             return 0
         conn = self.conn_factory()
         try:
-            placeholders = ",".join(["?"] * len(record_ids))
             with conn:
-                conn.execute(f"DELETE FROM job_application_status WHERE record_id IN ({placeholders});", record_ids)
-                conn.execute(f"DELETE FROM record_evidence WHERE record_id IN ({placeholders});", record_ids)
-                cur = conn.execute(f"DELETE FROM extracted_records WHERE id IN ({placeholders});", record_ids)
+                # 1. Fetch metadata for the specified record_ids to find all clone snapshots
+                placeholders = ",".join(["?"] * len(record_ids))
+                rows = conn.execute(
+                    f"SELECT id, fields_json, canonical_url, identity_key FROM extracted_records WHERE id IN ({placeholders});",
+                    record_ids
+                ).fetchall()
+
+                all_ids = set(record_ids)
+                for row in rows:
+                    all_ids.add(row["id"])
+                    try:
+                        fields = json.loads(row["fields_json"] or "{}")
+                    except Exception:
+                        fields = {}
+                    title = (fields.get("title") or fields.get("name") or "").strip().lower()
+                    company = (fields.get("company") or fields.get("company_name") or "").strip().lower()
+                    url = (row["canonical_url"] or fields.get("application_url") or "").strip()
+
+                    # Find all clone records with the same normalized (title, company)
+                    if title and company and len(title) >= 3:
+                        clones = conn.execute("""
+                            SELECT id FROM extracted_records
+                            WHERE LOWER(TRIM(COALESCE(JSON_EXTRACT(fields_json, '$.title'), JSON_EXTRACT(fields_json, '$.name'), ''))) = ?
+                              AND LOWER(TRIM(COALESCE(JSON_EXTRACT(fields_json, '$.company'), JSON_EXTRACT(fields_json, '$.company_name'), ''))) = ?;
+                        """, (title, company)).fetchall()
+                        for c in clones:
+                            all_ids.add(c["id"])
+
+                    # Find clone records with the same exact canonical_url (if not a generic root directory)
+                    if url and len(url) > 12 and not any(board in url for board in ("/careers", "/jobs", "/search", "boards.greenhouse.io")):
+                        url_clones = conn.execute(
+                            "SELECT id FROM extracted_records WHERE canonical_url = ?;", (url,)
+                        ).fetchall()
+                        for c in url_clones:
+                            all_ids.add(c["id"])
+
+                    # Find clone records with the same identity_key if present
+                    if row["identity_key"]:
+                        id_clones = conn.execute(
+                            "SELECT id FROM extracted_records WHERE identity_key = ?;", (row["identity_key"],)
+                        ).fetchall()
+                        for c in id_clones:
+                            all_ids.add(c["id"])
+
+                full_ids = list(all_ids)
+                full_placeholders = ",".join(["?"] * len(full_ids))
+
+                # Clean up auxiliary tables referencing these record IDs
+                for tbl in (
+                    "job_application_status",
+                    "record_evidence",
+                    "saved_jobs",
+                    "ignored_jobs",
+                    "interview_prep_sessions",
+                    "job_change_events",
+                ):
+                    try:
+                        conn.execute(f"DELETE FROM {tbl} WHERE record_id IN ({full_placeholders});", full_ids)
+                    except Exception as te:
+                        logger.debug(f"Aux table delete from {tbl}: {te}")
+
+                cur = conn.execute(f"DELETE FROM extracted_records WHERE id IN ({full_placeholders});", full_ids)
                 return cur.rowcount
         finally:
             conn.close()
+
+    def delete_job(self, record_id: str) -> bool:
+        """Permanently delete a job record, all its duplicate snapshots, and tracking status."""
+        return self.delete_jobs([record_id]) > 0
 
 
 class ExportRepository:

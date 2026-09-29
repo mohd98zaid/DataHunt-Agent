@@ -29,7 +29,7 @@
         <div class="tracker-stat-pill" id="total-jobs-pill">0 TOTAL JOBS</div>
         <div class="tracker-stat-pill applied-pill" id="applied-jobs-pill">0 APPLIED</div>
         <div class="tracker-stat-pill interview-pill" id="interview-jobs-pill">0 INTERVIEWS</div>
-        <button class="bulk-delete-btn" id="bulk-delete-btn" style="display: none;" title="Delete selected job records">
+        <button class="bulk-delete-btn" id="bulk-delete-btn" style="display: none;" title="Delete selected job records" onclick="bulkDeleteJobs()">
           <span>🗑️ DELETE (<span id="selected-count">0</span>)</span>
         </button>
         <button class="refresh-btn" id="refresh-jobs-btn" title="Sync from Database">
@@ -164,7 +164,7 @@
           <thead>
             <tr>
               <th style="width: 38px; text-align: center;">
-                <input type="checkbox" id="select-all-jobs" class="cyber-checkbox" title="Select / Deselect all visible jobs" />
+                <input type="checkbox" id="select-all-jobs" class="cyber-checkbox" title="Select / Deselect all visible jobs" onchange="toggleSelectAll(this.checked)" />
               </th>
               <th style="width: 45px;">#</th>
               <th>JOB ROLE & COMPANY</th>
