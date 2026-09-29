@@ -381,6 +381,8 @@ def extract_job_records_from_document(
         sections = re.split(r"(?m)^##\s+", doc_text)
         topic_lower = (topic or "").lower()
         topic_tokens = [w for w in re.findall(r"\b[a-zA-Z]{3,}\b", topic_lower) if w not in ("find", "jobs", "with", "years", "experience", "for", "and", "the")]
+        _LOC_WORDS = {"saudi", "arabia", "ksa", "uae", "dubai", "riyadh", "abu", "dhabi", "jeddah", "qatar", "doha", "kuwait", "oman", "muscat", "bahrain", "manama", "cairo", "egypt", "india", "usa", "uk", "london", "remote", "worldwide", "global"}
+        role_tokens = [tok for tok in topic_tokens if tok not in _LOC_WORDS]
 
         for sec in sections[1:]:
             lines = sec.strip().splitlines()
@@ -415,10 +417,13 @@ def extract_job_records_from_document(
                 if any(f in j_loc_low for f in ("united states", "usa", "mexico", "budapest", "hungary", "india", "pune", "delhi", "bengaluru", "bangalore", "germany", "france", "canada", "brazil", "poland")):
                     continue
 
-            # If topic contains specific location or role keywords, check if job or location matches
+            # If topic contains specific role keywords, enforce role relevance over title
             full_job_text = f"{j_title} {j_loc}".lower()
-            if topic_tokens:
-                # Require at least one topic token match (e.g. "ai", "engineer", "saudi", "uae", "dubai", "remote")
+            if role_tokens:
+                matches_role = any(tok in j_title.lower() for tok in role_tokens)
+                if not matches_role:
+                    continue
+            elif topic_tokens:
                 matches_topic = any(tok in full_job_text for tok in topic_tokens)
                 if not matches_topic:
                     continue
@@ -678,6 +683,10 @@ def extract_job_records_from_document(
                 distinct_roles.append((cand, m.start()))
 
     if len(distinct_roles) >= 2:
+        topic_lower = (topic or "").lower()
+        topic_tokens = [w for w in re.findall(r"\b[a-zA-Z]{3,}\b", topic_lower) if w not in ("find", "jobs", "with", "years", "experience", "for", "and", "the", "about", "from", "looking")]
+        _LOC_WORDS = {"saudi", "arabia", "ksa", "uae", "dubai", "riyadh", "abu", "dhabi", "jeddah", "qatar", "doha", "kuwait", "oman", "muscat", "bahrain", "manama", "cairo", "egypt", "india", "usa", "uk", "london", "remote", "worldwide", "global"}
+        role_tokens = [tok for tok in topic_tokens if tok not in _LOC_WORDS]
         multi_records = []
         for idx, (role_cand, pos) in enumerate(distinct_roles[:20]):
             end_pos = distinct_roles[idx + 1][1] if idx + 1 < len(distinct_roles) else pos + 1500
@@ -687,6 +696,15 @@ def extract_job_records_from_document(
             loc_m = re.search(r"\b(?:in|location:|based in|at)\s+([A-Z][a-zA-Z\s]+(?:,\s*[A-Z]{2}|,\s*[A-Z][a-zA-Z\s]+)?)", section_text)
             if loc_m:
                 sub_loc = loc_m.group(1).strip()
+
+            if role_tokens:
+                matches_role = any(tok in role_cand.lower() for tok in role_tokens)
+                if not matches_role:
+                    continue
+            elif topic_tokens:
+                full_cand_text = f"{role_cand} {sub_loc} {section_text[:400]}".lower()
+                if not any(tok in full_cand_text for tok in topic_tokens):
+                    continue
 
             sub_sal = salary
             sal_m2 = re.search(r"((?:\$|USD|EUR|GBP|AED|CAD)\s*[\d,]+(?:\s*-\s*(?:\$|USD|EUR|GBP|AED|CAD)?\s*[\d,]+)?)", section_text)

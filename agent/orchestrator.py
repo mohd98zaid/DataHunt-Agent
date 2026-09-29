@@ -379,6 +379,15 @@ class ResearchOrchestrator:
                 # search_plan_index starts at 0 — the decision loop iterates through all queries
 
                 def _runtime_emit(event_type: str, data: dict):
+                    # Keep counters synced from agent_state
+                    counters.pages_fetched = getattr(agent_state, "fetch_calls", counters.pages_fetched)
+                    counters.pages_failed = getattr(agent_state, "pages_failed", counters.pages_failed)
+                    counters.search_queries = getattr(agent_state, "search_calls", counters.search_queries)
+                    counters.records_verified = len(getattr(agent_state, "verified_records", []))
+                    counters.records_rejected = len(getattr(agent_state, "rejected_records", []))
+                    counters.records_duplicate = len(getattr(agent_state, "duplicate_records", []))
+                    counters.records_extracted = len(getattr(agent_state, "raw_records", []))
+
                     if event_type == "status":
                         emit_event("phase.change", {
                             "phase": data.get("phase", "RUNNING"),
@@ -418,6 +427,7 @@ class ResearchOrchestrator:
                 counters.pages_failed = _result.get("pages_failed", 0)
                 counters.records_verified = _result.get("records_verified", 0)
                 counters.records_rejected = _result.get("records_rejected", 0)
+                counters.records_duplicate = _result.get("records_duplicate", len(getattr(agent_state, "duplicate_records", [])))
                 counters.search_queries = _result.get("search_iterations", 0)
 
                 # Persist fetched documents to SQLite database

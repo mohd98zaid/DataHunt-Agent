@@ -1364,6 +1364,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
           if (latestRunRecords.length > 0) {
             const confList = latestRunRecords
+              .filter(r => {
+                const s = (r.verification_status || "").toLowerCase();
+                return s === "verified" || (s !== "rejected" && s !== "duplicate" && s !== "disqualified");
+              })
               .map(r => typeof r.confidence === "number" ? r.confidence : null)
               .filter(c => c !== null);
             if (confList.length > 0 && hud && typeof hud.updateConfidence === "function") {
@@ -1485,7 +1489,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const confVal = typeof data.confidence === "number" ? data.confidence : 0.95;
       if (scene && typeof scene.onRecordVerified === "function") scene.onRecordVerified(entity, data.status, confVal);
       hud.appendLog("VERIFY", `[${data.status}] ${entity} (conf: ${(confVal * 100).toFixed(0)}%)`);
-      if (data.status === "VERIFIED") {
+      if ((data.status || "").toUpperCase() === "VERIFIED") {
         runConfidenceSum += confVal;
         runConfidenceCount += 1;
         const runningAvg = Math.round((runConfidenceSum / runConfidenceCount) * 100);
@@ -1602,6 +1606,10 @@ document.addEventListener("DOMContentLoaded", () => {
             latestRunRecords = records || [];
             if (latestRunRecords.length > 0) {
               const confList = latestRunRecords
+                .filter(r => {
+                  const s = (r.verification_status || "").toLowerCase();
+                  return s === "verified" || (s !== "rejected" && s !== "duplicate" && s !== "disqualified");
+                })
                 .map(r => typeof r.confidence === "number" ? r.confidence : null)
                 .filter(c => c !== null);
               if (confList.length > 0) {

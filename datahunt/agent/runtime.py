@@ -712,8 +712,14 @@ class AgentRuntime:
 
     def _act_extract(self, state: AgentState, emit):
         """Extract records from fetched documents."""
-        unprocessed = [d for d in state.fetched_docs
-                       if not any(getattr(r, 'source_doc_id', None) == d.id for r in state.raw_records)]
+        if not hasattr(state, "extracted_doc_ids"):
+            state.extracted_doc_ids = set()
+
+        unprocessed = [
+            d for d in state.fetched_docs
+            if d.id not in state.extracted_doc_ids
+            and not any(getattr(r, 'source_document_id', None) == d.id for r in state.raw_records)
+        ]
         if not unprocessed:
             return
 
@@ -722,6 +728,7 @@ class AgentRuntime:
         records_added = 0
 
         for doc in unprocessed:
+            state.extracted_doc_ids.add(doc.id)
             if state.deadline > 0 and time.time() >= state.deadline:
                 break
             try:
@@ -1116,6 +1123,7 @@ class AgentRuntime:
             "records_verified": len(state.verified_records),
             "records_qualified": len(final_records),
             "records_rejected": len(state.rejected_records),
+            "records_duplicate": len(getattr(state, "duplicate_records", [])),
             "search_iterations": len(state.search_iterations),
             "pages_fetched": state.fetch_calls,
             "pages_failed": state.pages_failed,

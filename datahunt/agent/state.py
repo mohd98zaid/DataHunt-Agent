@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 from enum import Enum
 
 class AgentStatus(str, Enum):
@@ -79,6 +79,7 @@ class AgentState:
     source_run_results: Dict[str, Any] = field(default_factory=dict)
 
     fetched_docs: List[Any] = field(default_factory=list)
+    extracted_doc_ids: Set[str] = field(default_factory=set)
     raw_records: List[Any] = field(default_factory=list)
     verified_records: List[Any] = field(default_factory=list)
     qualified_records: List[Any] = field(default_factory=list)
