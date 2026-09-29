@@ -52,11 +52,8 @@ class AgentRuntime:
         from .discovery_engine import DiscoveryEngine
         self.discovery_engine = DiscoveryEngine()
 
-    def run(self, state: AgentState, emit: Callable[[str, Dict], None]) -> Dict[str, Any]:
-        """
-        Execute the agent loop until a stop condition is reached.
-        Returns the final result dict.
-        """
+    def _init_state(self, state: AgentState, emit: Callable[[str, Dict], None]):
+        """Initialize state, canonical job request, discovery state, and search plan."""
         emit("status", {"message": "Understanding search requirements", "phase": "PLANNING"})
         state.status = AgentStatus.PLANNING
 
@@ -107,33 +104,10 @@ class AgentRuntime:
                     coverage_matrix=SourceCoverageMatrix(target_regions=target_geos)
                 )
 
+            # Section 2 & Phase 1/2: DiscoveryEngine is the sole runtime search authority in Job Mode.
+            # Do NOT inject legacy search_plan into DiscoveryState.task_queue.
             initial_tasks = self.discovery_engine.generate_initial_tasks(state.canonical_job_request, state)
-
-            if state.search_plan:
-                injected_tasks = []
-                for idx, q_item in enumerate(state.search_plan):
-                    q_str = q_item.get("query") if isinstance(q_item, dict) else str(q_item)
-                    injected_tasks.append(SearchTask(
-                        id=f"injected_{idx}",
-                        task_type=SearchTaskType.GENERAL_SEARCH,
-                        query=q_str,
-                        source=q_item.get("source_id", "injected_plan") if isinstance(q_item, dict) else "injected_plan",
-                        source_type=DiscoveredSourceType.MAJOR_BOARD,
-                        priority=q_item.get("tier", 2) if isinstance(q_item, dict) else 2,
-                        depth=0,
-                        round=1,
-                        reason="Pre-planned search query",
-                        location=state.explicit_location,
-                    ))
-                seen_q = set()
-                combined_tasks = []
-                for t in initial_tasks + injected_tasks:
-                    if t.query not in seen_q:
-                        seen_q.add(t.query)
-                        combined_tasks.append(t)
-                state.discovery_state.task_queue.extend(combined_tasks)
-            else:
-                state.discovery_state.task_queue.extend(initial_tasks)
+            state.discovery_state.task_queue.extend(initial_tasks)
 
             state.search_plan = [
                 {"query": t.query, "tier": t.priority, "purpose": t.reason, "source_id": t.source, "page": t.page}
@@ -159,6 +133,13 @@ class AgentRuntime:
 
         emit("status", {"message": f"Formulated {len(state.search_plan)} search queries", "phase": "PLANNED"})
         state.record_action("planned")
+
+    def run(self, state: AgentState, emit: Callable[[str, Dict], None]) -> Dict[str, Any]:
+        """
+        Execute the agent loop until a stop condition is reached.
+        Returns the final result dict.
+        """
+        self._init_state(state, emit)
 
         while True:
             state.iteration += 1
@@ -190,66 +171,21 @@ class AgentRuntime:
         """Build a focused tiered search plan from the request."""
         is_job = state.mode in ("jobs", "job")
         if is_job:
-            from datahunt.agents import QueryUnderstandingAgent, QueryExpansionAgent, SearchPlannerAgent, JobSearchRequest
+            # Section 2 & Phase 1/2: DiscoveryEngine is the sole runtime search authority in Job Mode.
+            # SearchPlannerAgent does NOT control Job Agent runtime execution.
+            from datahunt.agents import QueryUnderstandingAgent, JobSearchRequest
             qu_agent = QueryUnderstandingAgent(gemini_client=self.client)
-            qe_agent = QueryExpansionAgent(gemini_client=self.client)
-            sp_agent = SearchPlannerAgent()
 
             if not state.canonical_job_request:
                 state.canonical_job_request = qu_agent.understand(state.request)
 
             job_req = state.canonical_job_request if isinstance(state.canonical_job_request, JobSearchRequest) else qu_agent.understand(state.request)
 
-            # 1. Select registered sources matching job spec
-            from datahunt.sources.models import SourceRunResult, SourceStatus
-            from datahunt.sources.adapters import get_adapter_for_source
-            sources = self.source_registry.get_sources_for_spec(job_req)
-
-            for s in sources:
-                if s.id not in state.source_run_results:
-                    state.source_run_results[s.id] = SourceRunResult(
-                        source_id=s.id,
-                        source_name=s.name,
-                        source_type=s.source_type.value,
-                        status=SourceStatus.PENDING,
-                    )
-
-            emit("status", {
-                "message": f"Sources selected: {len(sources)} across ATS, Regional, Major, Tech, and Remote boards",
-                "phase": "PLANNING"
-            })
-
-            # 2. Build adapter-targeted queries for all selected sources
-            source_queries = []
-            for s in sources:
-                adapter = get_adapter_for_source(s)
-                for sq in adapter.build_search_queries(job_req):
-                    source_queries.append({
-                        "query": sq,
-                        "tier": s.priority,
-                        "purpose": f"{s.source_type.value}:{s.name}",
-                        "source_id": s.id
-                    })
-
-            # 3. Augment with search planner queries
-            expanded = qe_agent.expand(job_req)
-            tasks = sp_agent.plan(job_req, expanded)
-
-            seen_q = set()
-            combined_plan = []
-            for q_obj in source_queries:
-                q_txt = q_obj["query"].strip()
-                if q_txt not in seen_q:
-                    seen_q.add(q_txt)
-                    combined_plan.append(q_obj)
-
-            for t in tasks:
-                q_txt = t.query.strip()
-                if q_txt not in seen_q:
-                    seen_q.add(q_txt)
-                    combined_plan.append({"query": t.query, "tier": t.priority, "purpose": t.purpose})
-
-            plan = combined_plan if combined_plan else [{"query": state.request, "tier": 1, "purpose": "primary"}]
+            initial_tasks = self.discovery_engine.generate_initial_tasks(job_req, state)
+            plan = [
+                {"query": t.query, "tier": t.priority, "purpose": t.reason, "source_id": t.source, "page": t.page}
+                for t in initial_tasks
+            ]
         else:
             from datahunt.models.run import RunBudget
             spec = self.client.normalize_request(state.request)
@@ -401,6 +337,15 @@ class AgentRuntime:
                     state.discovery_state.telemetry_logs.append(telemetry)
                     emit("telemetry", telemetry.__dict__)
 
+                    # Update adaptive search productivity metrics (Sections 13 & 14)
+                    if hasattr(state.discovery_state, "record_task_productivity"):
+                        state.discovery_state.record_task_productivity(
+                            source=task.source,
+                            hits=len(res.data) if res.success else 0,
+                            valid_jobs=new_candidates,
+                            unique_jobs=new_candidates,
+                        )
+
                     self.decision_engine.record_search_iteration(
                         state, query, len(res.data) if res.success else 0, new_candidates
                     )
@@ -411,6 +356,8 @@ class AgentRuntime:
                 except Exception as e:
                     logger.warning(f"Discovery search error for '{query}': {e}")
                     state.add_warning(f"Search failed: {query[:40]}")
+                    if hasattr(state.discovery_state, "record_task_productivity"):
+                        state.discovery_state.record_task_productivity(source=task.source, failed=True)
 
             # If task queue is empty for current round, advance to next discovery round if budget permits
             if not state.discovery_state.task_queue and state.discovery_state.current_round < state.discovery_budget.max_expansion_rounds:
@@ -426,10 +373,11 @@ class AgentRuntime:
                     state.discovery_state, state.canonical_job_request, state
                 )
                 if next_tasks:
-                    state.discovery_state.task_queue.extend(next_tasks)
-                    logger.info(f"Advanced to Discovery Round {state.discovery_state.current_round} with {len(next_tasks)} new tasks")
+                    prioritized = self.discovery_engine.prioritize_tasks(next_tasks, state.discovery_state)
+                    state.discovery_state.task_queue.extend(prioritized)
+                    logger.info(f"Advanced to Discovery Round {state.discovery_state.current_round} with {len(prioritized)} new tasks")
                     emit("status", {
-                        "message": f"Advancing to Discovery Round {state.discovery_state.current_round} ({len(next_tasks)} tasks)",
+                        "message": f"Advancing to Discovery Round {state.discovery_state.current_round} ({len(prioritized)} tasks)",
                         "phase": "SEARCHING"
                     })
             return
@@ -607,11 +555,28 @@ class AgentRuntime:
             | set(r.id for r in state.rejected_records)
             | set(r.id for r in state.qualified_records)
             | set(r.id for r in state.disqualified_records)
+            | set(r.id for r in getattr(state, "duplicate_records", []))
         )
         unverified = [r for r in state.raw_records if r.id not in already_processed]
 
         if not unverified:
             return
+
+        # Entity-level deduplication BEFORE expensive verification & qualification (Section 11)
+        if state.mode in ("jobs", "job") and len(unverified) > 1:
+            try:
+                dedup_res = self.dedupe.execute(unverified)
+                if dedup_res.success:
+                    unique_candidates = dedup_res.data.get("unique_records", unverified)
+                    unique_cand_ids = {r.id for r in unique_candidates}
+                    for r in unverified:
+                        if r.id not in unique_cand_ids:
+                            r.verification_status = VerificationStatus.DUPLICATE
+                            if hasattr(state, "duplicate_records"):
+                                state.duplicate_records.append(r)
+                    unverified = unique_candidates
+            except Exception as e:
+                logger.warning(f"Early deduplication error before verification: {e}")
 
         emit("status", {"message": f"Verifying {len(unverified)} candidates", "phase": "VERIFYING"})
         geo_name = state.explicit_location
@@ -752,7 +717,27 @@ class AgentRuntime:
         else:
             final_records = []
 
+        # PHASE 10: Final qualification safety gate (Section 21)
         if state.mode in ("jobs", "job") and final_records:
+            job_req = state.canonical_job_request
+            safe_final = []
+            for r in final_records:
+                q_res = qualify_job(r, job_req) if job_req else None
+                if q_res is None or (q_res.qualified and q_res.eligibility_status == "ELIGIBLE"):
+                    safe_final.append(r)
+                else:
+                    logger.warning(
+                        f"Final safety gate eliminated ineligible job '{r.fields.get('title')}': {q_res.rejection_reasons}"
+                    )
+                    if hasattr(state, "disqualified_records"):
+                        state.disqualified_records.append(r)
+                    state.add_warning(f"Final safety gate eliminated ineligible job '{r.fields.get('title')}'")
+            final_records = safe_final
+            if job_req:
+                assert all(
+                    qualify_job(r, job_req).eligibility_status == "ELIGIBLE"
+                    for r in final_records
+                ), "Final safety gate violated: ineligible job escaped to output"
             final_records.sort(key=lambda r: -(getattr(r, "confidence", 0.0) or 0.0))
 
         # Coverage evaluation and honest summary reporting
@@ -801,12 +786,19 @@ class AgentRuntime:
                             source_type=ev.get("source_type", "web_page"),
                             confidence=float(ev.get("confidence", 0.9)),
                         ))
-                src_url = f.get("job_url") or f.get("apply_url") or getattr(r, "canonical_url", "")
+                src_url = (
+                    f.get("job_url")
+                    or f.get("apply_url")
+                    or getattr(r, "canonical_url", None)
+                    or f"https://job.datahunt.internal/{getattr(r, 'id', 'listing')}"
+                )
+                canonical_u = getattr(r, "canonical_url", None) or src_url or ""
+
                 if not ev_list and src_url:
                     ev_list.append(Evidence(
                         claim=f"{f.get('title', 'Job')} at {f.get('company', 'Company')} ({f.get('location', 'Location')})",
                         source_url=src_url,
-                        source_title=f.get("source", "Job Posting"),
+                        source_title=f.get("source", "Job Posting") or "Job Posting",
                         source_type="job_board",
                         confidence=float(getattr(r, "confidence", 0.85) or 0.85),
                     ))
@@ -816,11 +808,11 @@ class AgentRuntime:
 
                 canonical_job_records.append(JobRecord(
                     id=getattr(r, "id", f"job_{uuid.uuid4().hex[:12]}"),
-                    title=f.get("title") or f.get("job_title", ""),
-                    company=f.get("company", ""),
-                    location=f.get("location", ""),
+                    title=f.get("title") or f.get("job_title", "") or "",
+                    company=f.get("company", "") or "",
+                    location=f.get("location", "") or "",
                     url=src_url,
-                    canonical_url=getattr(r, "canonical_url", "") or src_url,
+                    canonical_url=canonical_u,
                     source=f.get("source", "Web"),
                     source_type=f.get("source_type", "job_board"),
                     description=f.get("description"),

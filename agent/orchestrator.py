@@ -248,10 +248,9 @@ class ResearchOrchestrator:
 
             # Augment with direct ATS harvesting targets when doing job research, or specialized market intelligence, or technical research
             if is_job_search:
-                from datahunt.agents import QueryUnderstandingAgent, QueryExpansionAgent, SearchPlannerAgent, JobSearchRequest
+                from datahunt.agents import QueryUnderstandingAgent, QueryExpansionAgent, JobSearchRequest
                 qu_agent = QueryUnderstandingAgent(gemini_client=self.client)
                 qe_agent = QueryExpansionAgent(gemini_client=self.client)
-                sp_agent = SearchPlannerAgent()
 
                 job_req = qu_agent.understand(task.request_text)
                 if isinstance(job_req, JobSearchRequest):
@@ -269,8 +268,23 @@ class ResearchOrchestrator:
                         "must_have_skills": expanded.must_have_skills,
                         "search_keywords": expanded.search_keywords
                     })
-                    planned_tasks = sp_agent.plan(job_req, expanded)
-                    queries = [{"query": t.query, "purpose": t.purpose, "source_type": t.source_type, "freshness_days": t.freshness_days} for t in planned_tasks]
+                    # In Job Mode, DiscoveryEngine is the sole runtime search authority (Section 2 & Phase 1/2)
+                    from datahunt.agent.discovery_engine import DiscoveryEngine
+                    disc_engine = DiscoveryEngine()
+                    from datahunt.agent.state import AgentState
+                    temp_state = AgentState(
+                        request=task.request_text,
+                        run_id=run.id,
+                        task_id=task.id,
+                        mode="jobs",
+                        locations=job_req.locations or ([job_req.location] if job_req.location else []),
+                        explicit_location=job_req.location or "",
+                        explicit_titles=[job_req.job_title] if job_req.job_title else [],
+                        explicit_skills=job_req.explicit_skills or job_req.skills or [],
+                        remote_allowed=job_req.remote_allowed if job_req.remote_allowed is not None else True,
+                    )
+                    init_tasks = disc_engine.generate_initial_tasks(job_req, temp_state)
+                    queries = [{"query": t.query, "purpose": t.reason, "source_type": t.source_type.value, "freshness_days": 30} for t in init_tasks]
                 else:
                     from datahunt.tools.search import generate_ats_queries, generate_broad_job_queries
                     ats_queries = [{"query": q, "purpose": "direct_ats_harvest"} for q in generate_ats_queries(task.request_text)]

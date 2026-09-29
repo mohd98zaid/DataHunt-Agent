@@ -162,3 +162,44 @@ class DiscoveryState:
     round_novel_candidates: Dict[int, int] = field(default_factory=dict)
     telemetry_logs: List[DiscoveryRoundTelemetry] = field(default_factory=list)
     consecutive_low_yield_rounds: int = 0
+    source_productivity: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
+    def record_task_productivity(
+        self,
+        source: str,
+        hits: int = 0,
+        valid_jobs: int = 0,
+        unique_jobs: int = 0,
+        qualified_jobs: int = 0,
+        duplicate_jobs: int = 0,
+        rejected_jobs: int = 0,
+        failed: bool = False,
+    ):
+        """Record search yield metrics for adaptive discovery (Sections 13 & 14)."""
+        s = source.lower().strip()
+        if s not in self.source_productivity:
+            self.source_productivity[s] = {
+                "queries_executed": 0,
+                "hits": 0,
+                "valid_jobs": 0,
+                "unique_jobs": 0,
+                "qualified_jobs": 0,
+                "duplicate_jobs": 0,
+                "rejected_jobs": 0,
+                "failures": 0,
+                "productivity_score": 1.0,
+            }
+        data = self.source_productivity[s]
+        data["queries_executed"] += 1
+        data["hits"] += hits
+        data["valid_jobs"] += valid_jobs
+        data["unique_jobs"] += unique_jobs
+        data["qualified_jobs"] += qualified_jobs
+        data["duplicate_jobs"] += duplicate_jobs
+        data["rejected_jobs"] += rejected_jobs
+        if failed:
+            data["failures"] += 1
+
+        dup_penalty = (data["duplicate_jobs"] / max(data["unique_jobs"] + data["duplicate_jobs"], 1)) * 0.5
+        base_score = (data["qualified_jobs"] * 2.0 + data["unique_jobs"]) / max(data["hits"], 1)
+        data["productivity_score"] = max(round(base_score - dup_penalty, 3), 0.05)

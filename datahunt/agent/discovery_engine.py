@@ -383,9 +383,17 @@ class DiscoveryEngine:
 
         # Round 2: Source Expansion & Pagination
         if round_num == 2:
-            # Paginate high-yielding tasks from Round 1
-            productive_tasks = [t for t in discovery_state.completed_tasks if t.round == 1 and t.priority <= 2]
-            for pt in productive_tasks[:4]:
+            # Paginate high-yielding tasks from Round 1, favoring productive sources (Section 14 & 15)
+            completed = list(discovery_state.completed_tasks)
+            completed.sort(key=lambda pt: (
+                pt.priority,
+                -discovery_state.source_productivity.get(pt.source.lower(), {}).get("productivity_score", 1.0)
+            ))
+            for pt in completed[:4]:
+                src_stat = discovery_state.source_productivity.get(pt.source.lower(), {})
+                # Skip page 2 if source produced only duplicates and zero qualified jobs
+                if src_stat.get("duplicate_jobs", 0) > 0 and src_stat.get("qualified_jobs", 0) == 0:
+                    continue
                 p2_task = SearchTask(
                     id=f"r2_page2_{pt.id}",
                     task_type=pt.task_type,
@@ -488,6 +496,20 @@ class DiscoveryEngine:
 
         return tasks
 
+    def prioritize_tasks(self, tasks: List[SearchTask], discovery_state: DiscoveryState) -> List[SearchTask]:
+        """
+        Sort and adjust task priority based on observed source productivity (Sections 14 & 15).
+        Sources producing high qualified yields are prioritized, while sources producing
+        only duplicates or zero qualified jobs are deprioritized.
+        """
+        def task_sort_key(t: SearchTask) -> Tuple[int, float]:
+            src_stats = discovery_state.source_productivity.get(t.source.lower(), {})
+            score = src_stats.get("productivity_score", 1.0)
+            # Primary: task priority. Secondary: higher productivity score first
+            return (t.priority, -score)
+
+        return sorted(tasks, key=task_sort_key)
+
     def should_stop(self, discovery_state: DiscoveryState, state: Any) -> Tuple[bool, StopReason, str]:
         """
         Evaluate multi-factor stopping criteria:
@@ -510,7 +532,19 @@ class DiscoveryEngine:
 
         # Target results reached
         if effective_count >= state.target_results:
-            if discovery_state.coverage_matrix.is_balanced(min_categories=2):
+            has_geo_coverage = True
+            if state.locations and len(state.locations) > 1:
+                target_locs = [l.lower() for l in state.locations]
+                found_locs = set()
+                for rec in state.qualified_records:
+                    rec_loc = (rec.fields.get("location") or "").lower()
+                    for tl in target_locs:
+                        if tl in rec_loc or any(alias in rec_loc for alias in ("riyadh", "jeddah", "dammam") if tl == "saudi arabia") or any(alias in rec_loc for alias in ("dubai", "abu dhabi", "sharjah") if tl == "uae"):
+                            found_locs.add(tl)
+                if len(found_locs) < len(target_locs) and discovery_state.current_round < 3:
+                    has_geo_coverage = False
+
+            if has_geo_coverage and discovery_state.coverage_matrix.is_balanced(min_categories=2):
                 return True, StopReason.TARGET_QUALIFIED_REACHED, f"Target results ({effective_count}/{state.target_results}) reached with balanced coverage"
             elif discovery_state.current_round >= 3:
                 return True, StopReason.TARGET_QUALIFIED_REACHED, f"Target results ({effective_count}/{state.target_results}) reached across {discovery_state.current_round} rounds"

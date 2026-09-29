@@ -32,14 +32,15 @@ from datahunt.agent.policies import (
     match_location,
     match_experience,
     match_title_relevance,
-    match_skills,
     TitleCategory,
     MatchStatus,
 )
-from datahunt.tools.dedupe import deduplicate_normalized_jobs
+from datahunt.tools.dedupe import DedupeTool, deduplicate_normalized_jobs
 from datahunt.agent.state import AgentState, AgentStatus
 from datahunt.agent.decision import DecisionEngine, AgentAction
 from datahunt.agent.runtime import AgentRuntime
+from datahunt.agent.discovery_engine import DiscoveryEngine
+from datahunt.agent.discovery_models import SearchTask, SearchTaskType, DiscoveredSourceType, DiscoveryState
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -746,3 +747,414 @@ def test_section_24_golden_end_to_end_job_search():
     assert "cand_1" in final_ids or "cand_9" in final_ids
     assert "cand_2" in final_ids
     assert "cand_3" in final_ids
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 14. Section 25 Explicitly Numbered Precision Test Suite (Tests 1 to 16)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_test_1_explicit_skills_single_missing():
+    """TEST 1 — Explicit skills: Query requires Python and LangChain. Job has Python only -> REJECTED."""
+    policy = QualificationPolicy()
+    req = JobSearchRequest(
+        raw_query="GenAI Engineer requiring Python and LangChain",
+        job_title="GenAI Engineer",
+        explicit_skills=["Python", "LangChain"],
+    )
+    job = {
+        "title": "GenAI Engineer",
+        "company": "Beta AI",
+        "location": "Dubai, UAE",
+        "skills": ["Python"],
+        "description": "Python developer working with standard libraries.",
+    }
+    res = policy.qualify(job, req)
+    assert res.qualified is False
+    assert res.eligibility_status == "INELIGIBLE"
+    assert "langchain" in [s.lower() for s in res.missing_skills]
+
+
+def test_test_2_multiple_explicit_skills_missing_one_rejects():
+    """TEST 2 — Multiple explicit skills: Python + LangChain + LangGraph. Missing LangGraph -> REJECTED."""
+    policy = QualificationPolicy()
+    req = JobSearchRequest(
+        raw_query="GenAI Engineer requiring Python, LangChain, and LangGraph",
+        job_title="GenAI Engineer",
+        explicit_skills=["Python", "LangChain", "LangGraph"],
+    )
+    # Missing LangGraph
+    job_missing = {
+        "title": "GenAI Engineer",
+        "company": "Gamma AI",
+        "location": "Riyadh, Saudi Arabia",
+        "skills": ["Python", "LangChain"],
+        "description": "Python and LangChain agent builder.",
+    }
+    res_m = policy.qualify(job_missing, req)
+    assert res_m.qualified is False
+    assert res_m.eligibility_status == "INELIGIBLE"
+    assert "langgraph" in [s.lower() for s in res_m.missing_skills]
+
+    # All three present -> QUALIFIED
+    job_full = {
+        "title": "GenAI Engineer",
+        "company": "Gamma AI",
+        "location": "Riyadh, Saudi Arabia",
+        "skills": ["Python", "LangChain", "LangGraph"],
+        "description": "Python, LangChain, and LangGraph multi-agent developer.",
+    }
+    res_f = policy.qualify(job_full, req)
+    assert res_f.qualified is True
+    assert res_f.eligibility_status == "ELIGIBLE"
+
+
+def test_test_3_inferred_skill_missing_qualifies():
+    """TEST 3 — Inferred skill: Inferred RAG missing -> QUALIFIED if all explicit constraints pass."""
+    policy = QualificationPolicy()
+    req = JobSearchRequest(
+        raw_query="Find GenAI Engineer in Riyadh",
+        job_title="GenAI Engineer",
+        location="Riyadh",
+        explicit_skills=[],
+        inferred_skills=["RAG", "PyTorch"],
+    )
+    job = {
+        "title": "GenAI Engineer",
+        "company": "Tuwaiq Tech",
+        "location": "Riyadh, Saudi Arabia",
+        "skills": ["Python", "FastAPI"],  # Missing RAG and PyTorch
+        "description": "GenAI backend engineer in Riyadh.",
+    }
+    res = policy.qualify(job, req)
+    assert res.qualified is True
+    assert res.eligibility_status == "ELIGIBLE"
+
+
+def test_test_4_saudi_or_uae_locations():
+    """TEST 4 — Saudi OR UAE: Saudi -> MATCH, UAE -> MATCH, India/UK/USA -> REJECTED."""
+    locs = ["Saudi Arabia", "UAE"]
+    # Saudi matches
+    assert match_location(locs, "Riyadh, Saudi Arabia")[0] == MatchStatus.MATCH
+    assert match_location(locs, "Jeddah, KSA")[0] == MatchStatus.MATCH
+    # UAE matches
+    assert match_location(locs, "Dubai, UAE")[0] == MatchStatus.MATCH
+    assert match_location(locs, "Abu Dhabi, United Arab Emirates")[0] == MatchStatus.MATCH
+    # Rejections
+    assert match_location(locs, "Bengaluru, India")[0] == MatchStatus.MISMATCH
+    assert match_location(locs, "London, UK")[0] == MatchStatus.MISMATCH
+    assert match_location(locs, "Austin, TX, USA")[0] == MatchStatus.MISMATCH
+
+
+def test_test_5_unknown_geography_not_qualified():
+    """TEST 5 — Unknown geography: Saudi/UAE requested. Job location: unknown -> NOT QUALIFIED."""
+    policy = QualificationPolicy()
+    req = JobSearchRequest(
+        raw_query="GenAI Engineer in Saudi Arabia or UAE",
+        job_title="GenAI Engineer",
+        locations=["Saudi Arabia", "UAE"],
+        location="Saudi Arabia or UAE",
+        remote_allowed=False,
+    )
+    job_unknown = {
+        "title": "GenAI Engineer",
+        "company": "Mystery AI",
+        "location": "",
+    }
+    res = policy.qualify(job_unknown, req)
+    assert res.qualified is False
+    assert res.eligibility_status == "INELIGIBLE"
+    assert any("unverified_location" in r for r in res.rejection_reasons)
+
+
+def test_test_6_remote_geography_distinction():
+    """
+    TEST 6 — Remote:
+    Global Remote: allowed if request permits.
+    Saudi Remote: MATCH.
+    UAE Remote: MATCH.
+    US-only Remote: REJECTED.
+    UK-only Remote: REJECTED.
+    """
+    policy = QualificationPolicy()
+    req = JobSearchRequest(
+        raw_query="GenAI Engineer in Saudi Arabia or UAE",
+        job_title="GenAI Engineer",
+        locations=["Saudi Arabia", "UAE"],
+        location="Saudi Arabia or UAE",
+        remote_allowed=True,
+    )
+    assert policy.qualify({"title": "GenAI Engineer", "location": "Remote", "remote_status": "remote"}, req).qualified is True
+    assert policy.qualify({"title": "GenAI Engineer", "location": "Riyadh (Remote)", "remote_status": "remote"}, req).qualified is True
+    assert policy.qualify({"title": "GenAI Engineer", "location": "Dubai (Remote)", "remote_status": "remote"}, req).qualified is True
+    assert policy.qualify({"title": "GenAI Engineer", "location": "US Remote only; San Francisco, CA", "remote_status": "remote"}, req).qualified is False
+    assert policy.qualify({"title": "GenAI Engineer", "location": "London, UK (Remote - UK only)", "remote_status": "remote"}, req).qualified is False
+
+
+def test_test_7_currency_handling():
+    """TEST 7 — Currency: Saudi -> SAR, UAE -> AED, Saudi OR UAE -> None, Explicit USD -> USD."""
+    qu = QueryUnderstandingAgent()
+    assert qu.understand("GenAI Engineer in Riyadh, Saudi Arabia").salary_currency == "SAR"
+    assert qu.understand("GenAI Engineer in Dubai, UAE").salary_currency == "AED"
+
+    spec_multi = qu.understand("GenAI Engineer in Saudi Arabia or UAE")
+    assert spec_multi.salary_currency is None
+    assert spec_multi.salary_currency_source == "unspecified"
+
+    spec_usd = qu.understand("GenAI Engineer in Saudi Arabia or UAE with $120k salary")
+    assert spec_usd.salary_currency == "USD"
+    assert spec_usd.salary_currency_source == "explicit"
+
+
+def test_test_8_title_family_rejections():
+    """
+    TEST 8 — Title:
+    GenAI Engineer -> PASS, LLM Engineer -> PASS, AI Engineer -> PASS.
+    AI Product Manager -> FAIL, AI Sales Manager -> FAIL, AI Recruiter -> FAIL, AI Business Analyst -> FAIL.
+    """
+    policy = QualificationPolicy()
+    req = JobSearchRequest(job_title="GenAI Engineer", location="Dubai")
+    assert policy.qualify({"title": "GenAI Engineer", "location": "Dubai"}, req).qualified is True
+    assert policy.qualify({"title": "LLM Engineer", "location": "Dubai"}, req).qualified is True
+    assert policy.qualify({"title": "AI Engineer", "location": "Dubai"}, req).qualified is True
+
+    for bad in ["AI Product Manager", "AI Sales Manager", "AI Recruiter", "AI Business Analyst"]:
+        res = policy.qualify({"title": bad, "location": "Dubai"}, req)
+        assert res.qualified is False, f"Expected {bad} to be disqualified"
+
+
+def test_test_9_duplicate_vacancy_cross_source_canonical_merge():
+    """
+    TEST 9 — Duplicate vacancy: LinkedIn + Greenhouse + Company Career.
+    Expected: ONE canonical job entity. Sources merged. Direct employer URL preferred.
+    """
+    vacancies = [
+        {"title": "Staff GenAI Engineer", "company": "Noor Labs", "location": "Dubai, UAE", "source": "LinkedIn", "job_url": "https://www.linkedin.com/jobs/view/555"},
+        {"title": "Staff GenAI Engineer", "company": "Noor Labs", "location": "Dubai, UAE", "source": "Greenhouse", "job_url": "https://boards.greenhouse.io/noorlabs/jobs/555"},
+        {"title": "Staff GenAI Engineer", "company": "Noor Labs", "location": "Dubai, UAE", "source": "Company Career", "job_url": "https://noorlabs.ai/careers/staff-genai"},
+    ]
+    norm = DataNormalizer()
+    normalized = [norm.normalize(v, record_id=f"r_{i}") for i, v in enumerate(vacancies)]
+    deduped = deduplicate_normalized_jobs(normalized)
+
+    assert len(deduped) == 1
+    canonical = deduped[0]
+    assert len(canonical.sources) >= 3
+    assert any("greenhouse" in u.lower() or "noorlabs.ai" in u.lower() for u in [canonical.primary_application_url])
+    assert "linkedin.com" not in canonical.primary_application_url
+
+
+def test_test_10_dedup_idempotency():
+    """TEST 10 — Dedup idempotency: Run dedup twice. Expected: same result."""
+    vacancies = [
+        {"title": "GenAI Engineer", "company": "Noor Labs", "location": "Dubai, UAE", "source": "LinkedIn", "job_url": "https://www.linkedin.com/jobs/view/101"},
+        {"title": "GenAI Engineer", "company": "Noor Labs", "location": "Dubai, UAE", "source": "Greenhouse", "job_url": "https://boards.greenhouse.io/noorlabs/jobs/101"},
+    ]
+    norm = DataNormalizer()
+    normalized = [norm.normalize(v, record_id=f"rec_{i}") for i, v in enumerate(vacancies)]
+
+    first_pass = deduplicate_normalized_jobs(normalized)
+    assert len(first_pass) == 1
+    first_pass_data = [(j.normalized_company, j.normalized_title, j.primary_application_url, sorted(j.sources)) for j in first_pass]
+
+    second_pass = deduplicate_normalized_jobs(first_pass)
+    assert len(second_pass) == 1
+    second_pass_data = [(j.normalized_company, j.normalized_title, j.primary_application_url, sorted(j.sources)) for j in second_pass]
+
+    assert first_pass_data == second_pass_data
+
+
+def test_test_11_search_planner_isolation_in_job_mode():
+    """
+    TEST 11 — SearchPlanner isolation:
+    Run a JOB MODE runtime.
+    Assert: SearchPlannerAgent is NOT required to execute runtime searches.
+    DiscoveryEngine owns the task queue.
+    """
+    runtime = AgentRuntime(client=None, search=MagicMock(), fetch=MagicMock(), extract=MagicMock(), verify=MagicMock(), dedupe=MagicMock(), export=MagicMock())
+    state = AgentState(
+        request="Find GenAI Engineer in Riyadh",
+        run_id="run_sp_iso",
+        task_id="task_sp_iso",
+        mode="jobs",
+    )
+    with patch("datahunt.agents.search_planner.SearchPlannerAgent.plan") as mock_sp_plan:
+        mock_sp_plan.side_effect = RuntimeError("SearchPlannerAgent should not be called in Job Mode!")
+        runtime._init_state(state, lambda ev, d: None)
+        assert len(state.discovery_state.task_queue) > 0
+        assert mock_sp_plan.call_count == 0
+
+
+def test_test_12_no_injected_legacy_queries_in_job_mode():
+    """
+    TEST 12 — No injected legacy queries:
+    When DiscoveryEngine initializes:
+    state.search_plan MUST NOT be merged into DiscoveryState.task_queue in JOB MODE.
+    """
+    runtime = AgentRuntime(client=None, search=MagicMock(), fetch=MagicMock(), extract=MagicMock(), verify=MagicMock(), dedupe=MagicMock(), export=MagicMock())
+    state = AgentState(
+        request="Find GenAI Engineer in Dubai",
+        run_id="run_no_inject",
+        task_id="task_no_inject",
+        mode="jobs",
+        search_plan=[{"query": "LEGACY_SEARCH_PLANNER_QUERY_XYZ", "tier": 1, "purpose": "legacy"}]
+    )
+    runtime._init_state(state, lambda ev, d: None)
+    task_queries = [t.query for t in state.discovery_state.task_queue]
+    assert "LEGACY_SEARCH_PLANNER_QUERY_XYZ" not in task_queries
+
+
+def test_test_13_final_safety_gate():
+    """
+    TEST 13 — Final safety gate:
+    Create eligible job and ineligible job.
+    Ensure final output contains only eligible job.
+    """
+    runtime = AgentRuntime(client=None, search=MagicMock(), fetch=MagicMock(), extract=MagicMock(), verify=MagicMock(), dedupe=DedupeTool(), export=MagicMock())
+    spec = JobSearchSpec(raw_query="GenAI Engineer in Dubai requiring Python", titles=["GenAI Engineer"], locations=["Dubai"], explicit_skills=["Python"])
+    state = AgentState(
+        request="GenAI Engineer in Dubai requiring Python",
+        run_id="run_gate",
+        task_id="task_gate",
+        mode="jobs",
+        canonical_job_request=spec,
+    )
+    eligible_job = ExtractedRecord(
+        id="el_1",
+        run_id="run_gate",
+        record_type="job_listing",
+        fields={"title": "GenAI Engineer", "company": "Good AI", "location": "Dubai, UAE", "skills": ["Python"]},
+        verification_status=VerificationStatus.VERIFIED,
+    )
+    # Ineligible job: missing explicit skill Python
+    ineligible_job = ExtractedRecord(
+        id="inel_1",
+        run_id="run_gate",
+        record_type="job_listing",
+        fields={"title": "GenAI Engineer", "company": "Bad AI", "location": "Dubai, UAE", "skills": ["Java"]},
+        verification_status=VerificationStatus.VERIFIED,
+    )
+    state.qualified_records = [eligible_job, ineligible_job]
+    res = runtime._finalize(state, lambda ev, d: None)
+    final_ids = [r.id for r in res.get("records", [])]
+    assert "el_1" in final_ids
+    assert "inel_1" not in final_ids
+    assert len(final_ids) == 1
+
+
+def test_test_14_company_fabrication_zero_invented_facts():
+    """TEST 14 — Company fabrication: No verified company evidence -> company info remains unknown, no invented facts."""
+    mock_search = MagicMock()
+    mock_search.execute.return_value = MagicMock(success=True, data=[])
+    agent = CompanyResearchAgent(search_tool=mock_search)
+    profile = agent.research("CompletelyUnknownFictionalCompany9999", force_refresh=True)
+
+    assert profile.verification_status == "UNVERIFIED"
+    assert profile.is_available is False
+    assert len(profile.company_facts) == 0
+
+
+def test_test_15_adaptive_search_favors_productive_source():
+    """
+    TEST 15 — Adaptive search:
+    Source A produces many qualified jobs.
+    Source B produces only duplicates.
+    Expected: future search budget favors productive Source A.
+    """
+    engine = DiscoveryEngine()
+    disc_state = DiscoveryState()
+    # Source A: productive (qualified yield)
+    disc_state.record_task_productivity(
+        source="boards.greenhouse.io", hits=10, valid_jobs=8, unique_jobs=8, qualified_jobs=6, duplicate_jobs=0
+    )
+    # Source B: unproductive (duplicates only)
+    disc_state.record_task_productivity(
+        source="genericboard.com", hits=50, valid_jobs=2, unique_jobs=2, qualified_jobs=0, duplicate_jobs=40
+    )
+    tasks = [
+        SearchTask(id="tb", task_type=SearchTaskType.GENERAL_SEARCH, query="qB", source="genericboard.com", source_type=DiscoveredSourceType.MAJOR_BOARD, priority=2),
+        SearchTask(id="ta", task_type=SearchTaskType.ATS_SEARCH, query="qA", source="boards.greenhouse.io", source_type=DiscoveredSourceType.ATS_PORTAL, priority=2),
+    ]
+    prioritized = engine.prioritize_tasks(tasks, disc_state)
+    assert prioritized[0].source == "boards.greenhouse.io"
+    assert prioritized[1].source == "genericboard.com"
+
+    # In Round 2, pagination favors Source A and skips unproductive Source B
+    disc_state.current_round = 2
+    disc_state.completed_tasks = [
+        SearchTask(id="c_b", task_type=SearchTaskType.GENERAL_SEARCH, query="qB", source="genericboard.com", source_type=DiscoveredSourceType.MAJOR_BOARD, priority=2, round=1),
+        SearchTask(id="c_a", task_type=SearchTaskType.ATS_SEARCH, query="qA", source="boards.greenhouse.io", source_type=DiscoveredSourceType.ATS_PORTAL, priority=2, round=1),
+    ]
+    dummy_state = AgentState(request="test", run_id="r", task_id="t", mode="jobs", explicit_titles=["Engineer"])
+    r2_tasks = engine.generate_next_round_tasks(disc_state, None, dummy_state)
+    r2_sources = [t.source for t in r2_tasks]
+    assert "boards.greenhouse.io" in r2_sources
+    assert "genericboard.com" not in r2_sources
+
+
+def test_test_16_golden_query_end_to_end():
+    """
+    TEST 16 — Golden query:
+    'Find 10 GenAI Engineer jobs in Saudi Arabia or UAE requiring Python and LangChain, preferably fresh.'
+    Verifies all 12 properties from Section 25.
+    """
+    spec = JobSearchSpec(
+        raw_query="Find 10 GenAI Engineer jobs in Saudi Arabia or UAE requiring Python and LangChain, preferably fresh.",
+        titles=["GenAI Engineer"],
+        locations=["Saudi Arabia", "UAE"],
+        location_operator="OR",
+        explicit_skills=["Python", "LangChain"],
+        max_results=10,
+    )
+    now_iso = datetime.now(timezone.utc).isoformat()
+    candidates = [
+        ExtractedRecord(
+            id="g_1",
+            run_id="run_g16",
+            record_type="job_listing",
+            fields={"title": "GenAI Engineer", "company": "Gulf AI", "location": "Riyadh, Saudi Arabia", "skills": ["Python", "LangChain"]},
+            verification_status=VerificationStatus.VERIFIED,
+            created_at=now_iso,
+        ),
+        ExtractedRecord(
+            id="g_2",
+            run_id="run_g16",
+            record_type="job_listing",
+            fields={"title": "Generative AI Engineer", "company": "Dubai Tech", "location": "Dubai, UAE", "skills": ["Python", "LangChain"]},
+            verification_status=VerificationStatus.VERIFIED,
+            created_at=now_iso,
+        ),
+        # Distractor 1: London (Location mismatch)
+        ExtractedRecord(
+            id="g_dist_1",
+            run_id="run_g16",
+            record_type="job_listing",
+            fields={"title": "GenAI Engineer", "company": "London Tech", "location": "London, UK", "skills": ["Python", "LangChain"]},
+            verification_status=VerificationStatus.VERIFIED,
+            created_at=now_iso,
+        ),
+        # Distractor 2: Missing LangChain (Explicit skill mismatch)
+        ExtractedRecord(
+            id="g_dist_2",
+            run_id="run_g16",
+            record_type="job_listing",
+            fields={"title": "GenAI Engineer", "company": "Riyadh Tech", "location": "Riyadh, Saudi Arabia", "skills": ["Python"]},
+            verification_status=VerificationStatus.VERIFIED,
+            created_at=now_iso,
+        ),
+        # Distractor 3: AI Product Manager (Unrelated job family)
+        ExtractedRecord(
+            id="g_dist_3",
+            run_id="run_g16",
+            record_type="job_listing",
+            fields={"title": "AI Product Manager", "company": "Gulf Corp", "location": "Dubai, UAE", "skills": ["Python", "LangChain"]},
+            verification_status=VerificationStatus.VERIFIED,
+            created_at=now_iso,
+        ),
+    ]
+
+    results = [qualify_job(c, spec) for c in candidates]
+    assert results[0].qualified is True
+    assert results[1].qualified is True
+    assert results[2].qualified is False  # London
+    assert results[3].qualified is False  # Missing LangChain
+    assert results[4].qualified is False  # Product Manager

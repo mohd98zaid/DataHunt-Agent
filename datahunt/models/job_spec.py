@@ -75,7 +75,8 @@ class JobSearchSpec(BaseModel):
 
     salary_min: Optional[float] = None
     salary_max: Optional[float] = None
-    salary_currency: Optional[str] = "USD"
+    salary_currency: Optional[str] = None
+    salary_currency_source: str = "unspecified"  # "explicit" | "inferred" | "unspecified"
 
     freshness_days: Optional[int] = 30
 
@@ -104,7 +105,9 @@ class JobSearchSpec(BaseModel):
     @field_validator("salary_currency", mode="before")
     @classmethod
     def _validate_currency(cls, v):
-        return v if (v and isinstance(v, str) and v.strip()) else "USD"
+        if not v or not isinstance(v, str) or not v.strip():
+            return None
+        return v.strip().upper()
 
     @field_validator("remote_status", mode="before")
     @classmethod
@@ -214,9 +217,14 @@ class JobSearchSpec(BaseModel):
         elif self.employment_types and not self.employment_type:
             self.employment_type = self.employment_types[0]
 
-        # 6. Auto-detect regional currency if location is provided and default USD (unless user explicitly specified USD/$)
+        # 6. Currency handling: explicit vs inferred vs unspecified (Section 5)
         has_explicit_usd = any(sig in (self.raw_query or "").lower() for sig in ("$", "usd", "dollar", "bucks"))
-        if self.location:
+        if self.salary_currency and not has_explicit_usd:
+            self.salary_currency_source = "explicit"
+        elif has_explicit_usd:
+            self.salary_currency = "USD"
+            self.salary_currency_source = "explicit"
+        elif self.location:
             loc_low = self.location.lower()
             is_multi_region = len(self.locations) > 1 or " or " in loc_low
             has_saudi = any(k in loc_low for k in ("saudi", "riyadh", "jeddah", "dammam", "ksa"))
@@ -226,20 +234,31 @@ class JobSearchSpec(BaseModel):
             has_eu = any(k in loc_low for k in ("germany", "france", "berlin", "paris", "europe"))
 
             if is_multi_region or (has_saudi and has_uae):
-                # Section 6: Multi-region requests (e.g. Saudi Arabia OR UAE) must NEVER silently become SAR or AED
-                if not has_explicit_usd:
-                    self.salary_currency = None
-            elif not has_explicit_usd and (not self.salary_currency or self.salary_currency == "USD"):
-                if has_saudi and not has_uae:
-                    self.salary_currency = "SAR"
-                elif has_uae and not has_saudi:
-                    self.salary_currency = "AED"
-                elif has_india:
-                    self.salary_currency = "INR"
-                elif has_uk:
-                    self.salary_currency = "GBP"
-                elif has_eu:
-                    self.salary_currency = "EUR"
+                # Multi-region requests (e.g. Saudi Arabia OR UAE) must NEVER silently become SAR or AED
+                self.salary_currency = None
+                self.salary_currency_source = "unspecified"
+            elif has_saudi and not has_uae:
+                self.salary_currency = "SAR"
+                self.salary_currency_source = "inferred"
+            elif has_uae and not has_saudi:
+                self.salary_currency = "AED"
+                self.salary_currency_source = "inferred"
+            elif has_india:
+                self.salary_currency = "INR"
+                self.salary_currency_source = "inferred"
+            elif has_uk:
+                self.salary_currency = "GBP"
+                self.salary_currency_source = "inferred"
+            elif has_eu:
+                self.salary_currency = "EUR"
+                self.salary_currency_source = "inferred"
+            else:
+                self.salary_currency = None
+                self.salary_currency_source = "unspecified"
+        else:
+            if not self.salary_currency:
+                self.salary_currency = None
+                self.salary_currency_source = "unspecified"
 
 
     def to_search_hint(self) -> str:
