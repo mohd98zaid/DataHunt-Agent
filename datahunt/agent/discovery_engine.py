@@ -13,6 +13,8 @@ from datahunt.agent.discovery_models import (
     DiscoveryRoundTelemetry,
     SourceCoverageMatrix,
     DiscoveryState,
+    CrawlTask,
+    CrawlTaskStatus,
 )
 
 # Known ATS platforms and their hostname patterns
@@ -398,6 +400,21 @@ class DiscoveryEngine:
                                         reason=f"Direct harvest on discovered {ats_key} portal for '{company_slug}'",
                                         location=task.location,
                                     ))
+
+                                # Enqueue direct crawl task for this ATS company
+                                discovery_state.enqueue_crawl_task(CrawlTask(
+                                    id=f"crawl_ats_{ats_key}_{company_slug}_{len(discovery_state.pending_crawl_tasks)}",
+                                    source=ats_domain,
+                                    source_type="ats",
+                                    url=url,
+                                    company=company_slug,
+                                    ats_platform=ats_key,
+                                    location=task.location,
+                                    query=role_clean,
+                                    priority=1,
+                                    depth=task.depth + 1,
+                                    reason=f"Direct ATS crawl for '{company_slug}' on {ats_key}",
+                                ))
                         break
                 if ats_found:
                     break
@@ -438,6 +455,22 @@ class DiscoveryEngine:
                         location=task.location,
                     ))
 
+                # Enqueue direct career page crawl task if URL is from employer domain or career path
+                career_cand_url = url
+                if not any(b in (urlparse(career_cand_url).netloc.lower()) for b in ("linkedin", "indeed", "glassdoor", "bayt", "naukrigulf", "gulftalent")):
+                    discovery_state.enqueue_crawl_task(CrawlTask(
+                        id=f"crawl_comp_{company_extracted.lower().replace(' ', '_')}_{len(discovery_state.pending_crawl_tasks)}",
+                        source=urlparse(career_cand_url).netloc.lower() or company_extracted,
+                        source_type="company_career_page",
+                        url=career_cand_url,
+                        company=company_extracted,
+                        location=task.location,
+                        query=role_clean,
+                        priority=2,
+                        depth=task.depth + 1,
+                        reason=f"Direct career page crawl for employer '{company_extracted}'",
+                    ))
+
             # ----------------------------------------------------
             # 3. New Job Board Discovery
             # ----------------------------------------------------
@@ -469,6 +502,19 @@ class DiscoveryEngine:
                             reason=f"Discovered job board domain {clean_netloc}",
                             location=task.location,
                         ))
+
+                    # Also enqueue direct board crawl task
+                    discovery_state.enqueue_crawl_task(CrawlTask(
+                        id=f"crawl_board_{clean_netloc}_{len(discovery_state.pending_crawl_tasks)}",
+                        source=clean_netloc,
+                        source_type="regional_board" if any(k in clean_netloc for k in ("gulf", "bayt", "naukri", "middleeast", "dubai", "saudi")) else "major_board",
+                        url=url,
+                        location=task.location,
+                        query=role_clean,
+                        priority=3,
+                        depth=task.depth + 1,
+                        reason=f"Direct board crawl on discovered domain {clean_netloc}",
+                    ))
 
         return new_tasks
 
@@ -700,14 +746,12 @@ class DiscoveryEngine:
             # Do not stop if candidates are pending fetch or records are awaiting verification
             if getattr(state, "candidate_urls", None):
                 return False, StopReason.TARGET_QUALIFIED_REACHED, ""
-            if getattr(state, "raw_records", None):
-                already_done = (
-                    set(r.id for r in getattr(state, "verified_records", []))
-                    | set(r.id for r in getattr(state, "rejected_records", []))
-                    | set(r.id for r in getattr(state, "disqualified_records", []))
-                )
-                if any(r.id not in already_done for r in state.raw_records):
-                    return False, StopReason.TARGET_QUALIFIED_REACHED, ""
+            # Do not stop if crawl tasks are pending in queue
+            if getattr(discovery_state, "pending_crawl_tasks", None):
+                return False, StopReason.TARGET_QUALIFIED_REACHED, ""
+            from datahunt.agent.state import get_unprocessed_records
+            if get_unprocessed_records(state):
+                return False, StopReason.TARGET_QUALIFIED_REACHED, ""
 
             # Do not stop early if more rounds can be expanded
             if discovery_state.current_round < self.budget.max_expansion_rounds:

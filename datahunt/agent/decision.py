@@ -1,7 +1,7 @@
 import time
 from enum import Enum
 from typing import Optional, Tuple
-from .state import AgentState, SearchIterationStats
+from .state import AgentState, SearchIterationStats, get_unprocessed_records
 
 class AgentAction(str, Enum):
     CRAWL_DIRECT = "CRAWL_DIRECT"
@@ -28,8 +28,9 @@ class DecisionEngine:
         Order of precedence:
         1. Hard stop conditions (budget, deadline, target qualified results met)
         2. Diminishing returns detection
-        3. Pending work (fetch, extract, verify/qualify)
-        4. More searching needed
+        3. Pending work: Fetch candidate URLs -> Extract -> Verify/Qualify
+        4. Pending direct crawl tasks (ATS APIs, regional boards, career pages)
+        5. Discovery search queue / search plan
         """
         if state.deadline > 0 and time.time() >= state.deadline:
             return AgentAction.STOP, "Deadline reached"
@@ -37,7 +38,7 @@ class DecisionEngine:
         if state.iteration >= state.max_iterations:
             return AgentAction.STOP, f"Max iterations ({state.max_iterations}) reached"
 
-        # In jobs mode, target refers to QUALIFIED results. In general mode, verified records.
+        # In jobs mode, target refers to QUALIFIED results ONLY. In general mode, verified records.
         effective_count = len(state.qualified_records) if state.mode in ("jobs", "job") else len(state.verified_records)
 
         # If discovery engine is active, evaluate dynamic coverage and balanced universe stopping
@@ -57,49 +58,66 @@ class DecisionEngine:
                 elif state.search_plan_index < len(state.search_plan):
                     return AgentAction.EXPAND_SEARCH, "Low yield from current strategy, trying next tier"
 
-        # In jobs mode, run one direct-board crawl pass before search-engine queries.
-        # This fires exactly once (guarded by crawl_done) so the pipeline remains deterministic.
-        if (
-            state.mode in ("jobs", "job")
-            and state.discovery_state is not None
-            and not getattr(state, "crawl_done", False)
-            and state.search_calls < state.max_search_calls
-        ):
-            return AgentAction.CRAWL_DIRECT, "Direct multi-source board/ATS crawl (pre-search)"
-
-        if state.search_calls >= state.max_search_calls and not state.candidate_urls:
-            return AgentAction.STOP, "Search budget exhausted with no candidates"
-
+        # 1. Fetch candidate URLs if available
         if state.candidate_urls:
             return AgentAction.FETCH, f"{len(state.candidate_urls)} candidates to fetch"
 
-        if state.fetched_docs:
-            unfetched = [d for d in state.fetched_docs if d not in [getattr(r, 'doc_id', None) for r in state.raw_records]]
-            if state.raw_records:  # docs fetched, records ready for verification
-                unverified = [r for r in state.raw_records if r not in state.verified_records and r not in state.rejected_records and r not in state.disqualified_records]
-                if unverified:
-                    return AgentAction.VERIFY, f"{len(unverified)} records need verification"
+        # 2. Verify and deterministically qualify unverified raw records
+        unverified_records = get_unprocessed_records(state)
+        if (
+            unverified_records
+            and state.raw_record_generation > getattr(state, "last_verified_generation", -1)
+        ):
+            return AgentAction.VERIFY, f"{len(unverified_records)} records need verification"
 
-        # Check search availability across search plan or dynamic discovery queue
-        max_rounds = getattr(state.discovery_budget, "max_expansion_rounds", 6) if state.discovery_budget else 6
-        can_advance_discovery = (
-            state.discovery_state is not None
-            and (
-                bool(state.discovery_state.task_queue)
-                or state.discovery_state.current_round < max_rounds
-            )
+        # 3. If there are active search tasks in discovery queue or search plan, execute search
+        if state.discovery_state and state.discovery_state.task_queue and state.search_calls < state.max_search_calls:
+            count = len(state.discovery_state.task_queue)
+            return AgentAction.SEARCH, f"Searching discovery queue ({count} tasks)"
+
+        if state.search_plan and state.search_plan_index < len(state.search_plan) and state.search_calls < state.max_search_calls:
+            return AgentAction.SEARCH, f"Searching tier {state.search_plan_index + 1}/{len(state.search_plan)}"
+
+        # 4. Direct source crawl queue: ATS public APIs, regional boards, company career pages
+        has_pending_crawls = bool(
+            state.discovery_state
+            and getattr(state.discovery_state, "pending_crawl_tasks", None)
         )
-        has_search_tasks = (state.search_plan_index < len(state.search_plan)) or can_advance_discovery
-        if has_search_tasks and state.search_calls < state.max_search_calls:
-            msg = f"Searching discovery queue ({len(state.discovery_state.task_queue)} tasks)" if (state.discovery_state and state.discovery_state.task_queue) else (
-                f"Advancing discovery round (R{state.discovery_state.current_round + 1})" if (state.discovery_state and state.discovery_state.current_round < max_rounds) else f"Searching tier {state.search_plan_index + 1}/{len(state.search_plan)}"
-            )
-            return AgentAction.SEARCH, msg
+        if (
+            state.mode in ("jobs", "job")
+            and has_pending_crawls
+            and not state.candidate_urls
+        ):
+            count = len(state.discovery_state.pending_crawl_tasks)
+            return AgentAction.CRAWL_DIRECT, f"Direct source crawling ({count} tasks in queue)"
+
+        # Standalone pre-search direct crawl when no search tasks are queued and crawl_done is False
+        if (
+            state.mode in ("jobs", "job")
+            and not getattr(state, "crawl_done", False)
+            and not (state.discovery_state and state.discovery_state.task_queue)
+            and not state.candidate_urls
+        ):
+            return AgentAction.CRAWL_DIRECT, "Direct multi-source board/ATS crawl (pre-search)"
+
+        # 5. Advance discovery round if task queue is empty and budget permits
+        max_rounds = getattr(state.discovery_budget, "max_expansion_rounds", 6) if state.discovery_budget else 6
+        if (
+            state.discovery_state is not None
+            and not state.discovery_state.task_queue
+            and state.discovery_state.current_round < max_rounds
+            and state.search_calls < state.max_search_calls
+        ):
+            return AgentAction.SEARCH, f"Advancing discovery round (R{state.discovery_state.current_round + 1})"
+
+        if state.search_calls >= state.max_search_calls and not state.candidate_urls and not has_pending_crawls:
+            return AgentAction.STOP, "Search budget exhausted with no candidates"
 
         if effective_count > 0:
             return AgentAction.STOP, f"No more search capacity, returning {effective_count} results found"
 
         return AgentAction.STOP, "No results found and no remaining search capacity"
+
 
     def should_stop(self, state: AgentState) -> Tuple[bool, str]:
         """Check all stop conditions explicitly."""

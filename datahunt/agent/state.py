@@ -85,6 +85,9 @@ class AgentState:
     disqualified_records: List[Any] = field(default_factory=list)
     rejected_records: List[Any] = field(default_factory=list)
     duplicate_records: List[Any] = field(default_factory=list)
+    processed_record_ids: Set[str] = field(default_factory=set)
+    raw_record_generation: int = 0
+    last_verified_generation: int = -1
     rejection_reasons_tally: Dict[str, int] = field(default_factory=dict)
     source_distribution: Dict[str, int] = field(default_factory=dict)
     # Crawl telemetry (populated by _act_crawl_direct)
@@ -128,3 +131,22 @@ class AgentState:
 
     def record_action(self, action: str):
         self.actions_taken.append(action)
+
+
+def get_unprocessed_record_ids(state: AgentState) -> Set[str]:
+    """Return set of all record IDs that have reached any terminal processing state."""
+    return (
+        getattr(state, "processed_record_ids", set())
+        | {r.id for r in getattr(state, "verified_records", []) if hasattr(r, "id")}
+        | {r.id for r in getattr(state, "rejected_records", []) if hasattr(r, "id")}
+        | {r.id for r in getattr(state, "qualified_records", []) if hasattr(r, "id")}
+        | {r.id for r in getattr(state, "disqualified_records", []) if hasattr(r, "id")}
+        | {r.id for r in getattr(state, "duplicate_records", []) if hasattr(r, "id")}
+    )
+
+
+def get_unprocessed_records(state: AgentState) -> List[Any]:
+    """Return raw records that have not yet been verified or categorized into a terminal state."""
+    processed_ids = get_unprocessed_record_ids(state)
+    return [r for r in getattr(state, "raw_records", []) if getattr(r, "id", None) not in processed_ids]
+

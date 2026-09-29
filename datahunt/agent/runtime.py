@@ -76,6 +76,10 @@ class AgentRuntime:
         emit("status", {"message": "Understanding search requirements", "phase": "PLANNING"})
         state.status = AgentStatus.PLANNING
 
+        state.raw_record_generation = 0
+        state.last_verified_generation = -1
+        state.processed_record_ids = set()
+
         # Initialize canonical job request if in jobs mode
         if state.mode in ("jobs", "job"):
             emit("status", {"message": "Intent: JOB_SEARCH", "phase": "PLANNING"})
@@ -223,19 +227,16 @@ class AgentRuntime:
 
     def _act_crawl_direct(self, state: AgentState, emit):
         """
-        Execute one pass of direct multi-source crawling:
-          - ATS public APIs (Greenhouse, Lever, Ashby, Workable, SmartRecruiters)
-          - Regional job boards (NaukriGulf, Bayt, GulfTalent, Laimoon, Dubizzle) when Gulf/MENA
-          - Discovered company career pages
-
+        Execute direct multi-source crawling across ATS public APIs,
+        regional job boards, and discovered company career pages.
+        Processes queued crawl tasks or performs targeted initial crawls.
         Discovered job URLs are appended to state.candidate_urls for subsequent FetchTool processing.
         Never raises — all source errors are recorded as SOURCE_BLOCKED and crawling continues.
-        Fires exactly once (guarded by state.crawl_done).
         """
-        state.crawl_done = True  # guard first — prevent re-entry even if this method errors
         state.status = AgentStatus.CRAWLING
 
         from datahunt.sources.crawlers import MultiSourceCrawler, CrawlBudget
+        from datahunt.agent.discovery_models import CrawlTaskStatus
         from datahunt.tools.search import canonicalize_url, is_valid_job_url
 
         loc_lower = " ".join(state.locations).lower() if state.locations else (
@@ -266,30 +267,70 @@ class AgentRuntime:
             max_workers=5,
         )
 
-        discovered_ats = {}
-        discovered_companies = {}
-        if state.discovery_state:
-            discovered_ats = dict(state.discovery_state.discovered_ats)
-            discovered_companies = dict(state.discovery_state.discovered_companies)
+        crawler = MultiSourceCrawler(budget=budget)
+        crawl_result = None
 
-        emit("status", {
-            "message": f"Direct crawl: {len(discovered_ats)} ATS + regional boards + career pages",
-            "phase": "CRAWLING",
-        })
+        # Check if we have queued CrawlTasks in DiscoveryState
+        pending_tasks = []
+        if state.discovery_state and state.discovery_state.pending_crawl_tasks:
+            while state.discovery_state.pending_crawl_tasks and len(pending_tasks) < 6:
+                t = state.discovery_state.pending_crawl_tasks.pop(0)
+                t.status = CrawlTaskStatus.ACTIVE
+                state.discovery_state.active_crawl_tasks.append(t)
+                pending_tasks.append(t)
 
-        try:
-            crawler = MultiSourceCrawler(budget=budget)
-            crawl_result = crawler.crawl(
-                role_keywords=role_keywords,
-                locations=locations,
-                discovered_ats=discovered_ats,
-                discovered_companies=discovered_companies,
-                is_gulf=is_gulf,
-                deadline=state.deadline,
-                external_emit=emit,
-            )
+        if pending_tasks:
+            emit("status", {
+                "message": f"Direct crawl: processing {len(pending_tasks)} discovered source tasks",
+                "phase": "CRAWLING",
+            })
+            try:
+                crawl_result = crawler.crawl_tasks(
+                    tasks=pending_tasks,
+                    role_keywords=role_keywords,
+                    deadline=state.deadline,
+                    external_emit=emit,
+                    discovery_state=state.discovery_state,
+                )
+                for t in pending_tasks:
+                    if t in state.discovery_state.active_crawl_tasks:
+                        state.discovery_state.active_crawl_tasks.remove(t)
+                    t.status = CrawlTaskStatus.COMPLETED
+                    state.discovery_state.completed_crawl_tasks.append(t)
+                    key = f"{t.source_type}:{t.source}:{t.company or ''}:{t.location or ''}:{t.page}".lower()
+                    state.discovery_state.crawled_sources.add(key)
+            except Exception as e:
+                logger.warning(f"Error crawling tasks: {e}")
+                for t in pending_tasks:
+                    if t in state.discovery_state.active_crawl_tasks:
+                        state.discovery_state.active_crawl_tasks.remove(t)
+                    t.status = CrawlTaskStatus.FAILED
+                    state.discovery_state.failed_crawl_tasks.append(t)
+        else:
+            state.crawl_done = True
+            discovered_ats = dict(state.discovery_state.discovered_ats) if state.discovery_state else {}
+            discovered_companies = dict(state.discovery_state.discovered_companies) if state.discovery_state else {}
 
-            # Merge discovered job links into candidate_urls
+            emit("status", {
+                "message": f"Direct crawl: {len(discovered_ats)} ATS + regional boards + career pages",
+                "phase": "CRAWLING",
+            })
+
+            try:
+                crawl_result = crawler.crawl(
+                    role_keywords=role_keywords,
+                    locations=locations,
+                    discovered_ats=discovered_ats,
+                    discovered_companies=discovered_companies,
+                    is_gulf=is_gulf,
+                    deadline=state.deadline,
+                    external_emit=emit,
+                )
+            except Exception as e:
+                logger.warning(f"_act_crawl_direct error (non-fatal): {e}")
+                state.add_warning(f"Direct crawl error: {e}")
+
+        if crawl_result:
             new_candidates = 0
             for hit in crawl_result.candidate_urls:
                 url = hit.get("url")
@@ -299,8 +340,6 @@ class AgentRuntime:
                 if not canon or canon in state.seen_canonical_urls:
                     continue
                 if state.mode in ("jobs", "job") and not is_valid_job_url(url):
-                    # Still allow crawled URLs even if they don't pass is_valid_job_url
-                    # (career pages may use non-standard URL patterns)
                     if not hit.get("crawled"):
                         continue
 
@@ -312,7 +351,6 @@ class AgentRuntime:
                 src_cat = _classify_job_source_category(url, hit.get("source", ""))
                 state.source_distribution[src_cat] = state.source_distribution.get(src_cat, 0) + 1
 
-            # Update crawl telemetry on state
             state.crawl_sources_discovered += crawl_result.sources_discovered
             state.crawl_sources_crawled += crawl_result.sources_crawled
             state.crawl_sources_blocked += crawl_result.sources_blocked
@@ -335,9 +373,7 @@ class AgentRuntime:
                 f"_act_crawl_direct: {new_candidates} new candidates from "
                 f"{crawl_result.sources_crawled} sources ({crawl_result.sources_blocked} blocked)"
             )
-        except Exception as e:
-            logger.warning(f"_act_crawl_direct error (non-fatal): {e}")
-            state.add_warning(f"Direct crawl error: {e}")
+
 
 
     def _is_promising_candidate(self, hit: Dict[str, Any], state: AgentState) -> bool:
@@ -682,6 +718,7 @@ class AgentRuntime:
 
         from datahunt.models.task import ResearchSpec
         spec = self._build_spec(state)
+        records_added = 0
 
         for doc in unprocessed:
             if state.deadline > 0 and time.time() >= state.deadline:
@@ -699,6 +736,7 @@ class AgentRuntime:
                         rec.fields.setdefault("primary_application_url", doc.requested_url)
                         rec.fields.setdefault("all_source_urls", [doc.requested_url])
                         state.raw_records.append(rec)
+                        records_added += 1
                         state.llm_calls += 1
                         emit("record.extracted", {
                             "record_id": rec.id,
@@ -708,19 +746,17 @@ class AgentRuntime:
             except Exception as e:
                 logger.warning(f"Extract error: {e}")
 
+        if records_added > 0:
+            state.raw_record_generation += 1
+
     def _act_verify(self, state: AgentState, emit):
         """Verify unverified records and deterministically qualify job candidates."""
         state.status = AgentStatus.VERIFYING
-        already_processed = (
-            set(r.id for r in state.verified_records)
-            | set(r.id for r in state.rejected_records)
-            | set(r.id for r in state.qualified_records)
-            | set(r.id for r in state.disqualified_records)
-            | set(r.id for r in getattr(state, "duplicate_records", []))
-        )
-        unverified = [r for r in state.raw_records if r.id not in already_processed]
+        from .state import get_unprocessed_records
+        unverified = get_unprocessed_records(state)
 
         if not unverified:
+            state.last_verified_generation = state.raw_record_generation
             return
 
         # Entity-level deduplication BEFORE expensive verification & qualification (Section 11)
@@ -735,10 +771,11 @@ class AgentRuntime:
                             r.verification_status = VerificationStatus.DUPLICATE
                             if hasattr(state, "duplicate_records"):
                                 state.duplicate_records.append(r)
+                            state.processed_record_ids.add(r.id)
                             r_src = r.fields.get("source") or "web"
                             if hasattr(state, "discovery_state") and hasattr(state.discovery_state, "record_task_productivity"):
                                 state.discovery_state.record_task_productivity(source=r_src, duplicate_jobs=1)
-                    unverified = unique_candidates
+                    unverified = [r for r in unverified if r.id in unique_cand_ids]
             except Exception as e:
                 logger.warning(f"Early deduplication error before verification: {e}")
 
@@ -747,6 +784,7 @@ class AgentRuntime:
         job_req = state.canonical_job_request
 
         for rec in unverified:
+            state.processed_record_ids.add(rec.id)
             if state.deadline > 0 and time.time() >= state.deadline:
                 state.add_warning("Verification stopped: deadline reached")
                 break
@@ -835,6 +873,9 @@ class AgentRuntime:
                     state.discovery_state.record_task_productivity(
                         source=rec_src, verification_failures=1, rejected_jobs=1
                     )
+
+        state.last_verified_generation = state.raw_record_generation
+
 
     def _act_analyze(self, state: AgentState, emit):
         """Run job analysis and ranking with deterministic qualification fallback."""

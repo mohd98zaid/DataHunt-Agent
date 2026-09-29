@@ -50,6 +50,32 @@ class SearchTask:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
+class CrawlTaskStatus(str, Enum):
+    PENDING = "PENDING"
+    ACTIVE = "ACTIVE"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    BLOCKED = "BLOCKED"
+
+
+@dataclass
+class CrawlTask:
+    id: str
+    source: str
+    source_type: str  # "ats" | "regional_board" | "company_career_page" | "major_board"
+    url: str
+    company: Optional[str] = None
+    ats_platform: Optional[str] = None
+    location: Optional[str] = None
+    query: Optional[str] = None
+    priority: int = 2
+    depth: int = 0
+    page: int = 1
+    status: CrawlTaskStatus = CrawlTaskStatus.PENDING
+    reason: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
 @dataclass
 class DiscoveryBudget:
     max_runtime_seconds: float = 120.0
@@ -155,6 +181,24 @@ class DiscoveryState:
     executed_queries: Set[str] = field(default_factory=set)
     task_queue: List[SearchTask] = field(default_factory=list)
     completed_tasks: List[SearchTask] = field(default_factory=list)
+
+    pending_crawl_tasks: List[CrawlTask] = field(default_factory=list)
+    active_crawl_tasks: List[CrawlTask] = field(default_factory=list)
+    completed_crawl_tasks: List[CrawlTask] = field(default_factory=list)
+    failed_crawl_tasks: List[CrawlTask] = field(default_factory=list)
+    crawled_sources: Set[str] = field(default_factory=set)
+
+    def enqueue_crawl_task(self, task: CrawlTask) -> bool:
+        """Deduplicate crawl tasks by canonical source identity."""
+        key = f"{task.source_type}:{task.source}:{task.company or ''}:{task.location or ''}:{task.page}".lower()
+        if key in self.crawled_sources:
+            return False
+        for existing in self.pending_crawl_tasks:
+            ex_key = f"{existing.source_type}:{existing.source}:{existing.company or ''}:{existing.location or ''}:{existing.page}".lower()
+            if ex_key == key:
+                return False
+        self.pending_crawl_tasks.append(task)
+        return True
 
     current_round: int = 1
     coverage_matrix: SourceCoverageMatrix = field(default_factory=SourceCoverageMatrix)

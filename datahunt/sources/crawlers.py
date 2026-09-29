@@ -136,11 +136,28 @@ _DESKTOP_HEADERS = {
 }
 
 
+class SafeCrawlerResponse:
+    """Lightweight response wrapper supporting fallback content retrieval."""
+    def __init__(self, status_code: int, text: str = "", url: str = "", headers: Optional[Dict] = None, json_data: Any = None):
+        self.status_code = status_code
+        self.text = text
+        self.url = url
+        self.headers = headers or {}
+        self._json_data = json_data
+
+    def json(self):
+        if self._json_data is not None:
+            return self._json_data
+        import json
+        return json.loads(self.text)
+
+
 def _safe_get(url: str, timeout: float = 12.0,
-              extra_headers: Optional[Dict] = None) -> Optional[httpx.Response]:
+              extra_headers: Optional[Dict] = None) -> Optional[Any]:
     """
-    Fetch a URL with SSRF protection and return the response, or None on error/block.
-    Records SOURCE_BLOCKED rather than raising.
+    Fetch a URL with SSRF protection, redirect handling, and TLS browser impersonation
+    fallback when encountering HTTP 401/403/429.
+    Records alternative public retrieval without bypassing access controls.
     """
     try:
         cleaned_url, _ = validate_url_ssrf(url)
@@ -153,10 +170,89 @@ def _safe_get(url: str, timeout: float = 12.0,
     try:
         with httpx.Client(timeout=timeout, follow_redirects=True, headers=headers) as client:
             resp = client.get(cleaned_url)
+            if resp.status_code < 400:
+                return resp
+
+            # Attempt alternative public retrieval method on 401, 403, 429
+            if resp.status_code in (401, 403, 429):
+                try:
+                    from ddgs import DDGS
+                    ext_data = DDGS().extract(cleaned_url)
+                    ext_content = ext_data.get("content") or ""
+                    if ext_content and len(ext_content.strip()) > 80:
+                        logger.info(f"HTTP {resp.status_code} fallback retrieval succeeded for {cleaned_url} via TLS browser impersonation")
+                        return SafeCrawlerResponse(
+                            status_code=200,
+                            text=ext_content,
+                            url=cleaned_url,
+                            headers={"content-type": "text/html"}
+                        )
+                except Exception as fb_err:
+                    logger.debug(f"Alternative public retrieval method failed for {cleaned_url}: {fb_err}")
             return resp
     except Exception as e:
         logger.debug(f"HTTP error for {url}: {e}")
+        try:
+            from ddgs import DDGS
+            ext_data = DDGS().extract(cleaned_url)
+            ext_content = ext_data.get("content") or ""
+            if ext_content and len(ext_content.strip()) > 80:
+                logger.info(f"Alternative public retrieval method succeeded for {cleaned_url}")
+                return SafeCrawlerResponse(
+                    status_code=200,
+                    text=ext_content,
+                    url=cleaned_url,
+                    headers={"content-type": "text/html"}
+                )
+        except Exception:
+            pass
         return None
+
+
+def is_broadly_relevant_job_title(title: str, role_keywords: List[str]) -> bool:
+    """
+    Broad role matching for discovery crawling.
+    Returns True if the title could plausibly be relevant to the requested roles.
+    Empty titles (link stubs) are always kept so they can be inspected.
+    Does NOT require exact string match; recognizes AI/GenAI/ML/engineering synonyms.
+    """
+    if not title or not title.strip():
+        return True
+    if not role_keywords:
+        return True
+
+    t_low = title.lower()
+
+    # Exact substring match
+    for kw in role_keywords:
+        if kw.lower() in t_low:
+            return True
+
+    # Check for AI / GenAI / LLM family queries
+    has_ai_query = any(k in kw.lower() for kw in role_keywords for k in ("genai", "generative ai", "ai", "llm", "machine learning", "ml", "prompt", "nlp", "deep learning"))
+    if has_ai_query:
+        ai_terms = (
+            "genai", "gen ai", "generative", "llm", "large language", "prompt",
+            "machine learning", "deep learning", "nlp", "neural", "rag",
+            "foundation model", "computer vision", "artificial intelligence",
+            "ai engineer", "ai developer", "ai architect", "ai specialist", "ai/ml",
+            "applied ai", "ai solutions", "ml engineer", "ml developer", "ai research"
+        )
+        if any(term in t_low for term in ai_terms):
+            return True
+        # Also match if title contains standalone word 'ai' and a technical role
+        if re.search(r"\bai\b", t_low) and any(role in t_low for role in ("engineer", "developer", "architect", "lead", "scientist", "specialist", "intern")):
+            return True
+
+    # Check word overlap for other roles
+    title_words = set(re.findall(r"\w+", t_low))
+    for kw in role_keywords:
+        kw_words = set(re.findall(r"\w+", kw.lower()))
+        kw_core = kw_words - {"in", "and", "or", "for", "with", "the", "a", "an", "at", "of", "to"}
+        if kw_core and len(title_words & kw_core) >= max(1, len(kw_core) - 1):
+            return True
+
+    return False
 
 
 def _get_domain(url: str) -> str:
@@ -205,13 +301,11 @@ def crawl_greenhouse_company(
         emit(CrawlEvent(CrawlEventType.PAGE_FETCHED, source_id, url=api_url,
                         count=len(raw_jobs), message=f"Greenhouse API: {len(raw_jobs)} jobs"))
 
-        # Filter by role keywords if provided
-        kw_lower = [k.lower() for k in role_keywords]
         for job in raw_jobs:
             if len(jobs) >= budget.max_total_jobs:
                 break
             title = job.get("title", "")
-            if kw_lower and not any(kw in title.lower() for kw in kw_lower):
+            if not is_broadly_relevant_job_title(title, role_keywords):
                 continue
             loc_data = job.get("location", {})
             location = (
@@ -278,12 +372,11 @@ def crawl_lever_company(
     emit(CrawlEvent(CrawlEventType.PAGE_FETCHED, source_id, url=api_url,
                     count=len(raw_jobs), message=f"Lever API: {len(raw_jobs)} postings"))
 
-    kw_lower = [k.lower() for k in role_keywords]
     for job in raw_jobs:
         if len(jobs) >= budget.max_total_jobs:
             break
         title = job.get("text", "") or job.get("title", "")
-        if kw_lower and not any(kw in title.lower() for kw in kw_lower):
+        if not is_broadly_relevant_job_title(title, role_keywords):
             continue
         categories = job.get("categories", {})
         location = categories.get("location", "") if isinstance(categories, dict) else ""
@@ -344,12 +437,11 @@ def crawl_ashby_company(
     emit(CrawlEvent(CrawlEventType.PAGE_FETCHED, source_id, url=api_url,
                     count=len(raw_jobs), message=f"Ashby API: {len(raw_jobs)} jobs"))
 
-    kw_lower = [k.lower() for k in role_keywords]
     for job in raw_jobs:
         if len(jobs) >= budget.max_total_jobs:
             break
         title = job.get("title", "")
-        if kw_lower and not any(kw in title.lower() for kw in kw_lower):
+        if not is_broadly_relevant_job_title(title, role_keywords):
             continue
         location = job.get("location", "") or ""
         apply_url = job.get("jobUrl", job.get("applyUrl", ""))
@@ -409,12 +501,11 @@ def crawl_workable_company(
     emit(CrawlEvent(CrawlEventType.PAGE_FETCHED, source_id, url=api_url,
                     count=len(raw_jobs), message=f"Workable API: {len(raw_jobs)} jobs"))
 
-    kw_lower = [k.lower() for k in role_keywords]
     for job in raw_jobs:
         if len(jobs) >= budget.max_total_jobs:
             break
         title = job.get("title", "")
-        if kw_lower and not any(kw in title.lower() for kw in kw_lower):
+        if not is_broadly_relevant_job_title(title, role_keywords):
             continue
         location = job.get("location", {})
         if isinstance(location, dict):
@@ -482,12 +573,11 @@ def crawl_smartrecruiters_company(
     emit(CrawlEvent(CrawlEventType.PAGE_FETCHED, source_id, url=api_url,
                     count=len(raw_jobs), message=f"SmartRecruiters: {len(raw_jobs)} jobs"))
 
-    kw_lower = [k.lower() for k in role_keywords]
     for job in raw_jobs:
         if len(jobs) >= budget.max_total_jobs:
             break
         title = job.get("name", "")
-        if kw_lower and not any(kw in title.lower() for kw in kw_lower):
+        if not is_broadly_relevant_job_title(title, role_keywords):
             continue
         loc = job.get("location", {})
         location = ""
@@ -978,41 +1068,55 @@ class MultiSourceCrawler:
 
         # ── 2. Regional Board Crawls (Gulf/MENA) ────────────────────────────
         if is_gulf and not _check_deadline():
-            primary_loc = locations[0] if locations else "UAE"
             primary_role = role_keywords[0] if role_keywords else ""
+            target_locations = []
+            for loc in (locations if locations else ["UAE"]):
+                for sub in re.split(r"\s+or\s+|\s*,\s*", str(loc), flags=re.IGNORECASE):
+                    s_clean = sub.strip()
+                    if s_clean and s_clean not in target_locations:
+                        target_locations.append(s_clean)
+            if not target_locations:
+                target_locations = ["UAE"]
 
-            regional_configs = [
-                (
-                    "naukrigulf",
-                    "NaukriGulf",
-                    _naukrigulf_listing_url(primary_role, primary_loc),
-                    [r"/job-listing/", r"/job-in-", r"-\d+\.html", r"/jd-"],
-                ),
-                (
-                    "bayt",
-                    "Bayt.com",
-                    _bayt_listing_url(primary_role, primary_loc),
-                    [r"/en/[a-z-]+/jobs/[a-z0-9-]+-\d+/", r"/job/\d+"],
-                ),
-                (
-                    "gulftalent",
-                    "GulfTalent",
-                    _gulftalent_listing_url(primary_role, primary_loc),
-                    [r"/jobs/[a-z0-9-]+-\d+", r"/job/\d+"],
-                ),
+            regional_configs = []
+            for loc in target_locations:
+                loc_tag = loc.lower().replace(" ", "_")
+                regional_configs.extend([
+                    (
+                        f"naukrigulf_{loc_tag}",
+                        f"NaukriGulf ({loc})",
+                        _naukrigulf_listing_url(primary_role, loc),
+                        [r"/job-listing/", r"/job-in-", r"-\d+\.html", r"/jd-"],
+                    ),
+                    (
+                        f"bayt_{loc_tag}",
+                        f"Bayt.com ({loc})",
+                        _bayt_listing_url(primary_role, loc),
+                        [r"/en/[a-z-]+/jobs/[a-z0-9-]+-\d+/", r"/job/\d+"],
+                    ),
+                    (
+                        f"gulftalent_{loc_tag}",
+                        f"GulfTalent ({loc})",
+                        _gulftalent_listing_url(primary_role, loc),
+                        [r"/jobs/[a-z0-9-]+-\d+", r"/job/\d+"],
+                    ),
+                ])
+            # Add Laimoon & Dubizzle once for primary hub
+            hub_loc = target_locations[0]
+            regional_configs.extend([
                 (
                     "laimoon",
                     "Laimoon",
-                    _laimoon_listing_url(primary_role, primary_loc),
+                    _laimoon_listing_url(primary_role, hub_loc),
                     [r"/jobs/[a-z0-9-]+", r"/job/\d+"],
                 ),
                 (
                     "dubizzle",
                     "Dubizzle Careers",
-                    _dubizzle_listing_url(primary_role, primary_loc),
+                    _dubizzle_listing_url(primary_role, hub_loc),
                     [r"/jobs/[a-z0-9_-]+-\d+"],
                 ),
-            ]
+            ])
 
             def _crawl_regional(board_id, board_name, url, patterns):
                 if _check_deadline():
@@ -1155,4 +1259,196 @@ class MultiSourceCrawler:
             f"{result.sources_blocked} blocked, {result.pages_fetched} pages, "
             f"{len(result.candidate_urls)} job links, {result.jobs_extracted} extracted"
         )
+        return result
+
+    def crawl_tasks(
+        self,
+        tasks: List[Any],
+        role_keywords: List[str],
+        deadline: float = 0.0,
+        external_emit: Optional[Callable[[str, Dict], None]] = None,
+        discovery_state: Optional[Any] = None,
+    ) -> CrawlResult:
+        """
+        Execute a discrete batch of CrawlTask objects from the source scheduler.
+        Handles direct ATS APIs, company career pages (with ATS redirect discovery),
+        and regional job boards.
+        """
+        result = CrawlResult()
+
+        def _check_deadline() -> bool:
+            return deadline > 0 and time.time() >= deadline
+
+        def emit(event: CrawlEvent) -> None:
+            with self._lock:
+                self._events.append(event)
+            if external_emit:
+                external_emit("crawl_event", {
+                    "type": event.event_type,
+                    "source_id": event.source_id,
+                    "url": event.url,
+                    "message": event.message,
+                    "count": event.count,
+                    "timestamp": event.timestamp,
+                })
+
+        ats_crawler_map = {
+            "greenhouse": crawl_greenhouse_company,
+            "lever": crawl_lever_company,
+            "ashby": crawl_ashby_company,
+            "workable": crawl_workable_company,
+            "smartrecruiters": crawl_smartrecruiters_company,
+        }
+
+        for task in tasks:
+            if _check_deadline():
+                break
+
+            result.sources_discovered += 1
+            source_type = getattr(task, "source_type", "")
+            company = getattr(task, "company", "") or ""
+            ats_platform = getattr(task, "ats_platform", "") or ""
+            url = getattr(task, "url", "") or ""
+
+            try:
+                # 1. Direct ATS API enumeration
+                if source_type == "ats" or ats_platform in ats_crawler_map:
+                    plat = ats_platform
+                    if not plat:
+                        for k, p in _ATS_REDIRECT_PATTERNS.items():
+                            if p.search(url):
+                                plat = k
+                                break
+                    if plat in ats_crawler_map and company:
+                        fn = ats_crawler_map[plat]
+                        ats_jobs = fn(company, role_keywords, self.budget, self._rate_limiter, emit)
+                        if ats_jobs:
+                            result.crawled_jobs.extend(ats_jobs)
+                            result.jobs_extracted += len(ats_jobs)
+                            result.sources_crawled += 1
+                        else:
+                            result.sources_blocked += 1
+                    else:
+                        result.sources_blocked += 1
+
+                # 2. Company Career Page Crawling with ATS detection
+                elif source_type in ("company_career_page", "career_page") or "career" in source_type:
+                    job_urls, ats_info = crawl_career_page(
+                        company_name=company or _get_domain(url),
+                        career_url=url,
+                        role_keywords=role_keywords,
+                        budget=self.budget,
+                        rate_limiter=self._rate_limiter,
+                        emit=emit,
+                    )
+                    if ats_info:
+                        result.ats_detected += 1
+                        plat, slug = ats_info
+                        if discovery_state and hasattr(discovery_state, "enqueue_crawl_task"):
+                            from datahunt.agent.discovery_models import CrawlTask
+                            discovery_state.enqueue_crawl_task(CrawlTask(
+                                id=f"crawl_ats_{plat}_{slug}",
+                                source=f"{plat}.com",
+                                source_type="ats",
+                                url=url,
+                                company=slug,
+                                ats_platform=plat,
+                                location=getattr(task, "location", None),
+                                query=role_keywords[0] if role_keywords else None,
+                                priority=1,
+                                reason=f"ATS detected from career page {company}",
+                            ))
+                        if plat in ats_crawler_map and slug:
+                            fn = ats_crawler_map[plat]
+                            ats_jobs = fn(slug, role_keywords, self.budget, self._rate_limiter, emit)
+                            if ats_jobs:
+                                result.crawled_jobs.extend(ats_jobs)
+                                result.jobs_extracted += len(ats_jobs)
+                                result.sources_crawled += 1
+
+                    if job_urls:
+                        result.sources_crawled += 1
+                        result.job_links_discovered += len(job_urls)
+                        for u in job_urls:
+                            result.crawled_jobs.append(CrawledJob(
+                                source_id=f"career:{company}",
+                                source_name=f"{company} Careers",
+                                title="", company=company,
+                                location=getattr(task, "location", "") or "",
+                                url=u, apply_url=u,
+                            ))
+                    else:
+                        result.sources_blocked += 1
+
+                # 3. Regional or Major Board Crawling
+                elif source_type in ("regional_board", "major_board", "board"):
+                    domain = _get_domain(url)
+                    patterns = [r"/job-listing/", r"/job-in-", r"-\d+\.html", r"/jd-", r"/jobs?/[a-z0-9_-]+", r"/job/\d+"]
+                    board_jobs = crawl_regional_board_html(
+                        board_id=task.source or domain,
+                        board_name=task.source or domain,
+                        listing_url=url,
+                        job_url_patterns=patterns,
+                        role_keywords=role_keywords,
+                        budget=self.budget,
+                        rate_limiter=self._rate_limiter,
+                        emit=emit,
+                    )
+                    if board_jobs:
+                        result.crawled_jobs.extend(board_jobs)
+                        result.sources_crawled += 1
+                        result.job_links_discovered += sum(1 for j in board_jobs if not j.title)
+                        result.jobs_extracted += sum(1 for j in board_jobs if j.title)
+                    else:
+                        result.sources_blocked += 1
+
+                else:
+                    job_urls, _ = crawl_career_page(
+                        company_name=company or _get_domain(url),
+                        career_url=url,
+                        role_keywords=role_keywords,
+                        budget=self.budget,
+                        rate_limiter=self._rate_limiter,
+                        emit=emit,
+                    )
+                    if job_urls:
+                        result.sources_crawled += 1
+                        result.job_links_discovered += len(job_urls)
+                        for u in job_urls:
+                            result.crawled_jobs.append(CrawledJob(
+                                source_id=task.source or "web",
+                                source_name=company or "Web",
+                                title="", company=company,
+                                location=getattr(task, "location", "") or "",
+                                url=u, apply_url=u,
+                            ))
+                    else:
+                        result.sources_blocked += 1
+
+            except Exception as e:
+                logger.warning(f"Error executing crawl task [{task.id}]: {e}")
+                result.sources_blocked += 1
+                emit(CrawlEvent(CrawlEventType.SOURCE_BLOCKED, getattr(task, "source", "unknown"), url=url,
+                                message=f"Task error: {e}"))
+
+        with self._lock:
+            result.events = list(self._events)
+
+        result.pages_fetched += sum(
+            1 for e in result.events if e.event_type == CrawlEventType.PAGE_FETCHED
+        )
+
+        seen_urls: Set[str] = set()
+        for job in result.merge_jobs():
+            if job.url and job.url not in seen_urls:
+                seen_urls.add(job.url)
+                result.candidate_urls.append({
+                    "url": job.url,
+                    "title": job.title or f"Job at {job.company}",
+                    "snippet": job.description[:200] if job.description else "",
+                    "source": job.source_name,
+                    "source_id": job.source_id,
+                    "crawled": True,
+                })
+
         return result

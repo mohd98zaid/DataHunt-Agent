@@ -318,8 +318,9 @@ def _deterministic_parse(query: str) -> Dict[str, Any]:
                 inferred_skills.append(inf)
 
     # Job title — first meaningful noun phrase, stripped of clauses
-    filler = re.sub(r'^\s*\b(find|search|get|me|top|\d+)\b\s*', '', query, flags=re.IGNORECASE)
-    filler = re.sub(r'\b(find|search|get|me|latest|fresh|remote|hybrid|onsite|jobs?|openings?|roles?)\b', '', filler, flags=re.IGNORECASE)
+    filler = re.sub(r'^\s*\b(find|search|get|me|top|look|looking|hunt)\b\s*(?:for\s+)?', '', query, flags=re.IGNORECASE)
+    filler = re.sub(r'^\s*for\s+', '', filler, flags=re.IGNORECASE)
+    filler = re.sub(r'\b(find|search|get|me|look|looking|latest|fresh|remote|hybrid|onsite|jobs?|openings?|roles?)\b', '', filler, flags=re.IGNORECASE)
     filler = re.sub(r'^\s*\d+\s+', '', filler)
     filler = re.sub(r'\b(?:in|at|for)\s+.*?(?=\s+(?:with|having|paying|salary|requiring)\b|\s*$)', '', filler, flags=re.IGNORECASE)
     filler = re.sub(r'\b(?:requiring|requires|with|having|paying|salary)\b.*', '', filler, flags=re.IGNORECASE)

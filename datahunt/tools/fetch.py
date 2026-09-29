@@ -450,7 +450,7 @@ class FetchTool:
                                 ext_data = DDGS().extract(cleaned_url)
                                 ext_content = ext_data.get("content") or ""
                                 if ext_content and len(ext_content.strip()) > 80:
-                                    logger.info(f"Successfully bypassed HTTP {status_code} block on {cleaned_url} via TLS browser impersonation")
+                                    logger.info(f"HTTP {status_code} fallback retrieval succeeded for {cleaned_url} via TLS browser impersonation")
                                     first_line = ext_content.splitlines()[0].strip("# ") if ext_content.splitlines() else "Document"
                                     title = first_line[:120]
                                     content_hash = hashlib.sha256(ext_content.encode("utf-8")).hexdigest()

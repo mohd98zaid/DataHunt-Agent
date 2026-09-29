@@ -1148,12 +1148,13 @@ class LLMSearchProvider:
             return []
 
 class HybridSearchProvider:
-    """Multi-tier search provider: DDG -> Regional LLM Discovery / Job Boards -> Deterministic Mock."""
-    def __init__(self, gemini_client=None):
+    """Multi-tier search provider: DDG -> Regional LLM Discovery / Job Boards -> Deterministic Mock (test-only)."""
+    def __init__(self, gemini_client=None, fallback_to_mock: bool = False):
         self.ddg = DuckDuckGoSearchProvider()
         self.job_board = LiveJobBoardSearchProvider()
         self.llm_search = LLMSearchProvider(gemini_client=gemini_client)
-        self.mock = MockSearchProvider()
+        self.fallback_to_mock = fallback_to_mock
+        self.mock = MockSearchProvider() if fallback_to_mock else None
 
     def search(
         self,
@@ -1209,16 +1210,20 @@ class HybridSearchProvider:
         except Exception as e:
             logger.debug(f"LLM search fallback failed for '{query}': {e}")
 
-        # 4. Final deterministic fallback (mock)
-        logger.info("Live search returned 0 hits across all live providers, utilizing fallback")
-        return self.mock.search(
-            query,
-            limit=limit,
-            page=page,
-            freshness_days=freshness_days,
-            allowed_domains=allowed_domains,
-            blocked_domains=blocked_domains
-        )
+        # 4. Final fallback: only use mock if explicitly enabled for test isolation
+        if self.fallback_to_mock and self.mock:
+            logger.info("Live search returned 0 hits across all live providers, utilizing test mock fallback")
+            return self.mock.search(
+                query,
+                limit=limit,
+                page=page,
+                freshness_days=freshness_days,
+                allowed_domains=allowed_domains,
+                blocked_domains=blocked_domains
+            )
+
+        logger.info(f"Live search returned 0 hits across all live providers for '{query}'")
+        return []
 
 class SearchTool:
     name = "search_web"
@@ -1360,7 +1365,7 @@ class SearchProviderRegistry:
         return self._providers.get(name.lower())
 
     def get_default(self) -> SearchProvider:
-        return self._providers.get("hybrid") or self._providers.get("duckduckgo") or MockSearchProvider()
+        return self._providers.get("hybrid") or self._providers.get("duckduckgo") or DuckDuckGoSearchProvider()
 
     def list_providers(self) -> List[str]:
         return list(self._providers.keys())
