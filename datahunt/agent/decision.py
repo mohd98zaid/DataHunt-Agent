@@ -58,17 +58,17 @@ class DecisionEngine:
                 elif state.search_plan_index < len(state.search_plan):
                     return AgentAction.EXPAND_SEARCH, "Low yield from current strategy, trying next tier"
 
-        # 1. Fetch candidate URLs if available
-        if state.candidate_urls:
-            return AgentAction.FETCH, f"{len(state.candidate_urls)} candidates to fetch"
-
-        # 2. Verify and deterministically qualify unverified raw records
+        # 1. Verify and deterministically qualify unverified raw records
         unverified_records = get_unprocessed_records(state)
         if (
             unverified_records
             and state.raw_record_generation > getattr(state, "last_verified_generation", -1)
         ):
             return AgentAction.VERIFY, f"{len(unverified_records)} records need verification"
+
+        # 2. Fetch candidate URLs if available
+        if state.candidate_urls:
+            return AgentAction.FETCH, f"{len(state.candidate_urls)} candidates to fetch"
 
         # 3. Direct source crawl queue: ATS public APIs, regional boards, company career pages
         has_pending_crawls = bool(
