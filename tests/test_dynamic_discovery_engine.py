@@ -283,3 +283,101 @@ def test_decision_engine_with_discovery_state():
     action, reason = decision_engine.decide(state)
     assert action == AgentAction.STOP
     assert "Target results" in reason
+
+
+def test_discovery_engine_query_spacing_and_geo_specialization():
+    engine = DiscoveryEngine()
+
+    # 1. Query strictly targeting UAE
+    state_uae = AgentState(
+        request="Find GenAI Engineer jobs in UAE with 0-6 years experience",
+        run_id="run_uae",
+        task_id="task_uae",
+        mode="jobs",
+        explicit_titles=["GenAI Engineer"],
+        locations=["UAE"],
+    )
+    tasks_uae = engine.generate_initial_tasks(None, state_uae)
+
+    # Invariant: No query contains concatenated words without space (e.g. '"GenAI Engineer"Dubai')
+    for t in tasks_uae:
+        assert '"GenAI Engineer"Dubai' not in t.query, f"Malformed query missing space: {t.query}"
+        assert '"GenAI Engineer"UAE' not in t.query, f"Malformed query missing space: {t.query}"
+        assert '"GenAI Engineer"Riyadh' not in t.query, f"Malformed query missing space: {t.query}"
+
+    # Invariant: UAE search does not search Saudi hubs
+    queries_uae = [t.query for t in tasks_uae]
+    assert not any("riyadh" in q.lower() for q in queries_uae)
+    assert not any("saudi" in q.lower() for q in queries_uae)
+    assert any("dubai" in q.lower() for q in queries_uae)
+    assert any("abu dhabi" in q.lower() for q in queries_uae)
+
+    # Invariant: Ashby and alternative title coverage present
+    assert any("jobs.ashbyhq.com" in t.source for t in tasks_uae)
+    assert any("generative ai engineer" in q.lower() for q in queries_uae)
+
+    # 2. Query strictly targeting Saudi
+    state_saudi = AgentState(
+        request="Find GenAI Engineer jobs in Saudi Arabia",
+        run_id="run_sa",
+        task_id="task_sa",
+        mode="jobs",
+        explicit_titles=["GenAI Engineer"],
+        locations=["Saudi Arabia"],
+    )
+    tasks_saudi = engine.generate_initial_tasks(None, state_saudi)
+    queries_saudi = [t.query for t in tasks_saudi]
+    assert not any("dubai" in q.lower() for q in queries_saudi)
+    assert any("riyadh" in q.lower() for q in queries_saudi)
+
+    # 3. Multi-region query includes both
+    state_multi = AgentState(
+        request="Find GenAI Engineer jobs in Saudi Arabia or UAE",
+        run_id="run_multi",
+        task_id="task_multi",
+        mode="jobs",
+        explicit_titles=["GenAI Engineer"],
+        locations=["Saudi Arabia", "UAE"],
+    )
+    tasks_multi = engine.generate_initial_tasks(None, state_multi)
+    queries_multi = [t.query for t in tasks_multi]
+    assert any("dubai" in q.lower() for q in queries_multi)
+    assert any("riyadh" in q.lower() for q in queries_multi)
+
+
+def test_should_stop_preserves_pending_work():
+    engine = DiscoveryEngine()
+    disc_state = DiscoveryState()
+    disc_state.current_round = 2
+    disc_state.task_queue.clear()
+
+    # Even though task_queue is empty and round > 1:
+    # 1. Pending candidate_urls must prevent premature stopping
+    state_with_candidates = AgentState(
+        request="Find GenAI Engineer jobs in UAE",
+        run_id="r1",
+        task_id="t1",
+        mode="jobs",
+        target_results=10,
+    )
+    state_with_candidates.candidate_urls = [{"url": "https://example.com/job1"}]
+    should_stop, _, _ = engine.should_stop(disc_state, state_with_candidates)
+    assert should_stop is False, "Should not stop when candidates are pending fetch"
+
+    # 2. Unverified raw_records must prevent premature stopping
+    state_with_unverified = AgentState(
+        request="Find GenAI Engineer jobs in UAE",
+        run_id="r2",
+        task_id="t2",
+        mode="jobs",
+        target_results=10,
+    )
+    rec = MagicMock()
+    rec.id = "rec_unverified"
+    state_with_unverified.raw_records = [rec]
+    state_with_unverified.verified_records = []
+    state_with_unverified.rejected_records = []
+    state_with_unverified.disqualified_records = []
+    should_stop, _, _ = engine.should_stop(disc_state, state_with_unverified)
+    assert should_stop is False, "Should not stop when raw records need verification"
+
