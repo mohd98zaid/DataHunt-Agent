@@ -16,7 +16,7 @@ def test_regional_job_spec_normalization():
     assert "location" in spec.requested_fields
     assert "application_url" in spec.requested_fields
     assert spec.geography is not None
-    assert spec.geography.name in ("Saudi Arabia", "UAE")
+    assert spec.geography.name in ("Saudi Arabia", "UAE", "Saudi Arabia OR UAE")
 
 
 def test_experience_clause_stripping_and_regional_queries():

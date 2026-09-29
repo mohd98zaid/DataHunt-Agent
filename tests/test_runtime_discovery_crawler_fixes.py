@@ -367,3 +367,106 @@ def test_runtime_stops_on_satisfied_results_without_reaching_max_cap():
     assert action == AgentAction.STOP
     assert "Target results" in reason and "reached" in reason
     assert state.iteration < state.max_iterations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 13. Additional Regression Tests: Export Format, Scoping, and Budget Stoppage
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_get_latest_run_export_format_compatibility():
+    """Verify that ExportRecord with `format` and `storage_key` is safely inspected."""
+    from datahunt.models import ExportRecord
+    from pathlib import Path
+    
+    exp = ExportRecord(
+        run_id="run_test",
+        format="md",
+        file_name="summary.md",
+        storage_key="exports/test_summary.md",
+    )
+    # Both getattr patterns must succeed without AttributeError
+    fmt = getattr(exp, "format", getattr(exp, "export_format", ""))
+    fpath = getattr(exp, "storage_key", getattr(exp, "file_path", ""))
+    assert fmt == "md"
+    assert fpath == "exports/test_summary.md"
+
+
+def test_decision_engine_crawls_pending_tasks_even_when_search_budget_exhausted():
+    """Verify agent transitions to CRAWL_DIRECT instead of STOP when pending crawl tasks exist."""
+    state = AgentState(
+        request="Find GenAI Engineer jobs in Saudi or UAE",
+        run_id="r_crawl_budget",
+        task_id="t_crawl_budget",
+        mode="jobs",
+        max_search_calls=12,
+        target_results=50,
+    )
+    state.search_calls = 12  # Search budget exhausted!
+    state.discovery_state = DiscoveryState()
+    
+    # Enqueue a pending crawl task (e.g. Careem on Greenhouse discovered in Round 3)
+    crawl_task = CrawlTask(
+        id="crawl_careem",
+        source="boards.greenhouse.io",
+        source_type="ats",
+        company="careem",
+        ats_platform="greenhouse",
+        url="https://boards.greenhouse.io/careem/jobs/123",
+        query="GenAI Engineer",
+    )
+    state.discovery_state.enqueue_crawl_task(crawl_task)
+
+    engine = DecisionEngine()
+    action, reason = engine.decide(state)
+
+    assert action == AgentAction.CRAWL_DIRECT
+    assert "Direct source crawling" in reason
+
+
+def test_decision_engine_fetches_candidates_before_search_budget_stop():
+    """Verify agent drains candidate URLs before stopping on search budget exhaustion."""
+    state = AgentState(
+        request="Find GenAI Engineer jobs in Saudi or UAE",
+        run_id="r_cand_budget",
+        task_id="t_cand_budget",
+        mode="jobs",
+        max_search_calls=12,
+        target_results=50,
+    )
+    state.search_calls = 12
+    state.discovery_state = DiscoveryState()
+    state.candidate_urls = [{"url": "https://example.com/job/1", "title": "AI Engineer"}]
+
+    engine = DecisionEngine()
+    action, reason = engine.decide(state)
+
+    assert action == AgentAction.FETCH
+    assert "candidates to fetch" in reason
+
+
+def test_company_name_extraction_hardening():
+    """Verify _extract_company_name rejects vacancy noise, months, action words, and accepts real companies."""
+    discovery_engine = DiscoveryEngine()
+
+    # Noise snippets that previously polluted the discovery queue
+    assert discovery_engine._extract_company_name("GenAI Engineer - 62 Vacancies Sep 2026 - Bayt.com", "") is None
+    assert discovery_engine._extract_company_name("AI Specialist - 40 Vacancies - Bayt.com", "") is None
+    assert discovery_engine._extract_company_name("Senior AI Engineer - Apply Now", "") is None
+    assert discovery_engine._extract_company_name("Machine Learning Engineer - Baytcom", "") is None
+    assert discovery_engine._extract_company_name("AI Researcher - Click Here", "") is None
+
+    # Real company patterns that must be extracted
+    assert discovery_engine._extract_company_name("GenAI Engineer at Talabat in Dubai", "") == "Talabat"
+    assert discovery_engine._extract_company_name("Senior ML Engineer at Careem - Dubai", "") == "Careem"
+    assert discovery_engine._extract_company_name("Lead AI Scientist - Cartlow Careers", "") == "Cartlow"
+
+
+def test_multi_region_normalization_extracts_all_regions():
+    """Verify GeminiClient.normalize_request extracts all target regions into geography name."""
+    from datahunt.llm import GeminiClient
+    client = GeminiClient()
+    spec = client.normalize_request("Find GenAI Engineer jobs in Saudi or UAE with 0-6 years experience")
+    assert spec.geography is not None
+    assert "Saudi Arabia" in spec.geography.name
+    assert "UAE" in spec.geography.name
+

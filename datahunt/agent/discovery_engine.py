@@ -55,9 +55,12 @@ ATS_PLATFORMS = {
 
 IGNORED_COMPANIES = {
     "job", "jobs", "career", "careers", "hiring", "apply", "search", "post", "positions",
-    "view", "index", "feed", "linkedin", "indeed", "glassdoor", "bayt", "gulftalent",
-    "naukrigulf", "dubai", "saudi", "riyadh", "remote", "general", "fulltime", "parttime",
-    "internship", "login", "register", "candidate", "applicant"
+    "view", "index", "feed", "linkedin", "indeed", "glassdoor", "bayt", "baytcom", "bayt.com",
+    "gulftalent", "naukrigulf", "naukri", "monster", "tanqeeb", "dubai", "saudi", "riyadh",
+    "remote", "general", "fulltime", "parttime", "internship", "login", "register", "candidate",
+    "applicant", "apply now", "click here", "read more", "view job", "work in", "vacancies",
+    "vacancy", "openings", "opening", "requirements", "requirement", "salary", "salaries",
+    "opportunity", "opportunities", "middle east", "middleeast", "united arab emirates", "saudi arabia"
 }
 
 
@@ -521,10 +524,10 @@ class DiscoveryEngine:
     def _extract_company_name(self, title: str, snippet: str) -> Optional[str]:
         """Extract employer/company name using common job title delimiters."""
         patterns = [
-            r"(?:at|@)\s+([A-Z0-9][A-Za-z0-9\s&.]{1,25}?)(?:\s+in|\s+[-|–—]|\s+\(|$)",
-            r"([A-Z0-9][A-Za-z0-9\s&.]{1,25}?)\s+is hiring\b",
-            r"([A-Z0-9][A-Za-z0-9\s&.]{1,25}?)\s+Careers\b",
-            r"[-|–—]\s+([A-Z0-9][A-Za-z0-9\s&.]{1,25}?)(?:\s+[-|–—]|\s+Careers|\s+Jobs|$)",
+            r"(?:at|@)\s+([A-Z0-9][A-Za-z0-9\s&.]{1,30}?)(?:\s+in|\s+[-|–—]|\s+\(|$)",
+            r"([A-Z0-9][A-Za-z0-9\s&.]{1,30}?)\s+is hiring\b",
+            r"([A-Z0-9][A-Za-z0-9\s&.]{1,30}?)\s+Careers\b",
+            r"[-|–—]\s+([A-Z0-9][A-Za-z0-9\s&.]{1,30}?)(?:\s+[-|–—]|\s+Careers|\s+Jobs|$)",
         ]
         text = f"{title}"
         for pat in patterns:
@@ -532,7 +535,28 @@ class DiscoveryEngine:
             if m:
                 cand = m.group(1).strip()
                 cand_clean = re.sub(r"[^\w\s&]", "", cand).strip()
-                if cand_clean and cand_clean.lower() not in IGNORED_COMPANIES and len(cand_clean) > 2:
+                if not cand_clean or len(cand_clean) <= 2:
+                    continue
+                cand_lower = cand_clean.lower()
+                # 1. Skip if starts with digit (e.g. "62 Vacancies Sep 2026")
+                if re.match(r"^\d", cand_clean):
+                    continue
+                # 2. Skip if candidate contains vacancy/opening/month/action words
+                bad_keywords = (
+                    "vacanc", "opening", "hiring", "apply now", "click here", "view job",
+                    "read more", "job opening", "find job", "salary", "salaries",
+                    "bayt", "naukri", "gulftalent", "linkedin", "indeed", "glassdoor",
+                    "january", "february", "march", "april", "may", "june", "july",
+                    "august", "september", "october", "november", "december",
+                    "jan 20", "feb 20", "mar 20", "apr 20", "may 20", "jun 20",
+                    "jul 20", "aug 20", "sep 20", "oct 20", "nov 20", "dec 20",
+                )
+                if any(bk in cand_lower for bk in bad_keywords):
+                    continue
+                # 3. Skip if purely location/region
+                if cand_lower in ("saudi", "saudi arabia", "uae", "dubai", "riyadh", "abu dhabi", "remote", "middle east"):
+                    continue
+                if cand_lower not in IGNORED_COMPANIES:
                     return cand_clean
         return None
 
@@ -706,10 +730,23 @@ class DiscoveryEngine:
         if state.deadline > 0 and now >= state.deadline:
             return True, StopReason.DEADLINE_EXCEEDED, "Time budget deadline reached"
 
+        # Check if pending crawl tasks, candidate URLs, or unverified records remain in flight
+        from datahunt.agent.state import get_unprocessed_records
+        unproc = get_unprocessed_records(state)
+        has_pending_work = bool(
+            getattr(state, "candidate_urls", None)
+            or (getattr(discovery_state, "pending_crawl_tasks", None))
+            or (unproc and state.raw_record_generation > getattr(state, "last_verified_generation", -1))
+        )
+
         if state.search_calls >= self.budget.max_search_requests:
+            if has_pending_work:
+                return False, StopReason.BUDGET_EXHAUSTED, ""
             return True, StopReason.BUDGET_EXHAUSTED, f"Max search requests budget ({self.budget.max_search_requests}) reached"
 
         if discovery_state.current_round > self.budget.max_expansion_rounds:
+            if has_pending_work:
+                return False, StopReason.BUDGET_EXHAUSTED, ""
             return True, StopReason.BUDGET_EXHAUSTED, f"Max discovery rounds ({self.budget.max_expansion_rounds}) completed"
 
         if state.mode in ("jobs", "job"):

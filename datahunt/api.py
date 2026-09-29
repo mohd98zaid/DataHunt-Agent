@@ -215,9 +215,11 @@ def get_latest_run():
     exports = exp_repo.list_exports_for_run(run.id)
     summary_md = ""
     for exp in exports:
-        if exp.export_format == "md" and exp.file_path:
+        fmt = getattr(exp, "format", getattr(exp, "export_format", ""))
+        fpath = getattr(exp, "storage_key", getattr(exp, "file_path", ""))
+        if fmt == "md" and fpath:
             try:
-                p = Path(exp.file_path)
+                p = Path(fpath)
                 if p.exists():
                     summary_md = p.read_text(encoding="utf-8")
             except Exception:

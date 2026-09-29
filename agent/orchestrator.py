@@ -15,7 +15,7 @@ from datahunt.logger import logger
 from datahunt.models import (
     ResearchTask, ResearchRun, ResearchSpec, RunStatus,
     RunBudget, RunCounters, TaskStatus, VerificationStatus,
-    ExportRecord
+    ExportRecord, ExtractedRecord, RecordEvidence
 )
 from datahunt.models.intent import ResearchIntent, ResearchOutputType
 from datahunt.llm import GeminiClient
@@ -119,18 +119,22 @@ class ResearchOrchestrator:
 
         # Determine if this is a job search for tighter query planning
         _is_job_mode = (
-            getattr(spec, "intent_spec", None) is not None
-            and spec.intent_spec.intent == ResearchIntent.JOB_SEARCH
-            and (agent_mode or "").lower() != "research"
+            (agent_mode or "").lower() in ("jobs", "job")
+            or getattr(spec, "agent_mode", None) in ("jobs", "job")
+            or (
+                getattr(spec, "intent_spec", None) is not None
+                and spec.intent_spec.intent == ResearchIntent.JOB_SEARCH
+                and (agent_mode or "").lower() != "research"
+            )
         )
         # For job searches: exhaust all available search-query and page budget to maximise ATS coverage.
         # For research/market: use a generous but bounded formula.
         if _is_job_mode:
-            q_budget = settings.MAX_SEARCH_QUERIES          # use every query slot
-            p_budget = settings.MAX_PAGES_FETCHED           # fetch every page we can
+            q_budget = max(settings.MAX_SEARCH_QUERIES, 30)          # use full query budget
+            p_budget = settings.MAX_PAGES_FETCHED                    # fetch every page we can
         else:
-            q_budget = min(max(spec.max_records // 4, 5), settings.MAX_SEARCH_QUERIES)
-            p_budget = min(max(spec.max_records * 3, 8),  settings.MAX_PAGES_FETCHED)
+            q_budget = min(max(spec.max_records, 20), settings.MAX_SEARCH_QUERIES)
+            p_budget = min(max(spec.max_records * 3, 20),  settings.MAX_PAGES_FETCHED)
 
         run_b = budget or RunBudget(
             deadline_seconds=settings.MAX_RUN_SECONDS,
@@ -342,9 +346,10 @@ class ResearchOrchestrator:
                     }
 
                 from datahunt.agent.discovery_models import DiscoveryBudget
+                search_cap = max(run.budget.max_search_queries, 35)
                 discovery_budget = DiscoveryBudget(
                     max_runtime_seconds=settings.MAX_RUN_SECONDS,
-                    max_search_requests=run.budget.max_search_queries,
+                    max_search_requests=search_cap,
                     max_fetches=run.budget.max_pages,
                     max_expansion_rounds=6,
                 )
@@ -355,10 +360,10 @@ class ResearchOrchestrator:
                     task_id=task.id,
                     mode="jobs",
                     target_results=task.max_records,
-                    max_search_calls=run.budget.max_search_queries,
+                    max_search_calls=search_cap,
                     max_fetch_calls=run.budget.max_pages,
                     deadline=deadline,
-                    max_iterations=20,
+                    max_iterations=40,
                     discovery_budget=discovery_budget,
                     **canonical_kwargs,
                 )
@@ -488,7 +493,6 @@ class ResearchOrchestrator:
 
             if _use_market_engine:
                 from datahunt.agent.market_discovery import MarketDiscoveryEngine
-                from datahunt.models.record import ExtractedRecord, RecordEvidence, VerificationStatus
                 import uuid
 
                 mkt_engine = MarketDiscoveryEngine(
@@ -586,7 +590,6 @@ class ResearchOrchestrator:
             if _use_people_engine:
                 from datahunt.agents.people_intelligence import PeopleIntelligenceAgent
                 from datahunt.agents.contact_discovery import ContactDiscoveryAgent
-                from datahunt.models.record import ExtractedRecord, RecordEvidence, VerificationStatus
                 import uuid
 
                 people_agent = PeopleIntelligenceAgent(

@@ -70,15 +70,7 @@ class DecisionEngine:
         ):
             return AgentAction.VERIFY, f"{len(unverified_records)} records need verification"
 
-        # 3. If there are active search tasks in discovery queue or search plan, execute search
-        if state.discovery_state and state.discovery_state.task_queue and state.search_calls < state.max_search_calls:
-            count = len(state.discovery_state.task_queue)
-            return AgentAction.SEARCH, f"Searching discovery queue ({count} tasks)"
-
-        if state.search_plan and state.search_plan_index < len(state.search_plan) and state.search_calls < state.max_search_calls:
-            return AgentAction.SEARCH, f"Searching tier {state.search_plan_index + 1}/{len(state.search_plan)}"
-
-        # 4. Direct source crawl queue: ATS public APIs, regional boards, company career pages
+        # 3. Direct source crawl queue: ATS public APIs, regional boards, company career pages
         has_pending_crawls = bool(
             state.discovery_state
             and getattr(state.discovery_state, "pending_crawl_tasks", None)
@@ -86,7 +78,6 @@ class DecisionEngine:
         if (
             state.mode in ("jobs", "job")
             and has_pending_crawls
-            and not state.candidate_urls
         ):
             count = len(state.discovery_state.pending_crawl_tasks)
             return AgentAction.CRAWL_DIRECT, f"Direct source crawling ({count} tasks in queue)"
@@ -96,11 +87,18 @@ class DecisionEngine:
             state.mode in ("jobs", "job")
             and not getattr(state, "crawl_done", False)
             and not (state.discovery_state and state.discovery_state.task_queue)
-            and not state.candidate_urls
         ):
             return AgentAction.CRAWL_DIRECT, "Direct multi-source board/ATS crawl (pre-search)"
 
-        # 5. Advance discovery round if task queue is empty and budget permits
+        # 5. If there are active search tasks in discovery queue or search plan, execute search
+        if state.discovery_state and state.discovery_state.task_queue and state.search_calls < state.max_search_calls:
+            count = len(state.discovery_state.task_queue)
+            return AgentAction.SEARCH, f"Searching discovery queue ({count} tasks)"
+
+        if state.search_plan and state.search_plan_index < len(state.search_plan) and state.search_calls < state.max_search_calls:
+            return AgentAction.SEARCH, f"Searching tier {state.search_plan_index + 1}/{len(state.search_plan)}"
+
+        # 6. Advance discovery round if task queue is empty and budget permits
         max_rounds = getattr(state.discovery_budget, "max_expansion_rounds", 6) if state.discovery_budget else 6
         if (
             state.discovery_state is not None

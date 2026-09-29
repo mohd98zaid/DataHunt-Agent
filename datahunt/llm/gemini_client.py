@@ -462,34 +462,49 @@ class GeminiClient:
             default_assumptions = [f"Synthesizing direct, evidence-backed research answer for '{intent_spec.intent.value}'"]
             resolved_mode = "research" if agent_mode in (None, "auto", "research") else agent_mode
 
-        # Determine geographic intent
+        # Determine geographic intent (support multiple regions e.g. "Saudi or UAE")
         req_lower = request_text.lower()
-        geo_name = None
+        geo_names = []
         geo_country = None
         if any(k in req_lower for k in ("saudi", "riyadh", "jeddah", "ksa", "dammam")):
-            geo_name = "Saudi Arabia"
+            geo_names.append("Saudi Arabia")
             geo_country = "SA"
-        elif any(k in req_lower for k in ("dubai", "uae", "abu dhabi", "emirates", "sharjah")):
-            geo_name = "UAE"
-            geo_country = "AE"
-        elif any(k in req_lower for k in ("india", "bangalore", "bengaluru", "mumbai", "delhi", "hyderabad", "pune", "chennai")):
-            geo_name = "India"
-            geo_country = "IN"
-        elif any(k in req_lower for k in ("london", "uk", "united kingdom", "england")):
-            geo_name = "UK"
-            geo_country = "GB"
-        elif any(k in req_lower for k in ("us", "usa", "united states", "america", "san francisco", "new york")):
-            geo_name = "USA"
-            geo_country = "US"
-        elif any(k in req_lower for k in ("singapore",)):
-            geo_name = "Singapore"
-            geo_country = "SG"
-        elif any(k in req_lower for k in ("germany", "berlin", "munich")):
-            geo_name = "Germany"
-            geo_country = "DE"
-        elif any(k in req_lower for k in ("canada", "toronto", "vancouver")):
-            geo_name = "Canada"
-            geo_country = "CA"
+        if any(k in req_lower for k in ("dubai", "uae", "abu dhabi", "emirates", "sharjah")):
+            geo_names.append("UAE")
+            if not geo_country:
+                geo_country = "AE"
+        if any(k in req_lower for k in ("india", "bangalore", "bengaluru", "mumbai", "delhi", "hyderabad", "pune", "chennai")):
+            geo_names.append("India")
+            if not geo_country:
+                geo_country = "IN"
+        if any(k in req_lower for k in ("london", "uk", "united kingdom", "england")):
+            geo_names.append("UK")
+            if not geo_country:
+                geo_country = "GB"
+        if any(k in req_lower for k in ("us", "usa", "united states", "america", "san francisco", "new york")):
+            geo_names.append("USA")
+            if not geo_country:
+                geo_country = "US"
+        if any(k in req_lower for k in ("singapore",)):
+            geo_names.append("Singapore")
+            if not geo_country:
+                geo_country = "SG"
+        if any(k in req_lower for k in ("germany", "berlin", "munich")):
+            geo_names.append("Germany")
+            if not geo_country:
+                geo_country = "DE"
+        if any(k in req_lower for k in ("canada", "toronto", "vancouver")):
+            geo_names.append("Canada")
+            if not geo_country:
+                geo_country = "CA"
+
+        if len(geo_names) > 1:
+            geo_name = " OR ".join(geo_names)
+            geo_country = None
+        elif len(geo_names) == 1:
+            geo_name = geo_names[0]
+        else:
+            geo_name = None
 
         if self.is_live:
             try:
