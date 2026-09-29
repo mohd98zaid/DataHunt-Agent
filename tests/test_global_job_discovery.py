@@ -51,7 +51,8 @@ def test_golden_8_mock_jobs_discovery_and_qualification():
         location_operator="OR",
         experience_min=0,
         experience_max=6,
-        explicit_skills=["python", "llm", "generative ai"],
+        explicit_skills=[],
+        inferred_skills=["python", "llm", "generative ai"],
     )
 
     now_iso = datetime.now(timezone.utc).isoformat()

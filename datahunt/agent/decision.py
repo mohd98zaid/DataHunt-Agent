@@ -37,7 +37,7 @@ class DecisionEngine:
             return AgentAction.STOP, f"Max iterations ({state.max_iterations}) reached"
 
         # In jobs mode, target refers to QUALIFIED results. In general mode, verified records.
-        effective_count = len(state.qualified_records) if (state.mode in ("jobs", "job") and state.qualified_records) else len(state.verified_records)
+        effective_count = len(state.qualified_records) if state.mode in ("jobs", "job") else len(state.verified_records)
 
         # If discovery engine is active, evaluate dynamic coverage and balanced universe stopping
         if state.discovery_state:

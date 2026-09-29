@@ -16,6 +16,7 @@ class CompanyProfile(BaseModel):
     """Synthesized corporate intelligence profile with zero synthetic fabrication."""
     company_name: str
     status: str = "verified"  # "verified" | "unavailable"
+    verification_status: str = "VERIFIED"  # "VERIFIED" | "UNVERIFIED"
     is_available: bool = True
     about: str = ""
     industry: str = "Unknown"
@@ -65,7 +66,12 @@ class CompanyResearchAgent:
         """Fetch or synthesize a CompanyProfile for a target organization."""
         clean_name = company_name.strip()
         if not clean_name:
-            return CompanyProfile(company_name="Unknown")
+            return CompanyProfile(
+                company_name="Unknown",
+                status="unavailable",
+                verification_status="UNVERIFIED",
+                is_available=False
+            )
 
         # 1. Check local cache
         if not force_refresh:
@@ -135,6 +141,7 @@ class CompanyResearchAgent:
             profile = CompanyProfile(
                 company_name=clean_name,
                 status="verified" if has_sources else "unavailable",
+                verification_status="VERIFIED" if has_sources else "UNVERIFIED",
                 is_available=has_sources,
                 about=about_text,
                 industry="Unknown",
@@ -145,11 +152,12 @@ class CompanyResearchAgent:
                 interview_process="Interview stages not disclosed in public disclosures" if not has_sources else "unavailable",
                 ratings_summary="No verified public ratings available",
                 sources=sources[:5],
-                company_facts=facts,
+                company_facts=facts if has_sources else [],
                 company_inferences=[],
                 company_opinions=[],
             )
 
-        # 4. Cache
-        self.repo.save_profile(clean_name, profile.model_dump(), sources[:5])
+        # 4. Cache only if verified profile
+        if profile.is_available and profile.verification_status == "VERIFIED":
+            self.repo.save_profile(clean_name, profile.model_dump(), sources[:5])
         return profile

@@ -51,7 +51,10 @@ def test_local_currency_resolution():
     # 2. QueryUnderstandingAgent local currency assignment
     qu = QueryUnderstandingAgent()
     req_gulf = qu.understand("Find AI Engineer jobs in Saudi or UAE with 0-5 years experience")
-    assert req_gulf.salary_currency in ("SAR", "AED")
+    assert req_gulf.salary_currency is None  # Multi-region: never guess currency silently
+
+    req_ksa = qu.understand("Find AI Engineer jobs in Saudi Arabia")
+    assert req_ksa.salary_currency == "SAR"
 
     req_dubai = qu.understand("Find Senior AI Engineer jobs in Dubai")
     assert req_dubai.salary_currency == "AED"

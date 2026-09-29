@@ -178,10 +178,15 @@ class JobSearchSpec(BaseModel):
             self.cities = list(self.locations)
 
         # 3. Sync skills: explicit_skills and skills
-        if self.skills and not self.explicit_skills:
-            self.explicit_skills = list(self.skills)
-        elif self.explicit_skills and not self.skills:
+        if self.explicit_skills and not self.skills:
             self.skills = list(self.explicit_skills)
+        elif self.skills and not self.explicit_skills and not self.inferred_skills:
+            q_low = (self.raw_query or "").lower()
+            if any(k in q_low for k in ("requiring", "requires", "must have", "skills:", "tech stack", "with skills")):
+                self.explicit_skills = list(self.skills)
+            else:
+                self.inferred_skills = list(self.skills)
+
 
         # 4. Sync remote & remote_allowed & remote_status
         if self.remote is not None:
@@ -211,18 +216,31 @@ class JobSearchSpec(BaseModel):
 
         # 6. Auto-detect regional currency if location is provided and default USD (unless user explicitly specified USD/$)
         has_explicit_usd = any(sig in (self.raw_query or "").lower() for sig in ("$", "usd", "dollar", "bucks"))
-        if not has_explicit_usd and self.location and (not self.salary_currency or self.salary_currency == "USD"):
+        if self.location:
             loc_low = self.location.lower()
-            if any(k in loc_low for k in ("saudi", "riyadh", "jeddah", "dammam", "ksa")):
-                self.salary_currency = "SAR"
-            elif any(k in loc_low for k in ("uae", "dubai", "abu dhabi", "sharjah", "emirates")):
-                self.salary_currency = "AED"
-            elif any(k in loc_low for k in ("india", "bangalore", "mumbai", "delhi", "pune", "hyderabad")):
-                self.salary_currency = "INR"
-            elif any(k in loc_low for k in ("uk", "london", "england", "united kingdom")):
-                self.salary_currency = "GBP"
-            elif any(k in loc_low for k in ("germany", "france", "berlin", "paris", "europe")):
-                self.salary_currency = "EUR"
+            is_multi_region = len(self.locations) > 1 or " or " in loc_low
+            has_saudi = any(k in loc_low for k in ("saudi", "riyadh", "jeddah", "dammam", "ksa"))
+            has_uae = any(k in loc_low for k in ("uae", "dubai", "abu dhabi", "sharjah", "emirates"))
+            has_india = any(k in loc_low for k in ("india", "bangalore", "mumbai", "delhi", "pune", "hyderabad"))
+            has_uk = any(k in loc_low for k in ("uk", "london", "england", "united kingdom"))
+            has_eu = any(k in loc_low for k in ("germany", "france", "berlin", "paris", "europe"))
+
+            if is_multi_region or (has_saudi and has_uae):
+                # Section 6: Multi-region requests (e.g. Saudi Arabia OR UAE) must NEVER silently become SAR or AED
+                if not has_explicit_usd:
+                    self.salary_currency = None
+            elif not has_explicit_usd and (not self.salary_currency or self.salary_currency == "USD"):
+                if has_saudi and not has_uae:
+                    self.salary_currency = "SAR"
+                elif has_uae and not has_saudi:
+                    self.salary_currency = "AED"
+                elif has_india:
+                    self.salary_currency = "INR"
+                elif has_uk:
+                    self.salary_currency = "GBP"
+                elif has_eu:
+                    self.salary_currency = "EUR"
+
 
     def to_search_hint(self) -> str:
         """Compact string representation for search engines."""

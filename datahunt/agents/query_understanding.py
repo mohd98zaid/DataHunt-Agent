@@ -70,14 +70,23 @@ LOCATION_TO_CURRENCY: Dict[str, str] = {
 }
 
 
-def detect_local_currency(location: Optional[str], default: str = "USD") -> str:
+def detect_local_currency(location: Optional[str], default: Optional[str] = "USD") -> Optional[str]:
     """
     Derive the regional / domestic currency code from a location string or country name.
+    Multi-region locations (e.g. "Saudi Arabia or UAE") must NEVER guess SAR or AED.
     """
     if not location or not isinstance(location, str):
         return default
 
     loc_lower = location.lower()
+
+    # Section 6: Multi-region requests must NEVER silently become SAR or AED
+    if " or " in loc_lower:
+        return None
+    has_saudi = any(k in loc_lower for k in ("saudi", "riyadh", "jeddah", "dammam", "ksa"))
+    has_uae = any(k in loc_lower for k in ("uae", "dubai", "abu dhabi", "sharjah", "emirates"))
+    if has_saudi and has_uae:
+        return None
 
     # 1. Check multi-word keys first (e.g. "saudi arabia", "united arab emirates", "united kingdom")
     for loc_key, curr in LOCATION_TO_CURRENCY.items():
@@ -91,6 +100,7 @@ def detect_local_currency(location: Optional[str], default: str = "USD") -> str:
             return LOCATION_TO_CURRENCY[tok]
 
     return default
+
 
 
 # ─────────────────────────────────────────────
@@ -229,7 +239,7 @@ def _deterministic_parse(query: str) -> Dict[str, Any]:
 
     # Salary & Regional Currency
     salary_min = None
-    currency = detect_local_currency(location, default="USD")
+    currency = detect_local_currency(location, default=None if (locations and len(locations) > 1) or (" or " in (location or "").lower()) else "USD")
     lpa_match = re.search(r'(\d+(?:\.\d+)?)\s*(?:lpa|lakhs?|lac)', q_lower)
     k_match = re.search(r'[$€£₹]?\s*(\d+(?:\.\d+)?)\s*k\b', q_lower)
     if lpa_match:
@@ -249,6 +259,10 @@ def _deterministic_parse(query: str) -> Dict[str, Any]:
         currency = "GBP"
     elif any(sig in q_lower for sig in ("eur", "euro", "€")):
         currency = "EUR"
+    elif (locations and len(locations) > 1) or (" or " in (location or "").lower()):
+        # Section 6: Multi-region requests must NEVER silently become SAR or AED
+        currency = None
+
 
     # Employment type
     emp_type = "full_time"
@@ -304,13 +318,18 @@ def _deterministic_parse(query: str) -> Dict[str, Any]:
                 inferred_skills.append(inf)
 
     # Job title — first meaningful noun phrase, stripped of clauses
-    filler = re.sub(r'\b(find|search|get|me|latest|fresh|remote|hybrid|onsite|jobs?|openings?|roles?)\b', '', query, flags=re.IGNORECASE)
+    filler = re.sub(r'^\s*\b(find|search|get|me|top|\d+)\b\s*', '', query, flags=re.IGNORECASE)
+    filler = re.sub(r'\b(find|search|get|me|latest|fresh|remote|hybrid|onsite|jobs?|openings?|roles?)\b', '', filler, flags=re.IGNORECASE)
+    filler = re.sub(r'^\s*\d+\s+', '', filler)
     filler = re.sub(r'\b(?:in|at|for)\s+.*?(?=\s+(?:with|having|paying|salary|requiring)\b|\s*$)', '', filler, flags=re.IGNORECASE)
     filler = re.sub(r'\b(?:requiring|requires|with|having|paying|salary)\b.*', '', filler, flags=re.IGNORECASE)
     filler = re.sub(r'\b\d+[-–to\s]+\d*\s*years?.*', '', filler, flags=re.IGNORECASE)
+    filler = re.sub(r'\b(preferably|mostly|mainly)?\s*fresh\b.*', '', filler, flags=re.IGNORECASE)
     title = re.sub(r'\s+', ' ', filler).strip()[:60] or query[:60]
+    title = re.sub(r'^\s*\d+\s+', '', title).strip()
 
     return {
+
         "raw_query": query,
         "job_title": title,
         "alternative_titles": [],

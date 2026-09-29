@@ -28,6 +28,9 @@ class JobMatchResult(BaseModel):
     # Per-dimension breakdown — values follow MATCH=1.0, PARTIAL=0.5, UNKNOWN=0.3, MISMATCH=0.0
     score_breakdown: Dict[str, Any] = Field(default_factory=dict)
 
+    eligibility_status: str = "ELIGIBLE"
+    qualification_result: Optional[Any] = None
+
     # Multipliers & Weights applied
     title_match_score: float = 0.0
     skills_match_score: float = 0.0
@@ -48,12 +51,27 @@ class JobAnalysisAgent:
         self,
         jobs: List[NormalizedJob],
         req: JobSearchRequest,
-        expanded: Optional[ExpandedQuery] = None
+        expanded: Optional[ExpandedQuery] = None,
+        filter_ineligible: bool = True
     ) -> List[JobMatchResult]:
-        """Score each job and return sorted by descending relevance."""
+        """
+        Score and rank qualified jobs.
+        Invariant C: Qualification precedes ranking. Disqualified jobs (eligibility_status != 'ELIGIBLE')
+        are excluded and can NEVER be rescued by ranking scores.
+        """
+        from datahunt.agent.policies import qualify_job
+
         results: List[JobMatchResult] = []
 
         for job in jobs:
+            if filter_ineligible:
+                q_res = qualify_job(job, req, expanded)
+                if not q_res.qualified or q_res.eligibility_status != "ELIGIBLE":
+                    logger.debug(
+                        f"JobAnalysisAgent: Ineligible job '{getattr(job, 'title', '')}' dropped: {q_res.rejection_reasons}"
+                    )
+                    continue
+
             match_res = self._score_job(job, req, expanded)
             results.append(match_res)
 

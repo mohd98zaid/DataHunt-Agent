@@ -80,118 +80,38 @@ def _location_status(req_location: str, job_location: str, job_remote: str) -> s
     return "unknown"
 
 
-from datahunt.agent.policies import match_location, match_skills, MatchStatus
+from typing import Any, List, Optional, Tuple
+from datahunt.agent.policies import qualify_job, QualificationPolicy, match_location, match_skills, MatchStatus
 
 
 class HardFilter:
     """
     Step 26-27: Filter out jobs that violate explicit hard constraints.
     Hard filters eliminate results permanently — ranking scores cannot rescue them.
+    Delegates directly to the authoritative QualificationPolicy (Invariant D).
     """
+
+    def __init__(self, policy: Optional[QualificationPolicy] = None):
+        self.policy = policy
 
     def apply(self, jobs: List[Any], req: JobSearchRequest) -> Tuple[List[Any], List[Tuple[Any, str]]]:
         """
-        Filter job candidates.
-        Supports both NormalizedJob instances and dicts.
+        Filter job candidates using the single authoritative QualificationPolicy.
+        Supports both NormalizedJob instances, ExtractedRecords, and dicts.
         Returns:
             (qualified_jobs, rejected_jobs_with_reason)
         """
         passed: List[Any] = []
         rejected: List[Tuple[Any, str]] = []
 
-        req_remote = (req.remote_status or "any").lower()
-        req_locations = getattr(req, "locations", None) or ([req.location] if req.location else [])
-        req_sal_min = req.salary_min
-        req_exp_max = req.experience_max  # upper bound the user declared
-        req_explicit_skills = getattr(req, "explicit_skills", None) or []
-        req_excluded_titles = getattr(req, "excluded_titles", None) or []
-        req_excluded_companies = getattr(req, "excluded_companies", None) or []
-
         for job in jobs:
-            is_dict = isinstance(job, dict)
-            is_active = job.get("is_active", True) if is_dict else getattr(job, "is_active", True)
-            title = (job.get("title") or job.get("job_title") or "") if is_dict else getattr(job, "title", "")
-            company = (job.get("company") or "") if is_dict else getattr(job, "company", "")
-            location = (job.get("location") or "") if is_dict else getattr(job, "location", "")
-            remote_status = (job.get("remote_status") or ("remote" if job.get("remote") else "onsite")) if is_dict else getattr(job, "remote_status", "onsite")
-            skills = (job.get("skills") or []) if is_dict else getattr(job, "skills", [])
+            res = self.policy.qualify(job, req) if self.policy else qualify_job(job, req)
 
-            # 1. Active status
-            if not is_active:
-                rejected.append((job, "Job posting marked as inactive"))
-                continue
-
-            # 2. Excluded Titles & Excluded Companies
-            if req_excluded_titles:
-                j_title_lower = title.lower()
-                if any(et.lower() in j_title_lower for et in req_excluded_titles):
-                    rejected.append((job, f"Job title '{title}' matches excluded title"))
-                    continue
-
-            if req_excluded_companies:
-                j_comp_lower = company.lower()
-                if any(ec.lower() in j_comp_lower for ec in req_excluded_companies):
-                    rejected.append((job, f"Company '{company}' matches excluded company"))
-                    continue
-
-            # 3. Strict Remote Filter
-            if req_remote == "remote":
-                if remote_status == "onsite":
-                    if req.location and req.location.lower() not in location.lower():
-                        rejected.append((job, "Strict remote requested, but job is onsite in another location"))
-                        continue
-
-            elif req_remote == "onsite":
-                if remote_status == "remote" and req.location and req.location.lower() not in location.lower():
-                    pass
-
-            # 4. Strict Geographic Mismatch (via canonical match_location policy)
-            if req_locations and location:
-                remote_ok = req_remote in ("any", "remote", "hybrid")
-                l_status, l_reason = match_location(req_locations, location, remote_ok=remote_ok)
-                if l_status == MatchStatus.MISMATCH:
-                    rejected.append((
-                        job,
-                        f"Location '{location}' is a confirmed geographic mismatch: {l_reason}"
-                    ))
-                    continue
-                elif l_status == MatchStatus.UNKNOWN:
-                    logger.debug(
-                        f"HardFilter: location status unknown for '{location}' vs '{req_locations}'; passing through"
-                    )
-
-            # 5. Salary Floor Filter (only if both query and job have salary in same currency)
-            sal_min_annual = job.get("salary_min_annual") if is_dict else getattr(job, "salary_min_annual", None)
-            sal_max_annual = job.get("salary_max_annual") if is_dict else getattr(job, "salary_max_annual", None)
-            sal_currency = (job.get("salary_currency") if is_dict else getattr(job, "salary_currency", None)) or "USD"
-
-            if req_sal_min and sal_min_annual is not None:
-                if (req.salary_currency or "USD").upper() == sal_currency.upper():
-                    if sal_max_annual and sal_max_annual < req_sal_min * 0.85:
-                        rejected.append((job, f"Disclosed max salary ({sal_currency} {sal_max_annual}) below minimum floor ({req_sal_min})"))
-                        continue
-                    elif not sal_max_annual and sal_min_annual < req_sal_min * 0.80:
-                        rejected.append((job, f"Disclosed min salary ({sal_currency} {sal_min_annual}) below minimum floor ({req_sal_min})"))
-                        continue
-
-            # 6. Experience Mismatch (only reject clear mismatches, not unknowns)
-            exp_min_years = job.get("experience_min_years") if is_dict else getattr(job, "experience_min_years", None)
-            if req_exp_max is not None and exp_min_years is not None:
-                if exp_min_years > req_exp_max + 1:
-                    rejected.append((job, f"Job requires {exp_min_years}+ years, user max is {req_exp_max}"))
-                    continue
-
-            # 7. Explicit Skills Gate (inferred skills are never hard gates)
-            if req_explicit_skills:
-                raw_f = job.get("raw_fields", {}) if is_dict else getattr(job, "raw_fields", {})
-                job_blob = f"{title} {location} {' '.join(skills)} {' '.join(str(v) for v in (raw_f or {}).values())}"
-                s_status, matched_s, missing_s = match_skills(req_explicit_skills, job_blob)
-                if s_status == MatchStatus.MISMATCH:
-                    rejected.append((job, f"Missing required explicit skills: {', '.join(missing_s)}"))
-                    continue
-
-            # Passed all hard gates
-            passed.append(job)
+            if res.qualified:
+                passed.append(job)
+            else:
+                reason = "; ".join(res.rejection_reasons) if res.rejection_reasons else ("; ".join(res.reasons) if res.reasons else "Disqualified by qualification policy")
+                rejected.append((job, reason))
 
         logger.info(f"HardFilter: {len(passed)} passed, {len(rejected)} rejected from {len(jobs)} candidate jobs.")
         return passed, rejected
