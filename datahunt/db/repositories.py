@@ -893,7 +893,7 @@ class ExportRepository:
                     exp.format,
                     exp.file_name,
                     exp.storage_key,
-                    exp.sha256,
+                    exp.sha256 or "",
                     exp.row_count,
                     exp.include_evidence,
                     exp.expires_at,

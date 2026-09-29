@@ -147,3 +147,42 @@ def test_api_export_endpoints():
     assert len(docx_res.content) > 1000
 
 
+def test_api_get_latest_run_with_exports():
+    """Verify /runs/latest handles ExportRecord correctly without AttributeError."""
+    import uuid
+    from pathlib import Path
+    from datahunt.models import ResearchRun, ResearchTask, ResearchSpec, RunBudget, RunStatus, TaskStatus, ExportRecord
+    from datahunt.db import TaskRepository, RunRepository, ExportRepository
+
+    t_repo = TaskRepository()
+    r_repo = RunRepository()
+    exp_repo = ExportRepository()
+
+    uid = uuid.uuid4().hex[:8]
+    task_id = f"task_latest_{uid}"
+    run_id = f"run_latest_{uid}"
+
+    spec = ResearchSpec(topic="Latest Run Test")
+    task = ResearchTask(id=task_id, request_text="Find GenAI Engineer jobs in Saudi or UAE", normalized_spec=spec, status=TaskStatus.COMPLETED)
+    t_repo.create_task(task)
+    run = ResearchRun(id=run_id, task_id=task.id, status=RunStatus.COMPLETED, budget=RunBudget())
+    r_repo.create_run(run)
+
+    # Attach an ExportRecord
+    exp = ExportRecord(
+        run_id=run_id,
+        format="md",
+        file_name="summary.md",
+        storage_key="exports/test_latest.md",
+    )
+    exp_repo.insert_export(exp)
+
+    res = client.get("/runs/latest")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["id"] == run_id
+    assert data["task_id"] == task_id
+    assert "Find GenAI Engineer jobs in Saudi or UAE" in data["query"]
+
+
+
