@@ -818,6 +818,9 @@ function renderTable(jobs) {
   if (!jobs || jobs.length === 0) {
     const searchInput = document.getElementById("job-search-input");
     const qVal = searchInput ? searchInput.value.trim() : "";
+    const urlParams = new URLSearchParams(window.location.search);
+    const runId = urlParams.get("run_id");
+
     if (qVal) {
       tbody.innerHTML = `
         <tr>
@@ -829,8 +832,37 @@ function renderTable(jobs) {
             </a>
           </td>
         </tr>`;
+    } else if (runId) {
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="9" class="empty-table-cell" style="padding: 40px 20px; text-align: center;">
+            <div style="font-size: 28px; margin-bottom: 10px;">🎯</div>
+            <div style="font-size: 15px; color: #fff; margin-bottom: 8px;">No verified opportunities qualified for directive <span style="color: var(--neon-cyan); font-family: 'Share Tech Mono', monospace;">${escapeHtml(runId)}</span></div>
+            <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 18px; max-width: 600px; margin-left: auto; margin-right: auto; line-height: 1.5;">
+              The Job Agent enforces strict qualification (skills, title relevance, and geographic constraints). Disqualified or non-matching records are excluded from the verified tracker.
+            </div>
+            <div style="display: flex; justify-content: center; gap: 12px; flex-wrap: wrap;">
+              <button type="button" class="table-apply-btn" onclick="clearRunScopeFilter()" style="display: inline-flex; align-items: center; gap: 8px; padding: 10px 22px; font-size: 12px; cursor: pointer; text-decoration: none;">
+                <span>🌐 VIEW ALL TRACKED JOBS IN DATABASE</span> ➔
+              </button>
+              <a href="/cockpit.html?mode=jobs" class="table-apply-btn" style="display: inline-flex; align-items: center; gap: 8px; padding: 10px 22px; font-size: 12px; background: rgba(0, 240, 255, 0.1); border-color: var(--neon-cyan); color: var(--neon-cyan); text-decoration: none;">
+                <span>⚡ LAUNCH NEW LIVE SEARCH</span>
+              </a>
+            </div>
+          </td>
+        </tr>`;
     } else {
-      tbody.innerHTML = `<tr><td colspan="9" class="empty-table-cell">No job listings found matching the current criteria.</td></tr>`;
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="9" class="empty-table-cell" style="padding: 40px 20px; text-align: center;">
+            <div style="font-size: 28px; margin-bottom: 10px;">📋</div>
+            <div style="font-size: 15px; color: #fff; margin-bottom: 8px;">No job listings found in database matching current filters.</div>
+            <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 18px;">Run a search in the Cockpit to discover and track verified opportunities.</div>
+            <a href="/cockpit.html?mode=jobs" class="table-apply-btn" style="display: inline-flex; align-items: center; gap: 8px; padding: 10px 22px; font-size: 12px; text-decoration: none;">
+              <span>⚡ LAUNCH JOB RADAR</span> ➔
+            </a>
+          </td>
+        </tr>`;
     }
     return;
   }

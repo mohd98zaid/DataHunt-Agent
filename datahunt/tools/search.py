@@ -920,6 +920,19 @@ class LiveJobBoardSearchProvider:
         ai_query_terms = {"genai", "ai", "llm", "rag", "gpt", "agent", "agents", "machine", "learning", "ml", "nlp"}
         has_ai_constraint = any(t in ai_query_terms for t in query_tokens)
 
+        # 0. Check site: constraint: RemoteOK and Remotive only provide their own domains
+        site_match = re.search(r"site:([^\s]+)", q_clean)
+        if site_match:
+            target_site = site_match.group(1).lower()
+            if not any(b in target_site for b in ("remoteok", "remotive")):
+                return []
+
+        # 0b. Check regional location constraints: RemoteOK/Remotive only serve global remote tech roles
+        regional_keywords = ("saudi", "uae", "dubai", "riyadh", "abu dhabi", "jeddah", "ksa", "gulf", "middle east")
+        has_regional_constraint = any(rk in q_clean for rk in regional_keywords)
+        if has_regional_constraint and not any(rem in q_clean for rem in ("remote", "anywhere", "worldwide")):
+            return []
+
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             "Accept": "application/json, text/plain, */*"
@@ -946,9 +959,11 @@ class LiveJobBoardSearchProvider:
                             continue
                         clean_desc = re.sub(r"<[^>]+>", " ", desc).strip()
                         combined_text = f"{title} {clean_desc}".lower()
+                        title_lower = title.lower()
 
                         if has_ai_constraint:
-                            if not any(re.search(r'\b' + re.escape(t) + r'\b', combined_text) for t in ai_query_terms):
+                            has_ai_title = any(re.search(r'\b' + re.escape(t) + r'\b', title_lower) for t in ai_query_terms)
+                            if not has_ai_title and not any(r in title_lower for r in ("data scientist", "data engineer", "machine learning", "deep learning", "nlp", "computer vision", "algorithm", "research scientist")):
                                 continue
                         elif query_tokens:
                             meaningful = [t for t in query_tokens if t not in ("software", "engineer", "developer")]
@@ -993,9 +1008,11 @@ class LiveJobBoardSearchProvider:
                                 continue
                             clean_desc = re.sub(r"<[^>]+>", " ", desc).strip()
                             combined_text = f"{title} {clean_desc}".lower()
+                            title_lower = title.lower()
 
                             if has_ai_constraint:
-                                if not any(re.search(r'\b' + re.escape(t) + r'\b', combined_text) for t in ai_query_terms):
+                                has_ai_title = any(re.search(r'\b' + re.escape(t) + r'\b', title_lower) for t in ai_query_terms)
+                                if not has_ai_title and not any(r in title_lower for r in ("data scientist", "data engineer", "machine learning", "deep learning", "nlp", "computer vision", "algorithm", "research scientist")):
                                     continue
                             elif query_tokens:
                                 meaningful = [t for t in query_tokens if t not in ("software", "engineer", "developer")]

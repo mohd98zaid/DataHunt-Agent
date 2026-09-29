@@ -479,11 +479,20 @@ def extract_job_records_from_document(
         inferred_company = dom_parts[-2].capitalize() if len(dom_parts) >= 2 else domain
 
     # 2. Parse Title & Company from ATS Title Conventions
+    # Pattern 0: LinkedIn / Board "<Company> hiring <Title> in <Location>"
+    m_hiring = re.search(r"^([A-Z][a-zA-Z0-9\s&.,'–-]+?)\s+hiring\s+(.+?)(?:\s+in\s+([^\|\-\n\r]+?))?(?:\s*[\|\-•·].*)?$", title_source, re.I)
+    if m_hiring:
+        company = m_hiring.group(1).strip()
+        clean_title = m_hiring.group(2).strip()
+        if m_hiring.group(3) and not location:
+            location = m_hiring.group(3).strip()
+
     # Pattern A: "Job Application for <Title> at <Company>"
-    m_app = re.search(r"job application for\s+(.*?)\s+at\s+([^\|\-\n\r]+)", title_source, re.I)
-    if m_app:
-        clean_title = m_app.group(1).strip()
-        company = m_app.group(2).strip()
+    if not clean_title:
+        m_app = re.search(r"job application for\s+(.*?)\s+at\s+([^\|\-\n\r]+)", title_source, re.I)
+        if m_app:
+            clean_title = m_app.group(1).strip()
+            company = m_app.group(2).strip()
 
     # Pattern B: "<Title> at <Company>"
     if not clean_title:
@@ -538,7 +547,7 @@ def extract_job_records_from_document(
     clean_title = re.sub(r"\b(job application for|apply for|careers at|careers|openings?)\b", "", clean_title, flags=re.I).strip(" -|:[]")
 
     # Fallback to inferred company if empty or generic platform name
-    if not company or company.lower() in ("greenhouse", "lever", "ashby", "workable", "smartrecruiters", "breezy", "careers"):
+    if not company or company.lower() in ("greenhouse", "lever", "ashby", "workable", "smartrecruiters", "breezy", "careers", "linkedin", "indeed", "glassdoor"):
         company = inferred_company or "Direct Employer"
 
     # 3. Extract Location

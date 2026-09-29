@@ -323,7 +323,11 @@ function isMarketIntent(query, records) {
 }
 
 function renderJobRadarUI(summaryMarkdown, records) {
-  const validRecords = (records || []).filter(isSubstantiveRecord);
+  const validRecords = (records || []).filter(rec => {
+    if (!isSubstantiveRecord(rec)) return false;
+    const status = (rec.verification_status || "").toLowerCase();
+    return status !== "rejected" && status !== "duplicate" && status !== "disqualified";
+  });
   let html = `
     <div class="job-radar-results-header">
       <div class="job-radar-results-title">
@@ -395,7 +399,11 @@ function renderJobRadarUI(summaryMarkdown, records) {
 }
 
 function renderResearchDossierUI(summaryMarkdown, records, query) {
-  const validRecords = (records || []).filter(isSubstantiveRecord);
+  const validRecords = (records || []).filter(rec => {
+    if (!isSubstantiveRecord(rec)) return false;
+    const status = (rec.verification_status || "").toLowerCase();
+    return status !== "rejected" && status !== "duplicate" && status !== "disqualified";
+  });
   let html = `
     <div class="research-dossier-header">
       <div class="research-dossier-title-row">
@@ -524,7 +532,11 @@ function renderResearchDossierUI(summaryMarkdown, records, query) {
 }
 
 function renderMarketIntelUI(summaryMarkdown, records, query) {
-  const validRecords = (records || []).filter(isSubstantiveRecord);
+  const validRecords = (records || []).filter(rec => {
+    if (!isSubstantiveRecord(rec)) return false;
+    const status = (rec.verification_status || "").toLowerCase();
+    return status !== "rejected" && status !== "duplicate" && status !== "disqualified";
+  });
   let html = `
     <div class="research-dossier-header">
       <div class="research-dossier-title-row">
@@ -660,7 +672,12 @@ function renderOnPageResults(summaryMarkdown, records, query, runData) {
     queryBadge.title = queryText;
   }
 
-  const rawValid = (records || []).filter(isSubstantiveRecord);
+  const rawValid = (records || []).filter(rec => {
+    if (!isSubstantiveRecord(rec)) return false;
+    const status = (rec.verification_status || "").toLowerCase();
+    if (status === "rejected" || status === "duplicate" || status === "disqualified") return false;
+    return true;
+  });
   const isJob = isJobIntent(queryText, records);
   const isMarket = !isJob && isMarketIntent(queryText, records);
 
@@ -681,11 +698,10 @@ function renderOnPageResults(summaryMarkdown, records, query, runData) {
   }
 
   const activeRunId = runData?.run_id || window.currentRunId || "";
-  const trackerUrl = activeRunId ? `/jobs.html?run_id=${encodeURIComponent(activeRunId)}` : '/jobs.html';
-  const trackerHeaderLink = document.getElementById("cockpit-header-tracker-link");
-  if (trackerHeaderLink && activeRunId) {
-    trackerHeaderLink.href = trackerUrl;
-  }
+  const trackerUrl = (activeRunId && validRecords.length > 0)
+    ? `/jobs.html?run_id=${encodeURIComponent(activeRunId)}`
+    : '/jobs.html';
+  // Note: cockpit-header-tracker-link stays pointing to /jobs.html globally so user is never trapped in an empty run filter
 
   // 1. Configure Header & Tab Labels based on Mode
   if (isJob) {
@@ -1503,8 +1519,6 @@ document.addEventListener("DOMContentLoaded", () => {
       // 2. Fetch full records to populate Knowledge Matrix and sync modal
       if (data.run_id) {
         window.currentRunId = data.run_id;
-        const trackerHeaderLink = document.getElementById("cockpit-header-tracker-link");
-        if (trackerHeaderLink) trackerHeaderLink.href = `/jobs.html?run_id=${encodeURIComponent(data.run_id)}`;
         fetch(`/runs/${data.run_id}/records`)
           .then(res => res.json())
           .then(records => {
@@ -1700,8 +1714,6 @@ document.addEventListener("DOMContentLoaded", () => {
       console.log("[DataHunt] HTTP task accepted:", result);
       const runId = result.run_id;
       window.currentRunId = runId;
-      const trackerHeaderLink = document.getElementById("cockpit-header-tracker-link");
-      if (trackerHeaderLink && runId) trackerHeaderLink.href = `/jobs.html?run_id=${encodeURIComponent(runId)}`;
 
       // Poll run status every 2 seconds until complete
       const pollInterval = setInterval(async () => {

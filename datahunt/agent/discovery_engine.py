@@ -87,33 +87,76 @@ class DiscoveryEngine:
         is_gulf = any(k in loc_lower for k in ("saudi", "uae", "dubai", "riyadh", "gulf", "middle east", "abu dhabi", "doha", "qatar"))
         region_label = "Gulf/MENA" if is_gulf else (loc_str or "Global")
 
+        # Determine discrete target focal locations
+        target_locations: List[str] = []
+        if is_gulf:
+            target_locations = ["Dubai", "Riyadh", "UAE", "Saudi Arabia"]
+        elif state.locations:
+            for loc in state.locations:
+                parts = re.split(r"\s+or\s+|\s*,\s*", str(loc), flags=re.IGNORECASE)
+                for p in parts:
+                    clean_p = p.strip()
+                    if clean_p and clean_p not in target_locations:
+                        target_locations.append(clean_p)
+        elif loc_str:
+            parts = re.split(r"\s+or\s+|\s*,\s*", str(loc_str), flags=re.IGNORECASE)
+            for p in parts:
+                clean_p = p.strip()
+                if clean_p and clean_p not in target_locations:
+                    target_locations.append(clean_p)
+
+        primary_loc = target_locations[0] if target_locations else (loc_str or "")
+
         # 1. ATS Portals (Priority 1)
-        ats_targets = [
-            ("boards.greenhouse.io", f'site:boards.greenhouse.io "{role_clean}" {loc_str}'.strip()),
-            ("jobs.lever.co", f'site:jobs.lever.co "{role_clean}" {loc_str}'.strip()),
-            ("jobs.ashbyhq.com", f'site:jobs.ashbyhq.com "{role_clean}" {loc_str}'.strip()),
-            ("apply.workable.com", f'site:apply.workable.com "{role_clean}" {loc_str}'.strip()),
-        ]
-        for src, q in ats_targets:
+        # Query primary hubs individually so search engines match discrete ATS postings
+        ats_hubs = target_locations[:2] if target_locations else ([primary_loc] if primary_loc else [""])
+        for hub in ats_hubs:
+            hub_suffix = f" {hub}".strip() if hub else ""
             tasks.append(SearchTask(
                 id=f"r1_ats_{len(tasks)}",
                 task_type=SearchTaskType.ATS_SEARCH,
-                query=q,
-                source=src,
+                query=f'site:boards.greenhouse.io "{role_clean}"{hub_suffix}',
+                source="boards.greenhouse.io",
                 source_type=DiscoveredSourceType.ATS_PORTAL,
                 priority=1,
                 depth=0,
                 round=1,
-                reason=f"Direct ATS harvest on {src}",
-                location=loc_str,
+                reason=f"Direct ATS harvest on Greenhouse ({hub or 'Global'})",
+                location=hub or loc_str,
+            ))
+            tasks.append(SearchTask(
+                id=f"r1_ats_{len(tasks)}",
+                task_type=SearchTaskType.ATS_SEARCH,
+                query=f'site:jobs.lever.co "{role_clean}"{hub_suffix}',
+                source="jobs.lever.co",
+                source_type=DiscoveredSourceType.ATS_PORTAL,
+                priority=1,
+                depth=0,
+                round=1,
+                reason=f"Direct ATS harvest on Lever ({hub or 'Global'})",
+                location=hub or loc_str,
+            ))
+            tasks.append(SearchTask(
+                id=f"r1_ats_{len(tasks)}",
+                task_type=SearchTaskType.ATS_SEARCH,
+                query=f'site:apply.workable.com "{role_clean}"{hub_suffix}',
+                source="apply.workable.com",
+                source_type=DiscoveredSourceType.ATS_PORTAL,
+                priority=1,
+                depth=0,
+                round=1,
+                reason=f"Direct ATS harvest on Workable ({hub or 'Global'})",
+                location=hub or loc_str,
             ))
 
         # 2. Regional Job Boards (Priority 1 for region-specific searches)
         if is_gulf:
             regional_targets = [
-                ("bayt.com", f'site:bayt.com "{role_clean}" {loc_str}'.strip()),
-                ("gulftalent.com", f'site:gulftalent.com "{role_clean}" {loc_str}'.strip()),
-                ("naukrigulf.com", f'site:naukrigulf.com "{role_clean}" {loc_str}'.strip()),
+                ("naukrigulf.com", f'site:naukrigulf.com "{role_clean}"'),
+                ("bayt.com", f'site:bayt.com "{role_clean}"'),
+                ("gulftalent.com", f'site:gulftalent.com "{role_clean}"'),
+                ("linkedin.com", f'site:linkedin.com/jobs "{role_clean}" Dubai'),
+                ("linkedin.com", f'site:linkedin.com/jobs "{role_clean}" Riyadh'),
             ]
             for src, q in regional_targets:
                 tasks.append(SearchTask(
@@ -129,26 +172,44 @@ class DiscoveryEngine:
                     location=loc_str,
                 ))
 
-        # 3. Major Job Boards (Priority 2)
-        major_targets = [
-            ("linkedin.com", f'site:linkedin.com/jobs "{role_clean}" {loc_str}'.strip()),
-            ("glassdoor.com", f'site:glassdoor.com "{role_clean}" {loc_str}'.strip()),
-        ]
-        for src, q in major_targets:
+        # 3. Direct In-Depth Web Search (Priority 1)
+        sweep_locs = target_locations[:3] if target_locations else ([loc_str] if loc_str else [""])
+        for sloc in sweep_locs:
+            s_suffix = f" {sloc}".strip() if sloc else ""
             tasks.append(SearchTask(
-                id=f"r1_maj_{len(tasks)}",
+                id=f"r1_direct_{len(tasks)}",
                 task_type=SearchTaskType.BOARD_SEARCH,
-                query=q,
-                source=src,
+                query=f'"{role_clean}"{s_suffix} jobs',
+                source="direct_search",
                 source_type=DiscoveredSourceType.MAJOR_BOARD,
-                priority=2,
+                priority=1,
                 depth=0,
                 round=1,
-                reason=f"Major job board sweep on {src}",
-                location=loc_str,
+                reason=f"High-recall direct web search for {role_clean} in {sloc or 'Global'}",
+                location=sloc or loc_str,
             ))
 
-        # 4. Niche AI / Tech Boards (Priority 2)
+        # 4. Major Job Boards (Priority 2)
+        if not is_gulf:
+            major_targets = [
+                ("linkedin.com", f'site:linkedin.com/jobs "{role_clean}" {primary_loc}'.strip()),
+                ("glassdoor.com", f'site:glassdoor.com "{role_clean}" {primary_loc}'.strip()),
+            ]
+            for src, q in major_targets:
+                tasks.append(SearchTask(
+                    id=f"r1_maj_{len(tasks)}",
+                    task_type=SearchTaskType.BOARD_SEARCH,
+                    query=q,
+                    source=src,
+                    source_type=DiscoveredSourceType.MAJOR_BOARD,
+                    priority=2,
+                    depth=0,
+                    round=1,
+                    reason=f"Major job board sweep on {src}",
+                    location=loc_str,
+                ))
+
+        # 5. Niche AI / Tech Boards (Priority 2)
         tasks.append(SearchTask(
             id=f"r1_niche_{len(tasks)}",
             task_type=SearchTaskType.BOARD_SEARCH,
@@ -162,8 +223,9 @@ class DiscoveryEngine:
             location="Remote/Global",
         ))
 
-        # 5. Remote / Global Portals (Priority 3)
-        if state.remote_allowed:
+        # 6. Remote / Global Portals (Priority 3 - Only when remote is explicitly requested or no location given)
+        is_explicit_remote = any(r in (getattr(state, "request", "") or "").lower() for r in ("remote", "anywhere", "worldwide", "wfh", "telecommute"))
+        if state.remote_allowed and (is_explicit_remote or not target_locations):
             remote_targets = [
                 ("remoteok.com", f'site:remoteok.com "{role_clean}"'),
                 ("himalayas.app", f'site:himalayas.app "{role_clean}"'),
@@ -182,18 +244,18 @@ class DiscoveryEngine:
                     location="Remote",
                 ))
 
-        # 6. Natural Language Direct Career Page Sweep (Priority 2)
+        # 7. Natural Language Direct Career Page Sweep (Priority 2)
         tasks.append(SearchTask(
             id=f"r1_careers_{len(tasks)}",
             task_type=SearchTaskType.CAREER_PAGE_SEARCH,
-            query=f'"{role_clean}" {loc_str} (careers OR "open positions" OR "we are hiring")'.strip(),
+            query=f'"{role_clean}" {primary_loc} (careers OR "open positions" OR "we are hiring")'.strip(),
             source="company_career_page",
             source_type=DiscoveredSourceType.COMPANY_CAREER_PAGE,
             priority=2,
             depth=0,
             round=1,
             reason="Direct employer career portal discovery",
-            location=loc_str,
+            location=primary_loc or loc_str,
         ))
 
         return tasks
