@@ -172,6 +172,9 @@ class AgentRuntime:
                 state.completion_reason = reason
                 break
 
+            elif action == AgentAction.CRAWL_DIRECT:
+                self._act_crawl_direct(state, emit)
+
             elif action == AgentAction.SEARCH or action == AgentAction.EXPAND_SEARCH:
                 self._act_search(state, emit)
 
@@ -217,6 +220,125 @@ class AgentRuntime:
             state.explicit_location = self._extract_location(state.request)
         if state.explicit_experience_min is None and state.explicit_experience_max is None:
             state.explicit_experience_min, state.explicit_experience_max = self._extract_experience(state.request)
+
+    def _act_crawl_direct(self, state: AgentState, emit):
+        """
+        Execute one pass of direct multi-source crawling:
+          - ATS public APIs (Greenhouse, Lever, Ashby, Workable, SmartRecruiters)
+          - Regional job boards (NaukriGulf, Bayt, GulfTalent, Laimoon, Dubizzle) when Gulf/MENA
+          - Discovered company career pages
+
+        Discovered job URLs are appended to state.candidate_urls for subsequent FetchTool processing.
+        Never raises — all source errors are recorded as SOURCE_BLOCKED and crawling continues.
+        Fires exactly once (guarded by state.crawl_done).
+        """
+        state.crawl_done = True  # guard first — prevent re-entry even if this method errors
+        state.status = AgentStatus.CRAWLING
+
+        from datahunt.sources.crawlers import MultiSourceCrawler, CrawlBudget
+        from datahunt.tools.search import canonicalize_url, is_valid_job_url
+
+        loc_lower = " ".join(state.locations).lower() if state.locations else (
+            (state.explicit_location or "").lower()
+        )
+        is_gulf = any(k in loc_lower for k in (
+            "uae", "dubai", "abu dhabi", "sharjah", "saudi", "riyadh",
+            "jeddah", "dammam", "khobar", "gulf", "mena", "gcc", "qatar"
+        ))
+
+        role_keywords = list(dict.fromkeys(
+            state.explicit_titles + state.expanded_titles
+        ))[:4] or ["Engineer"]
+        locations = state.locations or ([state.explicit_location] if state.explicit_location else [])
+
+        # Derive crawl budget from run budget (leave headroom for search phase)
+        max_pages = min(
+            state.max_fetch_calls // 4,
+            40,
+        )
+        budget = CrawlBudget(
+            max_sources=15,
+            max_pages_per_source=4,
+            max_total_pages=max_pages,
+            max_total_jobs=min(state.max_fetch_calls * 5, 300),
+            request_timeout=10.0,
+            per_domain_delay=0.5,
+            max_workers=5,
+        )
+
+        discovered_ats = {}
+        discovered_companies = {}
+        if state.discovery_state:
+            discovered_ats = dict(state.discovery_state.discovered_ats)
+            discovered_companies = dict(state.discovery_state.discovered_companies)
+
+        emit("status", {
+            "message": f"Direct crawl: {len(discovered_ats)} ATS + regional boards + career pages",
+            "phase": "CRAWLING",
+        })
+
+        try:
+            crawler = MultiSourceCrawler(budget=budget)
+            crawl_result = crawler.crawl(
+                role_keywords=role_keywords,
+                locations=locations,
+                discovered_ats=discovered_ats,
+                discovered_companies=discovered_companies,
+                is_gulf=is_gulf,
+                deadline=state.deadline,
+                external_emit=emit,
+            )
+
+            # Merge discovered job links into candidate_urls
+            new_candidates = 0
+            for hit in crawl_result.candidate_urls:
+                url = hit.get("url")
+                if not url:
+                    continue
+                canon = canonicalize_url(url)
+                if not canon or canon in state.seen_canonical_urls:
+                    continue
+                if state.mode in ("jobs", "job") and not is_valid_job_url(url):
+                    # Still allow crawled URLs even if they don't pass is_valid_job_url
+                    # (career pages may use non-standard URL patterns)
+                    if not hit.get("crawled"):
+                        continue
+
+                state.seen_canonical_urls.add(canon)
+                state.seen_urls.add(url)
+                state.candidate_urls.append(hit)
+                new_candidates += 1
+
+                src_cat = _classify_job_source_category(url, hit.get("source", ""))
+                state.source_distribution[src_cat] = state.source_distribution.get(src_cat, 0) + 1
+
+            # Update crawl telemetry on state
+            state.crawl_sources_discovered += crawl_result.sources_discovered
+            state.crawl_sources_crawled += crawl_result.sources_crawled
+            state.crawl_sources_blocked += crawl_result.sources_blocked
+            state.crawl_pages_fetched += crawl_result.pages_fetched
+            state.crawl_job_links_discovered += crawl_result.job_links_discovered
+
+            emit("crawl_summary", {
+                "sources_discovered": crawl_result.sources_discovered,
+                "sources_crawled": crawl_result.sources_crawled,
+                "sources_blocked": crawl_result.sources_blocked,
+                "pages_fetched": crawl_result.pages_fetched,
+                "job_links_discovered": crawl_result.job_links_discovered,
+                "new_candidates_added": new_candidates,
+            })
+            state.add_observation(
+                f"Direct crawl: {crawl_result.sources_crawled} sources, "
+                f"{crawl_result.pages_fetched} pages, {new_candidates} new candidates"
+            )
+            logger.info(
+                f"_act_crawl_direct: {new_candidates} new candidates from "
+                f"{crawl_result.sources_crawled} sources ({crawl_result.sources_blocked} blocked)"
+            )
+        except Exception as e:
+            logger.warning(f"_act_crawl_direct error (non-fatal): {e}")
+            state.add_warning(f"Direct crawl error: {e}")
+
 
     def _is_promising_candidate(self, hit: Dict[str, Any], state: AgentState) -> bool:
         """Lightweight pre-fetch triage to reject obvious junk before network requests."""
@@ -921,6 +1043,13 @@ class AgentRuntime:
                 "verified": len(state.verified_records),
                 "qualified": len(final_records),
                 "rejected": len(state.rejected_records),
+            },
+            "crawl_telemetry": {
+                "sources_discovered": getattr(state, "crawl_sources_discovered", 0),
+                "sources_crawled": getattr(state, "crawl_sources_crawled", 0),
+                "sources_blocked": getattr(state, "crawl_sources_blocked", 0),
+                "pages_fetched": getattr(state, "crawl_pages_fetched", 0),
+                "job_links_discovered": getattr(state, "crawl_job_links_discovered", 0),
             },
             "rejection_reasons": {
                 "location_mismatch": state.rejection_reasons_tally.get("location_mismatch", 0),

@@ -256,6 +256,7 @@ def test_decision_engine_with_discovery_state():
     )
     matrix = SourceCoverageMatrix(target_regions=["UAE"])
     state.discovery_state = DiscoveryState(coverage_matrix=matrix)
+    state.crawl_done = True  # direct crawl already done; test focuses on search decisions
 
     # Simulate 5 qualified records but only 1 source category covered (not balanced)
     state.qualified_records = [MagicMock() for _ in range(5)]

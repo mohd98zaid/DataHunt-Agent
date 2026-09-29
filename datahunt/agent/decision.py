@@ -4,6 +4,7 @@ from typing import Optional, Tuple
 from .state import AgentState, SearchIterationStats
 
 class AgentAction(str, Enum):
+    CRAWL_DIRECT = "CRAWL_DIRECT"
     SEARCH = "SEARCH"
     FETCH = "FETCH"
     EXTRACT = "EXTRACT"
@@ -55,6 +56,16 @@ class DecisionEngine:
                     return AgentAction.STOP, f"Diminishing returns: {CONSECUTIVE_LOW_YIELD_LIMIT} consecutive low-yield iterations"
                 elif state.search_plan_index < len(state.search_plan):
                     return AgentAction.EXPAND_SEARCH, "Low yield from current strategy, trying next tier"
+
+        # In jobs mode, run one direct-board crawl pass before search-engine queries.
+        # This fires exactly once (guarded by crawl_done) so the pipeline remains deterministic.
+        if (
+            state.mode in ("jobs", "job")
+            and state.discovery_state is not None
+            and not getattr(state, "crawl_done", False)
+            and state.search_calls < state.max_search_calls
+        ):
+            return AgentAction.CRAWL_DIRECT, "Direct multi-source board/ATS crawl (pre-search)"
 
         if state.search_calls >= state.max_search_calls and not state.candidate_urls:
             return AgentAction.STOP, "Search budget exhausted with no candidates"

@@ -5,6 +5,7 @@ from enum import Enum
 class AgentStatus(str, Enum):
     INITIALIZING = "initializing"
     PLANNING = "planning"
+    CRAWLING = "crawling"
     SEARCHING = "searching"
     FETCHING = "fetching"
     EXTRACTING = "extracting"
@@ -86,6 +87,13 @@ class AgentState:
     duplicate_records: List[Any] = field(default_factory=list)
     rejection_reasons_tally: Dict[str, int] = field(default_factory=dict)
     source_distribution: Dict[str, int] = field(default_factory=dict)
+    # Crawl telemetry (populated by _act_crawl_direct)
+    crawl_sources_discovered: int = 0
+    crawl_sources_crawled: int = 0
+    crawl_sources_blocked: int = 0
+    crawl_pages_fetched: int = 0
+    crawl_job_links_discovered: int = 0
+    crawl_done: bool = False  # True after first crawl pass completes
     
     observations: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)

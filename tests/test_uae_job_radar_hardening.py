@@ -124,6 +124,7 @@ def test_empty_intermediate_round_does_not_stop_future_discovery():
     empty_disc_state.current_round = 2
     empty_disc_state.task_queue = []
     empty_queue_state.discovery_state = empty_disc_state
+    empty_queue_state.crawl_done = True  # direct crawl pass already done; test focuses on round advancement
 
     action, reason = decision_engine.decide(empty_queue_state)
     assert action == AgentAction.SEARCH, f"DecisionEngine prematurely stopped with: {reason}"

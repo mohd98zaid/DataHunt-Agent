@@ -711,20 +711,21 @@ function renderZeroResultDiagnostics(runData) {
   };
   const rej = diag.rejection_reasons || {};
   const src = diag.source_distribution || {};
+  const crawl = diag.crawl_telemetry || {};
 
   return `
-    <div style="padding: 24px; max-width: 800px; margin: 0 auto; color: var(--text-muted); font-family: 'Share Tech Mono', monospace;">
+    <div style="padding: 24px; max-width: 900px; margin: 0 auto; color: var(--text-muted); font-family: 'Share Tech Mono', monospace;">
       <div style="font-size: 32px; margin-bottom: 8px; text-align: center;">🎯</div>
       <div style="font-size: 16px; font-weight: 700; color: #fff; margin-bottom: 6px; text-align: center;">NO QUALIFIED JOBS FOUND YET</div>
       <div style="font-size: 12px; margin-bottom: 20px; text-align: center; color: var(--text-muted);">
-        The agent searched regional boards, direct ATS platforms, and company career pages, but no openings met all strict qualification criteria.
+        The agent crawled regional boards, direct ATS APIs, and company career pages, but no openings met all strict qualification criteria.
       </div>
 
-      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-bottom: 20px;">
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-bottom: 20px;">
         <!-- Pipeline Counters -->
         <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(0, 240, 255, 0.2); border-radius: 6px; padding: 14px;">
           <div style="font-size: 11px; font-weight: 700; color: var(--neon-cyan); margin-bottom: 10px; border-bottom: 1px solid rgba(0, 240, 255, 0.15); padding-bottom: 4px;">
-            📊 EXECUTION & PIPELINE COUNTERS
+            📊 PIPELINE COUNTERS
           </div>
           <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;"><span>Search Queries:</span><strong style="color: #fff;">${escapeHtml(c.search_queries || 0)}</strong></div>
           <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;"><span>Pages Fetched:</span><strong style="color: #fff;">${escapeHtml(c.pages_fetched || 0)}</strong></div>
@@ -736,10 +737,22 @@ function renderZeroResultDiagnostics(runData) {
           <div style="display: flex; justify-content: space-between; font-size: 11px;"><span>Rejected Candidates:</span><strong style="color: #ff5555;">${escapeHtml(c.rejected || 0)}</strong></div>
         </div>
 
+        <!-- Crawl Telemetry (NEW) -->
+        <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(0, 255, 160, 0.2); border-radius: 6px; padding: 14px;">
+          <div style="font-size: 11px; font-weight: 700; color: #00ffa0; margin-bottom: 10px; border-bottom: 1px solid rgba(0, 255, 160, 0.15); padding-bottom: 4px;">
+            🕷️ CRAWL ENGINE TELEMETRY
+          </div>
+          <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;"><span>Sources Discovered:</span><strong style="color: #fff;">${escapeHtml(crawl.sources_discovered || 0)}</strong></div>
+          <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;"><span>Sources Crawled:</span><strong style="color: #00ffa0;">${escapeHtml(crawl.sources_crawled || 0)}</strong></div>
+          <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;"><span>Sources Blocked:</span><strong style="color: #ff8888;">${escapeHtml(crawl.sources_blocked || 0)}</strong></div>
+          <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;"><span>Crawl Pages Fetched:</span><strong style="color: #fff;">${escapeHtml(crawl.pages_fetched || 0)}</strong></div>
+          <div style="display: flex; justify-content: space-between; font-size: 11px;"><span>Job Links Discovered:</span><strong style="color: #fff;">${escapeHtml(crawl.job_links_discovered || 0)}</strong></div>
+        </div>
+
         <!-- Rejection Reasons -->
         <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(255, 100, 100, 0.2); border-radius: 6px; padding: 14px;">
           <div style="font-size: 11px; font-weight: 700; color: #ff8888; margin-bottom: 10px; border-bottom: 1px solid rgba(255, 100, 100, 0.15); padding-bottom: 4px;">
-            🚫 REJECTION REASONS BREAKDOWN
+            🚫 REJECTION REASONS
           </div>
           <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;"><span>Location Mismatch:</span><strong style="color: #fff;">${escapeHtml(rej.location_mismatch || 0)}</strong></div>
           <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;"><span>Title / Role Mismatch:</span><strong style="color: #fff;">${escapeHtml(rej.title_mismatch || 0)}</strong></div>
@@ -761,7 +774,7 @@ function renderZeroResultDiagnostics(runData) {
       </div>
 
       <div style="background: rgba(0, 240, 255, 0.05); border-left: 3px solid var(--neon-cyan); padding: 10px 14px; font-size: 11px; color: #b8cde6;">
-        💡 <strong>Suggestions:</strong> Try searching for broader titles like <em>"AI Engineer"</em> or <em>"Machine Learning Engineer"</em>, or broaden the location filters.
+        💡 <strong>Suggestions:</strong> Try searching for broader titles like <em>"AI Engineer"</em> or <em>"Machine Learning Engineer"</em>, or broaden the location filters. The multi-source crawl engine checked regional boards, ATS APIs, and company career pages.
       </div>
     </div>
   `;
