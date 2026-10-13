@@ -85,17 +85,19 @@ class TestDecisionEngine:
         assert action == AgentAction.FETCH
 
     def test_stop_on_consecutive_low_yield(self):
+        from datahunt.agent.decision import CONSECUTIVE_LOW_YIELD_LIMIT
         state = make_state()
         state.verified_records = [object()]  # has results
-        state.consecutive_low_yield_iterations = 2
+        state.consecutive_low_yield_iterations = CONSECUTIVE_LOW_YIELD_LIMIT
         action, reason = self.engine.decide(state)
         assert action == AgentAction.STOP
         assert "Diminishing returns" in reason
 
     def test_expand_search_on_low_yield_no_results(self):
+        from datahunt.agent.decision import CONSECUTIVE_LOW_YIELD_LIMIT
         state = make_state()
         state.verified_records = []
-        state.consecutive_low_yield_iterations = 2
+        state.consecutive_low_yield_iterations = CONSECUTIVE_LOW_YIELD_LIMIT
         state.search_plan = [{"query": "q1"}, {"query": "q2"}]
         state.search_plan_index = 1  # one more query
         action, reason = self.engine.decide(state)

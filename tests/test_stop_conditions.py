@@ -43,9 +43,10 @@ class TestStopConditions:
         assert action == AgentAction.STOP
 
     def test_diminishing_returns_with_results_stop(self):
+        from datahunt.agent.decision import CONSECUTIVE_LOW_YIELD_LIMIT
         state = make_state()
         state.verified_records = [object()]
-        state.consecutive_low_yield_iterations = 2
+        state.consecutive_low_yield_iterations = CONSECUTIVE_LOW_YIELD_LIMIT
         action, reason = self.engine.decide(state)
         assert action == AgentAction.STOP
         assert "Diminishing returns" in reason

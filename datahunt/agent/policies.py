@@ -160,6 +160,14 @@ def match_location(requested: Optional[Any], actual: Optional[str], remote_ok: b
         return MatchStatus.MISMATCH, f"Location cluster mismatch: requested={list(req_clusters)}, found={act_cluster.upper()}"
 
     if req_clusters and not act_cluster:
+        # Fuzzy fallback: if user asked for a GCC/Saudi/UAE location and job says 'Gulf', 'Middle East', etc.
+        _gcc_req = req_clusters & {"saudi", "uae", "qatar", "kuwait", "bahrain", "oman", "gcc", "mena"}
+        if _gcc_req:
+            _gcc_hints = {"gulf", "gcc", "mena", "middle east", "arabian gulf", "gulf region", "gulf countries",
+                          "saudi", "ksa", "uae", "emirates", "qatar", "kuwait", "bahrain", "oman",
+                          "riyadh", "dubai", "abu dhabi", "doha", "sharjah", "jeddah"}
+            if any(hint in act_lower for hint in _gcc_hints):
+                return MatchStatus.MATCH, f"GCC/MENA region hint matched requested location: '{actual}'"
         return MatchStatus.UNKNOWN, f"Could not classify job location: '{actual}'"
 
     return MatchStatus.UNKNOWN, f"Cannot determine if '{actual}' matches '{requested}'"
@@ -392,7 +400,8 @@ def match_title_relevance(
         STRONG_GENAI_TERMS = [
             "genai", "gen ai", "generative ai", "generative-ai", "llm", "large language model",
             "large language models", "foundation model", "foundation models", "prompt engineer",
-            "prompt engineering", "rag engineer", "agentic", "ai agent", "ai agents"
+            "prompt engineering", "rag engineer", "agentic", "ai agent", "ai agents",
+            "llmops", "llm ops", "llm engineer", "llm developer", "llm researcher",
         ]
         if any(term in job_t for term in STRONG_GENAI_TERMS):
             return MatchStatus.MATCH, 1.0, f"Direct GenAI title match: '{job_title}'"
@@ -402,7 +411,8 @@ def match_title_relevance(
             "ai developer", "ai software engineer", "ai solutions engineer", "ai solutions architect",
             "ai architect", "ai consultant", "artificial intelligence consultant", "generative ai consultant",
             "ai technical lead", "ai lead", "head of ai", "director of ai", "ai specialist",
-            "ai application developer", "ai infrastructure engineer", "ai systems engineer", "ai research engineer"
+            "ai application developer", "ai infrastructure engineer", "ai systems engineer", "ai research engineer",
+            "ai scientist", "ai researcher", "ai research scientist",
         ]
         if any(term in job_t for term in AI_ENG_TERMS):
             return MatchStatus.MATCH, 0.95, f"AI engineering role matches GenAI request: '{job_title}'"
@@ -410,7 +420,8 @@ def match_title_relevance(
         ML_TERMS = [
             "machine learning engineer", "ml engineer", "software engineer - ai", "deep learning engineer",
             "nlp engineer", "natural language processing", "computer vision engineer", "ml platform engineer",
-            "mlops engineer", "applied scientist", "research scientist - ai", "ai researcher"
+            "mlops engineer", "applied scientist", "research scientist - ai", "ai researcher",
+            "ml researcher", "nlp researcher", "ml scientist", "applied machine learning",
         ]
         if any(term in job_t for term in ML_TERMS):
             return MatchStatus.MATCH, 0.85, f"Related ML/AI role aligns with GenAI request: '{job_title}'"
@@ -418,8 +429,12 @@ def match_title_relevance(
         # Legitimate whole-word AI role pattern (e.g. "Software Engineer, AI" or "Staff Software Engineer, AI")
         if re.search(r'\bai\b', job_t) or re.search(r'\bgen\s*ai\b', job_t):
             # Must still have a technical role marker
-            if any(term in job_t for term in ("engineer", "developer", "architect", "programmer", "scientist", "consultant")):
+            if any(term in job_t for term in ("engineer", "developer", "architect", "programmer", "scientist", "consultant", "specialist", "researcher")):
                 return MatchStatus.MATCH, 0.85, f"AI-focused technical role matches GenAI request: '{job_title}'"
+
+        # LLM/ML fallback: "machine learning" or "deep learning" anywhere in title
+        if re.search(r'\b(machine learning|deep learning|neural network|nlp|natural language)\b', job_t):
+            return MatchStatus.MATCH, 0.80, f"AI/ML domain title aligns with GenAI request: '{job_title}'"
 
         if "data scientist" in job_t:
             return MatchStatus.UNKNOWN, 0.40, f"Data science title '{job_title}' may have partial GenAI overlap"
@@ -660,13 +675,23 @@ class QualificationPolicy:
             if l_status == MatchStatus.MISMATCH:
                 rejection_reasons.append(f"location_mismatch:{location}")
             elif l_status == MatchStatus.UNKNOWN:
+                # Only add unverified_location when location is genuinely missing or unclassifiable
+                # NOT when it's a GCC/MENA string that just didn't match our alias table exactly
+                _loc_lower = (location or "").lower().strip()
+                _gcc_mena_hints = (
+                    "gulf", "gcc", "mena", "middle east", "gulf region", "arabian",
+                    "saudi", "ksa", "uae", "emirates", "dubai", "abu dhabi", "riyadh",
+                    "qatar", "kuwait", "bahrain", "oman", "doha", "sharjah", "jeddah",
+                )
+                _is_region_match = any(hint in _loc_lower for hint in _gcc_mena_hints)
                 is_agnostic_remote = (
                     req_remote_allowed
                     and remote_status == "remote"
-                    and location.lower().strip() in ("remote", "remote / unspecified", "worldwide", "global", "anywhere", "work from home", "wfh")
+                    and _loc_lower in ("remote", "remote / unspecified", "worldwide", "global", "anywhere", "work from home", "wfh")
                 )
-                if not is_agnostic_remote:
+                if not is_agnostic_remote and not _is_region_match:
                     rejection_reasons.append(f"unverified_location:{location or 'undisclosed'}")
+
 
         req_remote_status = (getattr(job_req, "remote_status", None) or "").lower()
         if req_remote_status == "remote" and remote_status == "onsite":

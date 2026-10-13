@@ -14,7 +14,7 @@ class AgentAction(str, Enum):
     STOP = "STOP"
 
 MIN_YIELD_THRESHOLD = 0.10  # less than 10% new candidates = diminishing returns
-CONSECUTIVE_LOW_YIELD_LIMIT = 2  # stop after 2 consecutive low-yield iterations
+CONSECUTIVE_LOW_YIELD_LIMIT = 4  # stop after 4 consecutive low-yield iterations (was 2, too aggressive)
 
 class DecisionEngine:
     """
@@ -152,7 +152,10 @@ class DecisionEngine:
         is_job = state.mode in ("jobs", "job")
         if is_job and (len(state.verified_records) > 0 or len(state.qualified_records) > 0):
             # If we already have some results, consecutive iterations with 0 new candidates count as low yield
-            if new_candidates == 0 or stats.yield_rate < MIN_YIELD_THRESHOLD:
+            # BUT: also reset the counter if we found new qualified results — keeps search alive when fruitful
+            if qualified_new > 0:
+                state.consecutive_low_yield_iterations = 0
+            elif new_candidates == 0 or stats.yield_rate < MIN_YIELD_THRESHOLD:
                 state.consecutive_low_yield_iterations += 1
             else:
                 state.consecutive_low_yield_iterations = 0

@@ -383,6 +383,11 @@ def extract_job_records_from_document(
         topic_tokens = [w for w in re.findall(r"\b[a-zA-Z]{3,}\b", topic_lower) if w not in ("find", "jobs", "with", "years", "experience", "for", "and", "the")]
         _LOC_WORDS = {"saudi", "arabia", "ksa", "uae", "dubai", "riyadh", "abu", "dhabi", "jeddah", "qatar", "doha", "kuwait", "oman", "muscat", "bahrain", "manama", "cairo", "egypt", "india", "usa", "uk", "london", "remote", "worldwide", "global"}
         role_tokens = [tok for tok in topic_tokens if tok not in _LOC_WORDS]
+        # Synonym expansion: when the query is AI/GenAI-oriented, accept broad AI title variants
+        # so "LLM Developer", "AI Specialist", "Applied Scientist" are not dropped pre-qualification
+        _AI_SYNONYMS = {"genai", "generative", "llm", "gpt", "openai", "chatgpt", "nlp", "rag", "agentic", "foundational"}
+        if role_tokens and any(t in _AI_SYNONYMS for t in role_tokens):
+            role_tokens = list(set(role_tokens) | {"llm", "genai", "gen", "gpt", "nlp", "rag", "applied", "scientist", "researcher"})
 
         for sec in sections[1:]:
             lines = sec.strip().splitlines()
@@ -687,6 +692,10 @@ def extract_job_records_from_document(
         topic_tokens = [w for w in re.findall(r"\b[a-zA-Z]{3,}\b", topic_lower) if w not in ("find", "jobs", "with", "years", "experience", "for", "and", "the", "about", "from", "looking")]
         _LOC_WORDS = {"saudi", "arabia", "ksa", "uae", "dubai", "riyadh", "abu", "dhabi", "jeddah", "qatar", "doha", "kuwait", "oman", "muscat", "bahrain", "manama", "cairo", "egypt", "india", "usa", "uk", "london", "remote", "worldwide", "global"}
         role_tokens = [tok for tok in topic_tokens if tok not in _LOC_WORDS]
+        # Synonym expansion for AI/GenAI queries to avoid pre-filtering valid AI roles
+        _AI_SYNONYMS = {"genai", "generative", "llm", "gpt", "openai", "chatgpt", "nlp", "rag", "agentic", "foundational"}
+        if role_tokens and any(t in _AI_SYNONYMS for t in role_tokens):
+            role_tokens = list(set(role_tokens) | {"llm", "genai", "gen", "gpt", "nlp", "rag", "applied", "scientist", "researcher"})
         multi_records = []
         for idx, (role_cand, pos) in enumerate(distinct_roles[:20]):
             end_pos = distinct_roles[idx + 1][1] if idx + 1 < len(distinct_roles) else pos + 1500
