@@ -82,20 +82,20 @@
     <!-- Quick Directive Launcher -->
     <div class="hub-launcher-card">
       <div class="launcher-info">
-        <div class="launcher-title">⚡ INSTANT MISSION DISPATCHER</div>
-        <div class="launcher-desc">Type your directive and choose an agent to launch immediately.</div>
+        <div class="launcher-title">🎯 JOB AGENT MISSION DISPATCHER</div>
+        <div class="launcher-desc">Type your directive to launch the Autonomous Job Agent immediately or choose another agent.</div>
       </div>
       <form class="launcher-input-row" onsubmit="event.preventDefault(); launchDirective();">
         <select id="launcher-agent-mode" style="background: rgba(7, 11, 22, 0.9); border: 1px solid var(--panel-border); color: var(--neon-cyan); padding: 12px 14px; border-radius: 6px; font-family: 'Orbitron', sans-serif; font-size: 11px; font-weight: 700; outline: none; cursor: pointer;">
+          <option value="jobs" selected>🎯 0-SEC JOB RADAR</option>
           <option value="research">🔬 DEEP RESEARCH AGENT</option>
-          <option value="jobs">🎯 0-SEC JOB RADAR</option>
           <option value="market">📊 MARKET INTEL AGENT</option>
         </select>
         <input 
           type="text" 
           id="launcher-query-input" 
           class="launcher-input" 
-          placeholder="e.g. What is LangChain architecture? or Find senior AI engineer jobs in Dubai" 
+          placeholder="e.g. Find GenAI Engineer jobs in Saudi or UAE with 0-6 years experience" 
           required 
         />
         <button type="submit" class="launcher-submit-btn">
