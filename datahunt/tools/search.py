@@ -523,7 +523,7 @@ def generate_broad_job_queries(role_query: str) -> List[str]:
             f'"{role_only}" Riyadh Saudi Arabia indeed.com',
             f'"{role_only}" Dubai UAE glassdoor.com',
             f'"{role_only}" Riyadh Saudi Arabia glassdoor.com',
-            f'"{role_only}" Dubai Riyadh UAE Saudi apply careers 2025 2026',
+            f'"{role_only}" Dubai Riyadh UAE Saudi apply careers 2026',
         ]
     elif any(k in loc_lower for k in ("india", "bangalore", "bengaluru", "mumbai", "hyderabad", "pune", "delhi", "chennai")):
         queries += [
@@ -532,31 +532,31 @@ def generate_broad_job_queries(role_query: str) -> List[str]:
             f"site:instahyre.com {role_only}",
             f"site:cutshort.io {role_only}",
             f"site:shine.com {cleaned}",
-            f"{role_only} {location_phrase} hiring apply careers 2025 2026",
+            f"{role_only} {location_phrase} hiring apply careers 2026",
         ]
     elif any(k in loc_lower for k in ("london", "uk", "manchester", "edinburgh", "bristol")):
         queries += [
             f"site:reed.co.uk {role_only}",
             f"site:totaljobs.com {role_only}",
-            f"{role_only} UK London careers apply 2025 2026",
+            f"{role_only} UK London careers apply 2026",
         ]
     elif any(k in loc_lower for k in ("new york", "san francisco", "seattle", "austin", "boston", "us", "usa", "remote")):
         queries += [
             f"site:builtin.com {role_only}",
             f"site:dice.com {role_only}",
             f"site:wellfound.com {role_only}",
-            f"{role_only} careers US remote apply 2025 2026",
+            f"{role_only} careers US remote apply 2026",
         ]
     elif any(k in loc_lower for k in ("singapore", "hong kong")):
         queries += [
             f"site:jobsdb.com {cleaned}",
             f"site:jobstreet.com {role_only}",
-            f"{role_only} careers Singapore apply 2025 2026",
+            f"{role_only} careers Singapore apply 2026",
         ]
     else:
         # Generic fallback — organic queries that DDG returns well
         queries += [
-            f"{cleaned} careers apply now 2025 2026",
+            f"{cleaned} careers apply now 2026",
             f"{cleaned} job opening apply glassdoor.com OR indeed.com",
         ]
 

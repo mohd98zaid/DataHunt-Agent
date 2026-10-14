@@ -199,3 +199,91 @@ def test_no_example_corp_fallback_for_documentation():
     for r in records:
         assert r.get("fields", {}).get("company") != "Example Corp"
 
+
+def test_parse_job_timestamp_weeks_months_years():
+    base = datetime(2026, 10, 14, 12, 0, 0, tzinfo=timezone.utc)
+    
+    # 2 weeks ago
+    iso, age, badge = parse_job_timestamp("2 weeks ago", base_time=base)
+    assert age == 14 * 86400
+    assert "2w ago" in badge
+
+    # 3 months ago
+    iso, age, badge = parse_job_timestamp("3 months ago", base_time=base)
+    assert age == 90 * 86400
+    assert "3mo ago" in badge
+
+    # 1 year ago
+    iso, age, badge = parse_job_timestamp("1 year ago", base_time=base)
+    assert age == 365 * 86400
+    assert "1y ago" in badge
+
+
+def test_qualify_job_rejects_stale_jobs():
+    from datahunt.agent.policies import QualificationPolicy
+    from datahunt.agents import JobSearchRequest
+
+    policy = QualificationPolicy()
+    req = JobSearchRequest(job_title="GenAI Engineer", target_locations=["Dubai"], freshness_days=30)
+
+    # 1 year old job
+    stale_job = {
+        "title": "GenAI Engineer",
+        "company": "NeuralCorp",
+        "location": "Dubai",
+        "posted_age_seconds": 365 * 86400,
+        "posted_at": "1 year ago"
+    }
+    res = policy.qualify(stale_job, req)
+    assert res.qualified is False
+    assert any("stale_job" in r for r in res.rejection_reasons)
+
+    # 5 days old job
+    fresh_job = {
+        "title": "GenAI Engineer",
+        "company": "NeuralCorp",
+        "location": "Dubai",
+        "posted_age_seconds": 5 * 86400,
+        "posted_at": "5 days ago"
+    }
+    res_fresh = policy.qualify(fresh_job, req)
+    assert res_fresh.qualified is True
+
+
+def test_candidate_triage_rejects_stale_search_snippets():
+    from datahunt.agent.runtime import AgentRuntime
+    from datahunt.agent.state import AgentState
+    from datahunt.agents import JobSearchRequest
+
+    state = AgentState(
+        task_id="t_fresh",
+        run_id="r_fresh",
+        request="Find GenAI Engineer jobs in Dubai",
+        mode="jobs",
+        canonical_job_request=JobSearchRequest(job_title="GenAI Engineer", target_locations=["Dubai"])
+    )
+
+    # Candidate with snippet indicating 1 year ago
+    cand_stale = {
+        "url": "https://jobs.lever.co/example/123",
+        "title": "GenAI Engineer - Dubai",
+        "snippet": "We are looking for a GenAI Engineer. Posted 1 year ago on Lever."
+    }
+    assert AgentRuntime._is_promising_candidate(None, cand_stale, state) is False
+
+    # Candidate with snippet indicating 6 months ago
+    cand_6mo = {
+        "url": "https://jobs.ashbyhq.com/example/456",
+        "title": "GenAI Engineer - Dubai",
+        "snippet": "Apply now. Posted 6 months ago."
+    }
+    assert AgentRuntime._is_promising_candidate(None, cand_6mo, state) is False
+
+    # Candidate with fresh snippet
+    cand_fresh = {
+        "url": "https://jobs.ashbyhq.com/example/789",
+        "title": "GenAI Engineer - Dubai",
+        "snippet": "We are hiring an AI Engineer. Posted 2 days ago."
+    }
+    assert AgentRuntime._is_promising_candidate(None, cand_fresh, state) is True
+

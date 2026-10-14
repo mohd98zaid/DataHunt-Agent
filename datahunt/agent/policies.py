@@ -746,6 +746,27 @@ class QualificationPolicy:
         if req_excluded_companies and any(ec.lower() in company.lower() for ec in req_excluded_companies):
             rejection_reasons.append(f"excluded_company:{company}")
 
+        # 7. Freshness & Stale Job Policy
+        # Reject jobs exceeding freshness threshold (default 60 days unless explicitly configured on request)
+        max_freshness_days = getattr(job_req, "freshness_days", None) or 60
+        posted_age_s = fields.get("posted_age_seconds")
+        if posted_age_s is not None:
+            posted_age_days = posted_age_s / 86400.0
+            if posted_age_days > max_freshness_days:
+                rejection_reasons.append(
+                    f"stale_job:Posted {round(posted_age_days)} days ago (exceeds {max_freshness_days}d freshness threshold)"
+                )
+        else:
+            cand_posted = str(fields.get("posted_at") or "").lower()
+            if any(stale in cand_posted for stale in ("year ago", "years ago", "mo ago", "months ago")):
+                rejection_reasons.append(
+                    f"stale_job:Posting age '{cand_posted}' exceeds {max_freshness_days}d freshness threshold"
+                )
+            elif any(old_yr in cand_posted for old_yr in ("2020", "2021", "2022", "2023", "2024", "2025")):
+                rejection_reasons.append(
+                    f"stale_job:Posting dated {cand_posted} is from past year (exceeds {max_freshness_days}d freshness threshold)"
+                )
+
         # Hard Qualification Determination
         is_qualified = (len(rejection_reasons) == 0)
         eligibility_status = "ELIGIBLE" if is_qualified else "INELIGIBLE"

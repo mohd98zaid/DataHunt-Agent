@@ -73,6 +73,30 @@ def parse_job_timestamp(
         dt = now - timedelta(days=val)
         return dt.isoformat(), age, f"📅 {val}d ago"
 
+    # 5b. Weeks ago
+    wk_match = re.search(r"(\d+)\s*(?:weeks?|wks?|w)\s*ago\b", clean_text, re.I)
+    if wk_match:
+        val = int(wk_match.group(1))
+        age = val * 7 * 86400
+        dt = now - timedelta(weeks=val)
+        return dt.isoformat(), age, f"📅 {val}w ago"
+
+    # 5c. Months ago
+    mo_match = re.search(r"(\d+)\s*(?:months?|mo|mths?)\s*ago\b", clean_text, re.I)
+    if mo_match:
+        val = int(mo_match.group(1))
+        age = val * 30 * 86400
+        dt = now - timedelta(days=val * 30)
+        return dt.isoformat(), age, f"📅 {val}mo ago"
+
+    # 5d. Years ago
+    yr_match = re.search(r"(?:over\s+|more\s+than\s+)?(\d+)\+?\s*(?:years?|yrs?|y)\s*ago\b", clean_text, re.I)
+    if yr_match:
+        val = int(yr_match.group(1))
+        age = val * 365 * 86400
+        dt = now - timedelta(days=val * 365)
+        return dt.isoformat(), age, f"⚠️ {val}y ago"
+
     # 6. Try parsing standard ISO 8601 or date format
     try:
         from dateutil import parser as date_parser
@@ -88,14 +112,18 @@ def parse_job_timestamp(
             badge = f"⏱️ {age // 60}m ago"
         elif age < 86400:
             badge = f"🕒 {age // 3600}h ago"
-        else:
+        elif age < 30 * 86400:
             badge = f"📅 {age // 86400}d ago"
+        elif age < 365 * 86400:
+            badge = f"📅 {age // (30 * 86400)}mo ago"
+        else:
+            badge = f"⚠️ {age // (365 * 86400)}y ago"
 
         return parsed_dt.isoformat(), age, badge
     except Exception:
         pass
 
-    return clean_text, None, "VERIFIED"
+    return clean_text, None, "RECENT"
 
 
 def _enrich_job_fields(fields: Dict[str, Any], doc_text: str, url: str) -> Dict[str, Any]:
@@ -199,12 +227,18 @@ def _enrich_job_fields(fields: Dict[str, Any], doc_text: str, url: str) -> Dict[
                 if badge:
                     fields["freshness_badge"] = badge
         else:
-            # Check phrases like "Posted: 2 days ago", "Date Posted: Sep 25, 2026"
+            # Check phrases like "Posted: 2 days ago", "Date Posted: Sep 25, 2026", "posted 1 year ago"
             posted_m = re.search(
-                r'\b(?:posted|date\s+posted|published|posted\s+on)[:\s]+([A-Za-z0-9, /-]+|\d+\s*(?:days?|hours?|mins?|secs?)\s*ago)\b',
+                r'\b(?:posted|date\s+posted|published|posted\s+on)[:\s]+([A-Za-z0-9, /-]+|\d+\+?\s*(?:days?|d|weeks?|wks?|w|months?|mo|mths?|years?|yrs?|y|hours?|hrs?|h|mins?|m|secs?|s)\s*ago)\b',
                 text_sample,
                 re.I
             )
+            if not posted_m:
+                posted_m = re.search(
+                    r'\b((?:over\s+|more\s+than\s+)?\d+\+?\s*(?:days?|d|weeks?|wks?|w|months?|mo|mths?|years?|yrs?|y)\s*ago)\b',
+                    text_sample,
+                    re.I
+                )
             if posted_m:
                 cand_posted = posted_m.group(1).strip()
                 iso_t, age_s, badge = parse_job_timestamp(cand_posted)
