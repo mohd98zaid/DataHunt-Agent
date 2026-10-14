@@ -14,7 +14,7 @@ class AgentAction(str, Enum):
     STOP = "STOP"
 
 MIN_YIELD_THRESHOLD = 0.10  # less than 10% new candidates = diminishing returns
-CONSECUTIVE_LOW_YIELD_LIMIT = 4  # stop after 4 consecutive low-yield iterations (was 2, too aggressive)
+CONSECUTIVE_LOW_YIELD_LIMIT = 5  # stop after 5 consecutive low-yield iterations (was 4)
 
 class DecisionEngine:
     """

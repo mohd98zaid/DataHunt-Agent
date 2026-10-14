@@ -256,16 +256,16 @@ class AgentRuntime:
         # Derive crawl budget from run budget (leave headroom for search phase)
         max_pages = min(
             state.max_fetch_calls // 4,
-            40,
+            80,
         )
         budget = CrawlBudget(
-            max_sources=15,
-            max_pages_per_source=4,
+            max_sources=25,
+            max_pages_per_source=6,
             max_total_pages=max_pages,
-            max_total_jobs=min(state.max_fetch_calls * 5, 300),
+            max_total_jobs=min(state.max_fetch_calls * 5, 1000),
             request_timeout=10.0,
             per_domain_delay=0.5,
-            max_workers=5,
+            max_workers=6,
         )
 
         crawler = MultiSourceCrawler(budget=budget)
@@ -676,9 +676,9 @@ class AgentRuntime:
                 0 if any(t in f"{h.get('url','')} {h.get('title','')} {h.get('snippet','')}".lower() for t in loc_tokens) else 1
             ))
 
-        batch = promising[:15]
+        batch = promising[:25]
         # Retain remaining candidates
-        state.candidate_urls = promising[15:]
+        state.candidate_urls = promising[25:]
 
         if not batch:
             self._act_extract(state, emit)
@@ -687,7 +687,7 @@ class AgentRuntime:
         from concurrent.futures import ThreadPoolExecutor, as_completed
         emit("status", {"message": f"Fetching {len(batch)} candidate pages", "phase": "FETCHING"})
 
-        with ThreadPoolExecutor(max_workers=8) as executor:
+        with ThreadPoolExecutor(max_workers=10) as executor:
             futures = {executor.submit(self.fetch.execute, url=h.get("url"), run_id=state.run_id): h for h in batch}
             for future in as_completed(futures):
                 if state.deadline > 0 and time.time() >= state.deadline:

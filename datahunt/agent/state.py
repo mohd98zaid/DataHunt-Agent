@@ -111,11 +111,11 @@ class AgentState:
     llm_calls: int = 0
     pages_failed: int = 0
     
-    max_iterations: int = 100
-    max_search_calls: int = 30
-    max_fetch_calls: int = 120
-    max_llm_calls: int = 50
-    target_results: int = 20
+    max_iterations: int = 200
+    max_search_calls: int = 60
+    max_fetch_calls: int = 300
+    max_llm_calls: int = 100
+    target_results: int = 50
     deadline: float = 0.0  # unix timestamp
     
     status: AgentStatus = AgentStatus.INITIALIZING

@@ -78,15 +78,15 @@ class CrawlTask:
 
 @dataclass
 class DiscoveryBudget:
-    max_runtime_seconds: float = 120.0
-    max_concurrent_tasks: int = 6
-    max_source_discoveries: int = 50
-    max_company_discoveries: int = 40
-    max_ats_discoveries: int = 40
-    max_fetches: int = 50
-    max_search_requests: int = 60
-    max_expansion_rounds: int = 6
-    max_llm_calls: int = 25
+    max_runtime_seconds: float = 300.0
+    max_concurrent_tasks: int = 8
+    max_source_discoveries: int = 100
+    max_company_discoveries: int = 100
+    max_ats_discoveries: int = 100
+    max_fetches: int = 300
+    max_search_requests: int = 120
+    max_expansion_rounds: int = 12
+    max_llm_calls: int = 80
 
 
 @dataclass
