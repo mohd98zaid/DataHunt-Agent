@@ -363,7 +363,7 @@ class ResearchOrchestrator:
                     max_search_calls=search_cap,
                     max_fetch_calls=run.budget.max_pages,
                     deadline=deadline,
-                    max_iterations=40,
+                    max_iterations=getattr(settings, "MAX_ITERATIONS", 100),
                     discovery_budget=discovery_budget,
                     **canonical_kwargs,
                 )

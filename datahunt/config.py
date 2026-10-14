@@ -28,6 +28,7 @@ class Settings:
     MAX_RESPONSE_BYTES: int = int(os.getenv("MAX_RESPONSE_BYTES", "2000000"))
     MAX_RECORDS: int = int(os.getenv("MAX_RECORDS", "500"))
     MAX_TOOL_STEPS: int = int(os.getenv("MAX_TOOL_STEPS", "30"))
+    MAX_ITERATIONS: int = int(os.getenv("MAX_ITERATIONS", "100"))
     
     # Fetch Settings
     CONNECT_TIMEOUT_SECONDS: float = float(os.getenv("CONNECT_TIMEOUT_SECONDS", "5.0"))
@@ -98,6 +99,7 @@ class Settings:
             "database_path": str(self.DATABASE_PATH),
             "export_dir": str(self.EXPORT_DIR),
             "max_run_seconds": self.MAX_RUN_SECONDS,
+            "max_iterations": self.MAX_ITERATIONS,
             "max_search_queries": self.MAX_SEARCH_QUERIES,
             "max_pages_fetched": self.MAX_PAGES_FETCHED,
             "max_response_bytes": self.MAX_RESPONSE_BYTES,

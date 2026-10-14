@@ -111,7 +111,7 @@ class AgentState:
     llm_calls: int = 0
     pages_failed: int = 0
     
-    max_iterations: int = 10
+    max_iterations: int = 100
     max_search_calls: int = 30
     max_fetch_calls: int = 120
     max_llm_calls: int = 50

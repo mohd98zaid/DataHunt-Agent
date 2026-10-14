@@ -676,9 +676,9 @@ class AgentRuntime:
                 0 if any(t in f"{h.get('url','')} {h.get('title','')} {h.get('snippet','')}".lower() for t in loc_tokens) else 1
             ))
 
-        batch = promising[:10]
+        batch = promising[:15]
         # Retain remaining candidates
-        state.candidate_urls = promising[10:]
+        state.candidate_urls = promising[15:]
 
         if not batch:
             self._act_extract(state, emit)
@@ -687,7 +687,7 @@ class AgentRuntime:
         from concurrent.futures import ThreadPoolExecutor, as_completed
         emit("status", {"message": f"Fetching {len(batch)} candidate pages", "phase": "FETCHING"})
 
-        with ThreadPoolExecutor(max_workers=6) as executor:
+        with ThreadPoolExecutor(max_workers=8) as executor:
             futures = {executor.submit(self.fetch.execute, url=h.get("url"), run_id=state.run_id): h for h in batch}
             for future in as_completed(futures):
                 if state.deadline > 0 and time.time() >= state.deadline:
