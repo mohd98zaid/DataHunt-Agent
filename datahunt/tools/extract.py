@@ -488,6 +488,99 @@ def extract_job_records_from_document(
         dom_parts = domain.split(".")
         inferred_company = dom_parts[-2].capitalize() if len(dom_parts) >= 2 else domain
 
+    # Pattern LI: LinkedIn Hiring Post
+    # e.g., "Sarah Connor on LinkedIn: We are hiring a Senior Generative AI Engineer in Dubai! DM me"
+    is_li_post = "linkedin.com" in domain and any(p in url for p in ("/posts/", "/feed/update/", "/pulse/"))
+    if is_li_post:
+        comb_text = f"{title_source} {doc_text}".lower()
+        # Disqualify job seekers, promotions, celebrations
+        JOB_SEEKER_TRIGGERS = [
+            "open to work", "#opentowork", "looking for a job", "looking for new opportunities",
+            "seeking new opportunities", "seeking a role", "seeking a job", "seeking opportunity",
+            "open for new opportunities", "thrilled to share that i've joined", "happy to announce that i've joined",
+            "thrilled to announce i joined", "happy to announce i joined",
+            "started a new position", "started a new role", "promoted to", "happy work anniversary", "celebrating 5 years"
+        ]
+        if any(jst in comb_text for jst in JOB_SEEKER_TRIGGERS):
+            return []
+
+        HIRING_TRIGGERS = [
+            "hiring", "we're hiring", "we are hiring", "i'm hiring", "my team is hiring",
+            "looking for", "urgent requirement", "urgently hiring", "open role", "open position",
+            "job opening", "join our team", "come join us", "seeking a", "seeking an",
+            "dm me", "send your cv", "send your resume", "email your cv", "apply via", "#hiring"
+        ]
+        if not any(ht in comb_text for ht in HIRING_TRIGGERS):
+            return []
+
+        author_name = ""
+        post_statement = title_source
+        m_author = re.search(r"^([^:]+?)\s+on\s+LinkedIn\s*:\s*(.*)$", title_source, re.I)
+        if m_author:
+            author_name = m_author.group(1).strip()
+            post_statement = m_author.group(2).strip()
+
+        # Extract role/title
+        m_role = re.search(
+            r"(?:hiring(?:\s+for)?|looking\s+for|seeking|open\s+role:?|position:?)\s+(?:a|an)?\s*([A-Za-z0-9\s/–-]+?(?:engineer|developer|architect|scientist|lead|specialist|manager|researcher|consultant))",
+            post_statement + " " + doc_text[:1000],
+            re.I
+        )
+        if m_role:
+            clean_title = m_role.group(1).strip(" -|:[].,!")
+        elif topic:
+            clean_title = topic.strip()
+        else:
+            clean_title = post_statement[:60].strip()
+
+        # Extract company: "at <Company>" or "team at <Company>"
+        m_c = re.search(
+            r"\b(?:at|with|team\s+at|join\s+us\s+at|join)\s+([A-Z][a-zA-Z0-9&\'-]+(?:\s+[A-Z][a-zA-Z0-9&\'-]+){0,2})",
+            post_statement + " " + doc_text[:1000]
+        )
+        if m_c:
+            cand_c = m_c.group(1).strip(" -|:[].,!")
+            if cand_c.lower() not in ("dubai", "riyadh", "abu dhabi", "saudi", "uae", "remote", "linkedin", "our team", "my team"):
+                company = cand_c
+
+        if not company:
+            company = f"{author_name} (LinkedIn Post)" if author_name else "LinkedIn Hiring Post"
+
+        # Extract location
+        loc_patterns = [
+            r"\b(Dubai|Abu Dhabi|Sharjah|Riyadh|Jeddah|Dammam|NEOM|Saudi Arabia|UAE|Qatar|Doha|Kuwait|Bahrain|Oman|Remote)\b"
+        ]
+        for lp in loc_patterns:
+            m_loc = re.search(lp, post_statement + " " + doc_text[:2000], re.I)
+            if m_loc:
+                location = m_loc.group(1).strip()
+                break
+
+        # Check for external apply link in post_text
+        ext_link_m = re.search(r'https?://(?:jobs\.lever\.co|boards\.greenhouse\.io|jobs\.ashbyhq\.com|apply\.workable\.com|forms\.gle|[a-zA-Z0-9.-]+\.com/(?:careers|jobs|apply)[^\s<>"\'\)]*)', doc_text)
+        apply_url = ext_link_m.group(0) if ext_link_m else url
+
+        iso_time, age_sec, badge = parse_job_timestamp(None)
+        rec = {
+            "title": clean_title,
+            "company": company,
+            "location": location or "Remote / Unspecified",
+            "salary": None,
+            "application_url": apply_url,
+            "posted_at": iso_time or "",
+            "posted_age_seconds": age_sec if age_sec is not None else 86400,
+            "freshness_badge": "💼 LINKEDIN POST",
+            "employment_type": "Full-time",
+            "field_evidence": [
+                {"field_name": "title", "evidence_text": clean_title, "supports_value": True},
+                {"field_name": "company", "evidence_text": company, "supports_value": True},
+                {"field_name": "location", "evidence_text": location or "Remote / Unspecified", "supports_value": True},
+                {"field_name": "application_url", "evidence_text": apply_url, "supports_value": True},
+            ]
+        }
+        rec = _enrich_job_fields(rec, doc_text, apply_url)
+        return [rec]
+
     # 2. Parse Title & Company from ATS Title Conventions
     # Pattern 0: LinkedIn / Board "<Company> hiring <Title> in <Location>"
     m_hiring = re.search(r"^([A-Z][a-zA-Z0-9\s&.,'–-]+?)\s+hiring\s+(.+?)(?:\s+in\s+([^\|\-\n\r]+?))?(?:\s*[\|\-•·].*)?$", title_source, re.I)

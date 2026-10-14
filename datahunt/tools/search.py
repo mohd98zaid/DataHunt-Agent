@@ -364,13 +364,16 @@ def is_valid_job_url(url: str) -> bool:
     if any(p in path for p in ("/search/", "/skill/", "/skills/")) and not is_specific_posting:
         return False
 
-    # 9. LinkedIn Jobs — accept /jobs/view/<id> and search result pages (they always list real jobs)
+    # 9. LinkedIn Jobs & Hiring Posts:
+    # Accept /jobs/view/<id>, search results, and public hiring posts (/posts/, /feed/update/, /pulse/)
     if "linkedin.com" in hostname:
         if "/jobs/view/" in path or "/jobs/search" in path:
             return True
         if "/in/" in path or "/company/" in path:
             return False  # Profile or company pages, not job listings
         if "/jobs" in path:
+            return True
+        if "/posts/" in path or "/feed/update/" in path or "/pulse/" in path:
             return True
         return False
 
@@ -500,6 +503,7 @@ def generate_broad_job_queries(role_query: str) -> List[str]:
     queries += [
         f'"{role_only}" {location_phrase} linkedin.com jobs'.strip(),
         f'"{role_only}" {location_phrase} linkedin hiring apply'.strip(),
+        f'site:linkedin.com/posts "hiring" "{role_only}" {location_phrase}'.strip(),
     ]
 
     # ── Tier 2: Region-specific boards ──
@@ -1271,6 +1275,25 @@ class SearchTool:
                 blocked_domains=blocked_domains
             )
             hit_dicts = [h.to_dict() for h in hits]
+            # Pre-cache LinkedIn hiring posts so FetchTool retrieves full snippet text without hitting authwalls
+            for h in hit_dicts:
+                h_url = h.get("url") or ""
+                if "linkedin.com" in h_url and any(p in h_url for p in ("/posts/", "/feed/update/", "/pulse/")):
+                    h_title = h.get("title") or ""
+                    h_snippet = h.get("snippet") or ""
+                    if h_snippet:
+                        try:
+                            from datahunt.tools.fetch import store_prefetched_job_document
+                            post_content = (
+                                f"# {h_title}\n\n"
+                                f"URL: {h_url}\n\n"
+                                f"Platform: LinkedIn Hiring Post\n\n"
+                                f"## Post Snippet / Description\n"
+                                f"{h_snippet}\n"
+                            )
+                            store_prefetched_job_document(h_url, h_title, post_content)
+                        except Exception:
+                            pass
             if len(self._query_cache) >= 256:
                 old_keys = list(self._query_cache.keys())[:64]
                 for k in old_keys:

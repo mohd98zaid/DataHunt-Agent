@@ -430,6 +430,21 @@ class AgentRuntime:
                 if any(fa in text for fa in FOREIGN_ANCHORS) and not any(rg in text for rg in ("saudi", "uae", "dubai", "riyadh", "doha", "qatar", "kuwait", "bahrain", "oman", "worldwide", "global remote")):
                     return False
 
+            # If candidate is a LinkedIn post, ensure it is a hiring announcement rather than a job seeker post
+            if "linkedin.com" in url and any(p in url for p in ("/posts/", "/feed/update/", "/pulse/")):
+                JOB_SEEKER_PHRASES = [
+                    "open to work", "#opentowork", "looking for a job", "looking for new opportunities",
+                    "seeking new opportunities", "seeking a role", "seeking a job",
+                    "seeking opportunity", "open for new opportunities",
+                    "happy to announce that i've joined", "happy to announce i joined",
+                    "thrilled to announce that i've joined", "thrilled to announce i joined",
+                    "started a new position", "started a new role", "celebrating 5 years",
+                    "celebrating 10 years", "promoted to", "congratulations to"
+                ]
+                comb_text = f"{title} {text}".lower()
+                if any(jsp in comb_text for jsp in JOB_SEEKER_PHRASES):
+                    return False
+
         return True
 
     def _act_search(self, state: AgentState, emit):

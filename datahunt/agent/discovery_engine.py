@@ -182,6 +182,32 @@ class DiscoveryEngine:
                 location=loc_str,
             ))
 
+        # 2.1 LinkedIn Hiring Posts ("Hidden Market" recruiter & founder hiring posts)
+        li_post_tasks = []
+        if is_gulf:
+            if has_uae or is_generic_gulf:
+                li_post_tasks.append(f'site:linkedin.com/posts "hiring" "{role_clean}" Dubai')
+            if has_saudi or is_generic_gulf:
+                li_post_tasks.append(f'site:linkedin.com/posts "hiring" "{role_clean}" Riyadh')
+        elif primary_loc:
+            li_post_tasks.append(f'site:linkedin.com/posts "hiring" "{role_clean}" {primary_loc}')
+        else:
+            li_post_tasks.append(f'site:linkedin.com/posts "hiring" "{role_clean}"')
+
+        for q in li_post_tasks:
+            tasks.append(SearchTask(
+                id=f"r1_lipost_{len(tasks)}",
+                task_type=SearchTaskType.BOARD_SEARCH,
+                query=q,
+                source="linkedin.com",
+                source_type=DiscoveredSourceType.COMMUNITY_FORUM,
+                priority=2,
+                depth=0,
+                round=1,
+                reason="LinkedIn recruiter and founder hiring post discovery",
+                location=primary_loc or loc_str,
+            ))
+
         # 3. Direct Natural Language Career Page Sweep (Priority 2)
         tasks.append(SearchTask(
             id=f"r1_careers_{len(tasks)}",
