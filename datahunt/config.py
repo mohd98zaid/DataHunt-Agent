@@ -21,7 +21,7 @@ class Settings:
     EXPORT_DIR: Path = Path(os.getenv("EXPORT_DIR", "./exports"))
     
     # Run Limits & Budgets
-    MAX_RUN_SECONDS: int = int(os.getenv("MAX_RUN_SECONDS", "600"))
+    MAX_RUN_SECONDS: int = int(os.getenv("MAX_RUN_SECONDS", "1800"))
     MAX_SEARCH_QUERIES: int = int(os.getenv("MAX_SEARCH_QUERIES", "30"))
     MAX_PAGES_FETCHED: int = int(os.getenv("MAX_PAGES_FETCHED", "120"))
     MAX_BROWSER_PAGES: int = int(os.getenv("MAX_BROWSER_PAGES", "8"))

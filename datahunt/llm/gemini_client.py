@@ -37,60 +37,81 @@ DEFAULT_FLASH_MODEL = getattr(settings, "GEMINI_FLASH_MODEL", "gemini-flash-late
 
 # Free Tier Model Pools - Google AI Studio enforces separate RPM/TPM quota counters
 # for each distinct model family and version. Distributing calls evenly across all active
-# free-tier models multiplies aggregate throughput by 4x-6x and avoids 429 quota exhaustion.
+# free-tier models multiplies aggregate throughput and avoids 429 quota exhaustion.
+# Note: Google deprecated gemini-2.5-flash, gemini-2.5-flash-lite, gemini-2.5-pro, and 1.5 series.
+# Replacements recommended by Google:
+#   - gemini-2.5-flash -> gemini-3.8-flash / gemini-3.5-flash
+#   - gemini-2.5-flash-lite -> gemini-3.5-flash-lite
+#   - gemini-2.5-pro -> gemini-3.1-pro-preview
 FREE_TIER_LITE_POOL = [
     "gemini-flash-lite-latest",
-    "gemini-3.1-flash-lite",
     "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-3.1-flash-lite-preview",
     "gemini-3.6-flash",
 ]
 
 FREE_TIER_FLASH_POOL = [
     "gemini-flash-latest",
     "gemini-3.8-flash",
+    "gemini-3.5-flash",
     "gemini-3.6-flash",
     "gemini-3.7-flash",
+    "gemini-3-flash-preview",
     "gemini-flash-lite-latest",
+    "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
 ]
 
 FREE_TIER_PRO_POOL = [
     "gemini-pro-latest",
     "gemini-3.1-pro-preview",
+    "gemini-4-argon",
     "gemini-3.8-flash",
     "gemini-flash-latest",
 ]
 
 ALL_FREE_TIER_MODELS = [
     "gemini-flash-lite-latest",
-    "gemini-3.1-flash-lite",
     "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-3.1-flash-lite-preview",
+    "gemini-3.5-flash",
     "gemini-3.6-flash",
     "gemini-flash-latest",
     "gemini-3.8-flash",
     "gemini-3.7-flash",
+    "gemini-3-flash-preview",
     "gemini-pro-latest",
     "gemini-3.1-pro-preview",
+    "gemini-4-argon",
 ]
 
 MODEL_FALLBACKS = {
-    "gemini-flash-lite-latest": ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-flash-latest", "gemini-3.8-flash"],
+    "gemini-flash-lite-latest": ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-flash-latest", "gemini-3.8-flash"],
+    "gemini-3.5-flash-lite": ["gemini-flash-lite-latest", "gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-flash-latest"],
     "gemini-3.1-flash-lite": ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-flash-latest", "gemini-3.8-flash"],
-    "gemini-3.5-flash-lite": ["gemini-flash-lite-latest", "gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-flash-latest"],
-    "gemini-3.8-flash": ["gemini-flash-latest", "gemini-3.6-flash", "gemini-flash-lite-latest", "gemini-3.1-flash-lite"],
-    "gemini-3.6-flash": ["gemini-flash-latest", "gemini-3.8-flash", "gemini-flash-lite-latest", "gemini-3.1-flash-lite"],
-    "gemini-flash-latest": ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-flash-lite-latest", "gemini-3.1-flash-lite"],
-    "gemini-3.7-flash": ["gemini-3.6-flash", "gemini-flash-latest", "gemini-3.8-flash", "gemini-flash-lite-latest"],
-    "gemini-pro-latest": ["gemini-3.1-pro-preview", "gemini-3.8-flash", "gemini-flash-latest"],
-    "gemini-3.1-pro-preview": ["gemini-pro-latest", "gemini-3.6-flash", "gemini-flash-latest", "gemini-3.8-flash"],
+    "gemini-3.1-flash-lite-preview": ["gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.1-flash-lite", "gemini-3.6-flash"],
+    "gemini-3.5-flash": ["gemini-3.6-flash", "gemini-3.8-flash", "gemini-flash-latest", "gemini-3.5-flash-lite", "gemini-flash-lite-latest"],
+    "gemini-3.8-flash": ["gemini-flash-latest", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-flash-lite-latest"],
+    "gemini-3.6-flash": ["gemini-3.5-flash", "gemini-flash-latest", "gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-flash-lite-latest"],
+    "gemini-flash-latest": ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-flash-lite-latest"],
+    "gemini-3.7-flash": ["gemini-3.5-flash", "gemini-3.6-flash", "gemini-flash-latest", "gemini-3.8-flash", "gemini-flash-lite-latest"],
+    "gemini-3-flash-preview": ["gemini-3.5-flash", "gemini-3.6-flash", "gemini-flash-latest", "gemini-3.8-flash"],
+    "gemini-pro-latest": ["gemini-3.1-pro-preview", "gemini-4-argon", "gemini-3.8-flash", "gemini-flash-latest"],
+    "gemini-3.1-pro-preview": ["gemini-pro-latest", "gemini-4-argon", "gemini-3.6-flash", "gemini-flash-latest", "gemini-3.8-flash"],
+    "gemini-4-argon": ["gemini-3.1-pro-preview", "gemini-pro-latest", "gemini-3.8-flash", "gemini-flash-latest"],
 }
 
 # ── Simplified Primary + Fallback Chain (used by runtime.py) ────────────────
 # The same run uses PRIMARY_MODEL, falls back to FALLBACK_CHAIN only on failure.
 PRIMARY_MODEL = "gemini-flash-latest"
 FALLBACK_CHAIN = [
+    "gemini-3.8-flash",
+    "gemini-3.5-flash",
     "gemini-3.6-flash",
     "gemini-flash-lite-latest",
+    "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
 ]
 

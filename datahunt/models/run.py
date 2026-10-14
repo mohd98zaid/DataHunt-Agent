@@ -18,7 +18,7 @@ class RunStatus(str, Enum):
     CANCELLED = "cancelled"
 
 class RunBudget(BaseModel):
-    deadline_seconds: int = 300
+    deadline_seconds: int = 1800
     max_tool_steps: int = 60
     max_search_queries: int = 16
     max_pages: int = 50
