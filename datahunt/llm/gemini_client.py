@@ -45,6 +45,7 @@ DEFAULT_FLASH_MODEL = getattr(settings, "GEMINI_FLASH_MODEL", "gemini-flash-late
 #   - gemini-2.5-pro -> gemini-3.1-pro-preview
 FREE_TIER_LITE_POOL = [
     "gemini-flash-lite-latest",
+    "gemini-2.5-flash-lite",
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
     "gemini-3.1-flash-lite-preview",
@@ -53,12 +54,14 @@ FREE_TIER_LITE_POOL = [
 
 FREE_TIER_FLASH_POOL = [
     "gemini-flash-latest",
+    "gemini-2.5-flash",
     "gemini-3.8-flash",
     "gemini-3.5-flash",
     "gemini-3.6-flash",
     "gemini-3.7-flash",
     "gemini-3-flash-preview",
     "gemini-flash-lite-latest",
+    "gemini-2.5-flash-lite",
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
 ]

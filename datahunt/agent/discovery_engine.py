@@ -506,10 +506,23 @@ class DiscoveryEngine:
             if not ats_found and domain:
                 clean_netloc = domain.replace("www.", "")
                 is_social_or_search = any(k in clean_netloc for k in ("google", "duckduckgo", "bing", "yahoo", "facebook", "twitter", "x.com", "instagram", "wikipedia", "youtube", "medium.com"))
+                is_known_major_aggregator = any(k in clean_netloc for k in ("linkedin.com", "indeed.com", "glassdoor.com", "monster.com", "ziprecruiter.com", "bayt.com", "gulftalent.com", "naukrigulf.com"))
                 is_job_path = any(k in url.lower() for k in ("/jobs", "/careers", "/career", "/vacancies", "/job-opening"))
+                
+                # Filter out foreign country subdomains and ccTLDs during regional search
+                is_gulf = any(g in (loc_str or "").lower() for g in ("saudi", "uae", "dubai", "riyadh", "qatar", "kuwait", "bahrain", "oman", "gulf", "gcc", "middle east"))
+                FOREIGN_COUNTRY_SUBDOMAINS = (
+                    "ru.", "au.", "sg.", "in.", "pe.", "de.", "fr.", "uk.", "ca.",
+                    "br.", "jp.", "mx.", "es.", "it.", "nl.", "pl.", "ch.", "se.",
+                    "no.", "fi.", "ie.", "nz.", "za.", "ph.", "pk.", "bd.", "vn.",
+                    "th.", "my.", "id.", "eg.", "tr.", "cn.", "hk.", "tw.", "kr."
+                )
+                is_foreign_country = any(clean_netloc.startswith(p) for p in FOREIGN_COUNTRY_SUBDOMAINS)
                 
                 if (
                     not is_social_or_search
+                    and not is_known_major_aggregator
+                    and not (is_gulf and is_foreign_country)
                     and is_job_path
                     and clean_netloc not in discovery_state.discovered_boards
                     and clean_netloc not in discovery_state.searched_sources

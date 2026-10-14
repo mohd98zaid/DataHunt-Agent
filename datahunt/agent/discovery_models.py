@@ -84,7 +84,7 @@ class DiscoveryBudget:
     max_company_discoveries: int = 100
     max_ats_discoveries: int = 100
     max_fetches: int = 300
-    max_search_requests: int = 120
+    max_search_requests: int = 150
     max_expansion_rounds: int = 12
     max_llm_calls: int = 80
 

@@ -149,7 +149,11 @@ def deduplicate_normalized_jobs(jobs: List[Any]) -> List[Any]:
         title = getattr(job, "normalized_title", None) or getattr(job, "title", "")
         loc = getattr(job, "normalized_location", None) or getattr(job, "location", "")
         city = getattr(job, "city", None)
-        if comp and title:
+        is_generic_comp = comp.strip().lower() in (
+            "linkedin hiring post", "linkedin post", "hiring post", "job post",
+            "unknown", "n/a", "confidential", "stealth", "various", "multiple companies"
+        )
+        if comp and title and not is_generic_comp:
             fp = generate_job_fingerprint(comp, title, loc)
             keys.append(f"fp::{fp}")
             if city:
@@ -269,7 +273,11 @@ class DedupeTool:
                     keys.append(f"app::{c_apply}")
                     keys.append(f"link::{c_apply}")
 
-            if comp and title:
+            is_generic_comp = comp.strip().lower() in (
+                "linkedin hiring post", "linkedin post", "hiring post", "job post",
+                "unknown", "n/a", "confidential", "stealth", "various", "multiple companies"
+            )
+            if comp and title and not is_generic_comp:
                 fp = generate_job_fingerprint(comp, title, loc)
                 keys.append(f"fp::{fp}")
                 fp_title = generate_job_fingerprint(comp, title, "")

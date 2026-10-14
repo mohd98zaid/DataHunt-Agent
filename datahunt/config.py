@@ -22,7 +22,7 @@ class Settings:
     
     # Run Limits & Budgets
     MAX_RUN_SECONDS: int = int(os.getenv("MAX_RUN_SECONDS", "1800"))
-    MAX_SEARCH_QUERIES: int = int(os.getenv("MAX_SEARCH_QUERIES", "60"))
+    MAX_SEARCH_QUERIES: int = int(os.getenv("MAX_SEARCH_QUERIES", "150"))
     MAX_PAGES_FETCHED: int = int(os.getenv("MAX_PAGES_FETCHED", "300"))
     MAX_BROWSER_PAGES: int = int(os.getenv("MAX_BROWSER_PAGES", "12"))
     MAX_RESPONSE_BYTES: int = int(os.getenv("MAX_RESPONSE_BYTES", "5000000"))

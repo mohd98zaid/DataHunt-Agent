@@ -553,19 +553,35 @@ def extract_job_records_from_document(
         if m_author:
             author_name = m_author.group(1).strip()
             post_statement = m_author.group(2).strip()
+        else:
+            m_url_author = re.search(r"/posts/([a-zA-Z0-9-]+?)_", url)
+            if m_url_author:
+                author_name = m_url_author.group(1).replace("-", " ").title()
+
+        m_act = re.search(r"activity-([0-9]+)", url)
+        activity_id = m_act.group(1) if m_act else ""
 
         # Extract role/title
+        m_role_direct = re.search(
+            r"\b(GenAI\s+Engineer|Generative\s+AI\s+Engineer|AI\s+Engineer|LLM\s+Engineer|Machine\s+Learning\s+Engineer|ML\s+Engineer|AI\s+Architect|Data\s+Scientist|AI\s+Researcher|Applied\s+AI\s+Engineer)\b",
+            post_statement + " " + doc_text[:1000],
+            re.I
+        )
         m_role = re.search(
             r"(?:hiring(?:\s+for)?|looking\s+for|seeking|open\s+role:?|position:?)\s+(?:a|an)?\s*([A-Za-z0-9\s/–-]+?(?:engineer|developer|architect|scientist|lead|specialist|manager|researcher|consultant))",
             post_statement + " " + doc_text[:1000],
             re.I
         )
-        if m_role:
+        if m_role_direct:
+            clean_title = m_role_direct.group(0).strip()
+        elif m_role:
             clean_title = m_role.group(1).strip(" -|:[].,!")
-        elif topic:
+        elif author_name:
+            clean_title = f"AI / Engineering Role (via {author_name})"
+        elif topic and not any(q_word in topic.lower() for q_word in ("find", "jobs in", "search", "looking")):
             clean_title = topic.strip()
         else:
-            clean_title = post_statement[:60].strip()
+            clean_title = post_statement[:60].strip() or "AI / Engineering Opportunity"
 
         # Extract company: "at <Company>" or "team at <Company>"
         m_c = re.search(
@@ -578,7 +594,12 @@ def extract_job_records_from_document(
                 company = cand_c
 
         if not company:
-            company = f"{author_name} (LinkedIn Post)" if author_name else "LinkedIn Hiring Post"
+            if author_name:
+                company = f"{author_name} (LinkedIn Post)"
+            elif activity_id:
+                company = f"LinkedIn Post ({activity_id[:8]})"
+            else:
+                company = "LinkedIn Hiring Post"
 
         # Extract location
         loc_patterns = [
@@ -1669,7 +1690,14 @@ class ExtractTool:
                 }
 
                 # Construct composite identity key
-                if norm_title:
+                is_generic_company = norm_company in (
+                    "linkedinhiringpost", "linkedinpost", "hiringpost", "jobpost",
+                    "unknown", "na", "confidential", "stealth", "various"
+                )
+                is_community_post = any(x in (document.canonical_url or document.requested_url or "").lower() for x in ("/posts/", "/feed/", "/pulse/"))
+                if is_generic_company or is_community_post:
+                    identity_key = f"{norm_company}::{norm_title}::{document.id}"
+                elif norm_title:
                     identity_key = f"{norm_company}::{norm_title}::{norm_location}"
                 else:
                     identity_key = f"{norm_company}::{fields.get('posted_at', '')}::{document.id}"

@@ -117,11 +117,11 @@ class AgentRuntime:
                 SourceCoverageMatrix,
                 DiscoveryState,
             )
+            state.max_search_calls = max(state.max_search_calls, 120)
             state.discovery_budget = state.discovery_budget or DiscoveryBudget(
-                max_search_requests=max(state.max_search_calls, 35),
+                max_search_requests=state.max_search_calls,
                 max_fetches=state.max_fetch_calls,
             )
-            state.max_search_calls = max(state.max_search_calls, 35)
             if state.discovery_state is None:
                 target_geos = state.locations or ([state.explicit_location] if state.explicit_location else ["general"])
                 state.discovery_state = DiscoveryState(

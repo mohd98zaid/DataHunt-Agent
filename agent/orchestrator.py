@@ -346,7 +346,7 @@ class ResearchOrchestrator:
                     }
 
                 from datahunt.agent.discovery_models import DiscoveryBudget
-                search_cap = max(run.budget.max_search_queries, 35)
+                search_cap = max(run.budget.max_search_queries, getattr(settings, "MAX_SEARCH_QUERIES", 150), 120)
                 discovery_budget = DiscoveryBudget(
                     max_runtime_seconds=settings.MAX_RUN_SECONDS,
                     max_search_requests=search_cap,

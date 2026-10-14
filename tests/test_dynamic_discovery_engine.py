@@ -382,3 +382,83 @@ def test_should_stop_preserves_pending_work():
     should_stop, _, _ = engine.should_stop(disc_state, state_with_unverified)
     assert should_stop is False, "Should not stop when raw records need verification"
 
+
+def test_foreign_domains_and_known_aggregators_pruned_from_discovery():
+    engine = DiscoveryEngine()
+    state = AgentState(
+        request="Find GenAI Engineer jobs in Saudi or UAE",
+        run_id="run_geo_test",
+        task_id="task_geo_test",
+        mode="jobs",
+        explicit_titles=["GenAI Engineer"],
+        locations=["Saudi Arabia", "UAE"],
+    )
+    discovery_state = DiscoveryState(
+        coverage_matrix=SourceCoverageMatrix(target_regions=["Saudi Arabia", "UAE"])
+    )
+    parent_task = SearchTask(
+        id="t_foreign",
+        task_type=SearchTaskType.GENERAL_SEARCH,
+        query="test",
+        source="google",
+        source_type=DiscoveredSourceType.MAJOR_BOARD,
+        location="Saudi Arabia",
+    )
+    hits = [
+        {"url": "https://ru.linkedin.com/jobs/view/12345", "title": "GenAI in Russia", "snippet": "Russian role"},
+        {"url": "https://au.indeed.com/viewjob?jk=6789", "title": "GenAI in Sydney", "snippet": "Australia role"},
+        {"url": "https://linkedin.com/jobs/view/55555", "title": "GenAI in Dubai", "snippet": "UAE role"},
+        {"url": "https://tanqeeb.com/careers/genai-lead", "title": "GenAI Lead in Riyadh", "snippet": "Saudi opening"},
+    ]
+    new_tasks = engine.process_search_hits(hits, parent_task, state, discovery_state)
+    new_task_sources = [t.source for t in new_tasks]
+
+    # Foreign country subdomains and known aggregators must NOT become newly discovered board tasks
+    assert "ru.linkedin.com" not in new_task_sources
+    assert "au.indeed.com" not in new_task_sources
+    assert "linkedin.com" not in new_task_sources
+    # Genuine regional career portal SHOULD be discovered
+    assert any("tanqeeb.com" in s for s in new_task_sources)
+
+
+def test_generic_company_linkedin_post_dedupe_isolation():
+    from datahunt.tools.dedupe import DedupeTool
+    from datahunt.models import ExtractedRecord
+    dedupe = DedupeTool()
+
+    rec1 = ExtractedRecord(
+        id="rec_li_1",
+        run_id="r1",
+        source_document_id="doc_li_1",
+        record_type="job_listing",
+        canonical_url="https://www.linkedin.com/posts/recruiter1_hiring-genai-activity-7111",
+        identity_key="linkedinhiringpost::genaiengineer::doc_li_1",
+        fields={
+            "title": "GenAI Engineer",
+            "company": "LinkedIn Hiring Post",
+            "location": "Dubai, UAE",
+            "source_url": "https://www.linkedin.com/posts/recruiter1_hiring-genai-activity-7111",
+        }
+    )
+    rec2 = ExtractedRecord(
+        id="rec_li_2",
+        run_id="r1",
+        source_document_id="doc_li_2",
+        record_type="job_listing",
+        canonical_url="https://www.linkedin.com/posts/recruiter2_hiring-genai-activity-7222",
+        identity_key="linkedinhiringpost::genaiengineer::doc_li_2",
+        fields={
+            "title": "GenAI Engineer",
+            "company": "LinkedIn Hiring Post",
+            "location": "Riyadh, Saudi Arabia",
+            "source_url": "https://www.linkedin.com/posts/recruiter2_hiring-genai-activity-7222",
+        }
+    )
+
+    res = dedupe.execute([rec1, rec2])
+    assert res.success
+    # Both records must remain distinct because their URLs and document IDs are separate
+    assert len(res.data["unique_records"]) == 2
+    assert res.data["duplicates_count"] == 0
+
+
