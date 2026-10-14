@@ -1455,6 +1455,34 @@ document.addEventListener("DOMContentLoaded", () => {
       hud.appendLog("PHASE", `${data.phase} - ${data.message || ""}`);
       updateCounters(data.counters);
     }
+    else if (event === "agent.decision") {
+      const actionClean = (data.action || "").replace(/^AgentAction\./, "");
+      hud.appendLog("DECISION", `[Iter #${data.iteration || 1}] ${actionClean}: ${data.reason || ""}`);
+      tickerText.textContent = `[${actionClean}] ${data.reason || ""}`;
+      if (actionClean === "SEARCH") {
+        hud.setPhaseState("SEARCHING");
+        scene.setAgentState("SEARCHING");
+      } else if (actionClean === "FETCH" || actionClean === "CRAWL_DIRECT") {
+        hud.setPhaseState("COLLECTING");
+        scene.setAgentState("COLLECTING");
+      } else if (actionClean === "EXTRACT") {
+        hud.setPhaseState("EXTRACTING");
+        scene.setAgentState("EXTRACTING");
+      } else if (actionClean === "VERIFY") {
+        hud.setPhaseState("VERIFYING");
+        scene.setAgentState("VERIFYING");
+      }
+    }
+    else if (event === "crawl_summary") {
+      hud.appendLog("CRAWL", `Direct Crawl: ${data.sources_hit || 0} boards crawled, ${data.candidates_found || 0} candidates found.`);
+      tickerText.textContent = `Direct crawl found ${data.candidates_found || 0} candidate links.`;
+    }
+    else if (event === "telemetry") {
+      hud.appendLog("RADAR", `[R${data.round || 1}] ${data.source || data.task_type}: ${data.results_count || 0} hits (${data.new_jobs_count || 0} new)`);
+    }
+    else if (event === "coverage_report") {
+      hud.appendLog("COVERAGE", `Coverage: ${data.regions_covered?.join(", ") || "All regions"} • ${data.total_sources_evaluated || 0} sources evaluated.`);
+    }
     else if (event === "plan.ready") {
       if (scene && typeof scene.setAgentState === "function") scene.setAgentState("PLANNING");
       hud.appendLog("PLAN", `Generated ${data.count} targeted queries.`);

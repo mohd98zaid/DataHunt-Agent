@@ -608,10 +608,16 @@ class CyberneticAgentScene {
     const colorMap = {
       STANDBY: 0x00f0ff,
       PLANNING: 0x00f0ff,
+      PLANNED: 0x00f0ff,
       SEARCHING: 0x00f0ff,
+      CRAWLING: 0x00ffa3,
+      FETCHING: 0x00ffa3,
       COLLECTING: 0x00ffa3,
       EXTRACTING: 0x00ffa3,
       VERIFYING: 0xffb800,
+      ANALYZING: 0xffb800,
+      DEDUPLICATING: 0xffb800,
+      EXPORTING: 0x00ffa3,
       COMPLETED: 0x00ffa3
     };
     const c = colorMap[state] || 0x00f0ff;
@@ -620,10 +626,10 @@ class CyberneticAgentScene {
     }
 
     if (this.scanLaserBar) {
-      this.scanLaserBar.visible = (state === "SEARCHING");
+      this.scanLaserBar.visible = (state === "SEARCHING" || state === "CRAWLING");
     }
 
-    if (state === "SEARCHING") {
+    if (state === "SEARCHING" || state === "FETCHING" || state === "COLLECTING" || state === "CRAWLING") {
       this.radarRipples.forEach((r) => {
         r.active = true;
         r.mesh.material.opacity = 0.8;

@@ -848,38 +848,65 @@ class AIBotAvatar {
   setAgentState(state) {
     // Normalize aliases to canonical states for internal logic
     const aliases = {
-      STANDBY:  "IDLE", PLANNING:  "LISTENING", COLLECTING: "SEARCHING",
-      EXTRACTING: "ANALYZING", VERIFYING: "ANALYZING", COMPLETED: "SUCCESS",
-      FAILED: "ERROR"
+      STANDBY: "IDLE",
+      PLANNING: "LISTENING",
+      PLANNED: "LISTENING",
+      SEARCH: "SEARCHING",
+      SEARCHING: "SEARCHING",
+      CRAWL: "SEARCHING",
+      CRAWLING: "SEARCHING",
+      CRAWL_DIRECT: "SEARCHING",
+      FETCH: "COLLECTING",
+      FETCHING: "COLLECTING",
+      COLLECTING: "COLLECTING",
+      EXTRACT: "ANALYZING",
+      EXTRACTING: "ANALYZING",
+      VERIFY: "ANALYZING",
+      VERIFYING: "ANALYZING",
+      ANALYZE: "ANALYZING",
+      ANALYZING: "ANALYZING",
+      DEDUPE: "ANALYZING",
+      DEDUPLICATING: "ANALYZING",
+      EXPORT: "RESPONDING",
+      EXPORTING: "RESPONDING",
+      COMPLETED: "SUCCESS",
+      SUCCESS: "SUCCESS",
+      FAILED: "ERROR",
+      ERROR: "ERROR"
     };
-    this.agentState = state || "IDLE";   // store raw for drawFace() state branch
-    const col = (this.STATE_COLORS[state] || this.STATE_COLORS.IDLE).hex;
+    const norm = aliases[state] || state || "IDLE";
+    this.agentState = norm;   // store normalized state for drawFace()
+    const col = (this.STATE_COLORS[norm] || this.STATE_COLORS[state] || this.STATE_COLORS.IDLE).hex;
 
     this._applyColorScheme(col);
 
     const msgs = {
-      IDLE:       "Ready for directives. Standing by… 👋",
-      STANDBY:    "Ready for directives. Standing by… 👋",
-      LISTENING:  "Formulating optimal search strategy… 🤔",
-      PLANNING:   "Formulating optimal search strategy… 🤔",
-      SEARCHING:  "Scanning career indices & web corpora… 🔍",
-      COLLECTING: "Scanning career indices & web corpora… 🔍",
-      ANALYZING:  "Synthesizing structured intelligence… 🧩",
-      EXTRACTING: "Synthesizing structured intelligence… 🧩",
-      VERIFYING:  "Running cryptographic provenance checks… 🛡️",
-      RESPONDING: "Composing intelligence report… 📝",
-      SUCCESS:    "Mission complete — all records verified! 🎉",
-      COMPLETED:  "Mission complete — all records verified! 🎉",
-      ERROR:      "Directive halted. Standing by for retry. ⚠️",
-      FAILED:     "Directive halted. Standing by for retry. ⚠️",
+      IDLE:          "Ready for directives. Standing by… 👋",
+      STANDBY:       "Ready for directives. Standing by… 👋",
+      LISTENING:     "Formulating optimal search strategy… 🤔",
+      PLANNING:      "Formulating optimal search strategy… 🤔",
+      SEARCHING:     "Scanning career indices & web corpora… 🔍",
+      COLLECTING:    "Retrieving candidate job pages & ATS portals… 🌐",
+      FETCHING:      "Retrieving candidate job pages & ATS portals… 🌐",
+      CRAWLING:      "Direct-crawling regional career boards… ⚡",
+      ANALYZING:     "Synthesizing structured intelligence… 🧩",
+      EXTRACTING:    "Extracting entity criteria & requirements… 🔬",
+      VERIFYING:     "Running cryptographic provenance checks… 🛡️",
+      DEDUPLICATING: "Eliminating cross-source duplicate entities… ✂️",
+      RESPONDING:    "Composing intelligence report & exports… 📝",
+      EXPORTING:     "Composing intelligence report & exports… 📝",
+      SUCCESS:       "Mission complete — all records verified! 🎉",
+      COMPLETED:     "Mission complete — all records verified! 🎉",
+      ERROR:         "Directive halted. Standing by for retry. ⚠️",
+      FAILED:        "Directive halted. Standing by for retry. ⚠️",
     };
-    this.speak(msgs[state] || "Processing…");
+    this.speak(msgs[state] || msgs[norm] || "Processing…");
 
-    const isActive = ["SEARCHING","COLLECTING","EXTRACTING","VERIFYING","ANALYZING"].includes(state);
+    const isActive = ["SEARCHING","COLLECTING","FETCHING","CRAWLING","EXTRACTING","VERIFYING","ANALYZING","DEDUPLICATING"].includes(state) || ["SEARCHING","COLLECTING","ANALYZING"].includes(norm);
     this.radarRipples.forEach(r => (r.active = isActive));
     this.shieldTargetOpacity = isActive ? 0.72 : 0.0;
 
-    if (state === "SEARCHING" || state === "COLLECTING") {
+    if (norm === "SEARCHING" || norm === "COLLECTING" || state === "SEARCHING" || state === "COLLECTING" || state === "FETCHING" || state === "CRAWLING") {
       if (this.scannerBeam) this.scannerBeam.material.opacity = 0.30;
     } else if (this.scannerBeam) {
       this.scannerBeam.material.opacity = 0.0;

@@ -6,7 +6,7 @@ class HUDController {
     this.ctx = this.waveformCanvas ? this.waveformCanvas.getContext("2d") : null;
     this.radialProgress = document.getElementById("radial-progress");
     this.radialValueText = document.getElementById("radial-value-text");
-    this.terminalLog = document.getElementById("terminal-logs");
+    this.terminalLog = document.getElementById("terminal-logs") || document.getElementById("terminal-log");
 
     this.waveformBars = 32;
     this.waveData = new Array(this.waveformBars).fill(10);
@@ -97,13 +97,17 @@ class HUDController {
   }
 
   appendLog(type, message, durationMs = null) {
+    if (!this.terminalLog) {
+      this.terminalLog = document.getElementById("terminal-logs") || document.getElementById("terminal-log");
+    }
     if (!this.terminalLog) return;
 
     const now = new Date();
     const timeStr = `[${now.toTimeString().split(" ")[0]}]`;
 
     const entry = document.createElement("div");
-    entry.className = "log-entry";
+    const safeType = (type || "INFO").toUpperCase();
+    entry.className = `log-entry log-${safeType.toLowerCase()}`;
 
     const durText = durationMs !== null ? `${durationMs}ms` : "";
 
@@ -113,7 +117,7 @@ class HUDController {
 
     const typeSpan = document.createElement("span");
     typeSpan.className = "log-type";
-    typeSpan.textContent = type;
+    typeSpan.textContent = `[${safeType}]`;
 
     const msgSpan = document.createElement("span");
     msgSpan.className = "log-msg";
@@ -134,12 +138,69 @@ class HUDController {
     }
 
     this.terminalLog.appendChild(entry);
+
+    // Keep up to 150 log entries to prevent memory bloating
+    while (this.terminalLog.children.length > 150) {
+      this.terminalLog.removeChild(this.terminalLog.firstChild);
+    }
+
     this.terminalLog.scrollTop = this.terminalLog.scrollHeight;
   }
 
   setPhaseState(phase) {
+    if (!phase) return;
+    const phaseUpper = String(phase).toUpperCase();
+
     const phases = ["PLANNING", "SEARCHING", "COLLECTING", "EXTRACTING", "VERIFYING", "DEDUPLICATING", "EXPORTING"];
-    const targetIdx = phases.indexOf(phase);
+
+    if (phaseUpper === "IDLE" || phaseUpper === "STANDBY") {
+      phases.forEach((p, idx) => {
+        const el = document.getElementById(`phase-node-${p}`);
+        if (!el) return;
+        el.className = "phase-node";
+        const badge = el.querySelector(".phase-badge");
+        if (badge) badge.textContent = idx === 0 ? "READY" : "IDLE";
+      });
+      return;
+    }
+
+    if (phaseUpper === "COMPLETED" || phaseUpper === "SUCCESS" || phaseUpper === "DONE") {
+      phases.forEach((p) => {
+        const el = document.getElementById(`phase-node-${p}`);
+        if (!el) return;
+        el.className = "phase-node completed";
+        const badge = el.querySelector(".phase-badge");
+        if (badge) badge.textContent = "DONE";
+      });
+      return;
+    }
+
+    const phaseMap = {
+      PLANNING: "PLANNING",
+      PLANNED: "PLANNING",
+      SEARCH: "SEARCHING",
+      SEARCHING: "SEARCHING",
+      CRAWL: "COLLECTING",
+      CRAWLING: "COLLECTING",
+      CRAWL_DIRECT: "COLLECTING",
+      FETCH: "COLLECTING",
+      FETCHING: "COLLECTING",
+      COLLECTING: "COLLECTING",
+      EXTRACT: "EXTRACTING",
+      EXTRACTING: "EXTRACTING",
+      VERIFY: "VERIFYING",
+      VERIFYING: "VERIFYING",
+      ANALYZE: "VERIFYING",
+      ANALYZING: "VERIFYING",
+      DEDUPE: "DEDUPLICATING",
+      DEDUPLICATING: "DEDUPLICATING",
+      EXPORT: "EXPORTING",
+      EXPORTING: "EXPORTING"
+    };
+
+    const canonicalPhase = phaseMap[phaseUpper] || phaseUpper;
+    const targetIdx = phases.indexOf(canonicalPhase);
+    if (targetIdx === -1) return;
 
     phases.forEach((p, idx) => {
       const el = document.getElementById(`phase-node-${p}`);

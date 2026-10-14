@@ -560,6 +560,8 @@ body {
 
 .analyzing-text-wrap {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .analyzing-title {
@@ -568,12 +570,18 @@ body {
   font-weight: 800;
   color: #fff;
   letter-spacing: 1px;
+  line-height: 1.35;
 }
 
 .analyzing-subtitle {
   font-family: 'Share Tech Mono', monospace;
   font-size: 11px;
   color: var(--neon-cyan);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.4;
+  margin-top: 2px;
 }
 
 .view-results-mini-btn {
@@ -907,52 +915,78 @@ body {
   font-weight: 700;
 }
 
-/* Bottom Terminal */
-.bottom-terminal-hud {
-  grid-column: 1 / -1;
-  margin: 0 18px 12px 18px;
+/* Terminal & Live Event Stream Panel */
+.log-panel {
+  flex: 1;
+  min-height: 180px;
+  max-height: 320px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
-.terminal-scroll-area {
+.terminal-logs {
   flex: 1;
-  padding: 8px 14px;
   overflow-y: auto;
   font-family: 'Share Tech Mono', monospace;
   font-size: 11px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
+  padding: 4px 6px 4px 0;
+  max-height: 240px;
 }
 
 .log-entry {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .log-time {
   color: var(--text-muted);
+  font-size: 10px;
+  flex-shrink: 0;
 }
 
 .log-type {
-  font-weight: bold;
+  font-weight: 700;
   color: var(--neon-cyan);
-  min-width: 90px;
+  font-size: 10px;
+  flex-shrink: 0;
 }
 
 .log-msg {
-  color: #fff;
+  color: #e2e8f0;
   flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  word-break: break-word;
+  white-space: normal;
 }
 
 .log-dur {
   color: var(--neon-amber);
+  font-size: 10px;
+  flex-shrink: 0;
 }
+
+/* Distinctive log type highlight colors */
+.log-entry.log-phase .log-type { color: var(--neon-cyan); }
+.log-entry.log-search .log-type { color: #38bdf8; }
+.log-entry.log-fetch .log-type { color: #a78bfa; }
+.log-entry.log-extract .log-type { color: #f472b6; }
+.log-entry.log-verify .log-type { color: #34d399; }
+.log-entry.log-decision .log-type { color: #fbbf24; }
+.log-entry.log-crawl .log-type { color: #38bdf8; }
+.log-entry.log-radar .log-type { color: var(--neon-green); }
+.log-entry.log-blocked .log-type { color: #f87171; }
+.log-entry.log-error .log-type { color: #ef4444; }
+.log-entry.log-plan .log-type { color: #818cf8; }
+.log-entry.log-complete .log-type { color: var(--neon-green); }
+.log-entry.log-socket .log-type { color: var(--neon-cyan); }
+.log-entry.log-system .log-type { color: var(--neon-green); }
 
 /* Full Results Modal Dossier (Clean & Beautifully Formatted) */
 .results-modal-backdrop {
