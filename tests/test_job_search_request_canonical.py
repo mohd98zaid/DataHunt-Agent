@@ -163,3 +163,23 @@ def test_candidate_triage_filters_junk_before_fetch():
         "snippet": "Join our Dubai team working on LLM infrastructure.",
     }
     assert runtime._is_promising_candidate(h4, state) is True
+
+    # Foreign subdomain (eg.linkedin.com) -> should reject
+    h5 = {
+        "url": "https://eg.linkedin.com/jobs/view/senior-ai-engineer-1234",
+        "title": "Senior AI Engineer",
+        "snippet": "Working with enterprise clients.",
+    }
+    assert runtime._is_promising_candidate(h5, state) is False
+
+    # Generic Gulf request -> should reject foreign anchors and foreign domains
+    state_gulf = AgentState(
+        request="GenAI Engineer in Gulf",
+        run_id="run_gulf",
+        task_id="task_gulf",
+        mode="jobs",
+        locations=["Gulf"],
+    )
+    assert runtime._is_promising_candidate(h3, state_gulf) is False
+    assert runtime._is_promising_candidate(h5, state_gulf) is False
+    assert runtime._is_promising_candidate(h4, state_gulf) is True

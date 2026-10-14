@@ -406,14 +406,29 @@ class AgentRuntime:
                 if any(dr in title for dr in DISQUALIFYING_ROLES) and not any(ai in title for ai in ("genai", "generative ai", "llm", "ai engineer")):
                     return False
 
-            # If user requested specific regions, e.g. Saudi/UAE, reject explicit foreign anchors
-            if state.locations:
-                req_geos = [loc.lower() for loc in state.locations]
-                is_gulf = any(g in ("saudi", "saudi arabia", "uae", "dubai", "riyadh") for g in req_geos)
-                if is_gulf:
-                    FOREIGN_ANCHORS = ["cairo, egypt", "alexandria, egypt", "london, uk", "london, united kingdom", "bangalore, india", "denver, co", "san francisco, ca"]
-                    if any(fa in text for fa in FOREIGN_ANCHORS) and not any(rg in text for rg in ("saudi", "uae", "dubai", "riyadh", "worldwide", "global remote")):
-                        return False
+            # If user requested specific regions, e.g. GCC/Gulf/Saudi/UAE, reject explicit foreign anchors and foreign domain subdomains
+            req_geos = [loc.lower() for loc in (state.locations or ([state.explicit_location] if state.explicit_location else []))]
+            is_gulf = any(any(k in g for k in ("saudi", "uae", "dubai", "riyadh", "jeddah", "dammam", "gulf", "gcc", "qatar", "kuwait", "bahrain", "oman")) for g in req_geos)
+            if is_gulf:
+                FOREIGN_DOMAINS = [
+                    "eg.linkedin.com", "wuzzuf.net", "forasna.com",  # Egypt
+                    "in.linkedin.com", "naukri.com", "foundit.in",   # India
+                    "pk.linkedin.com", "rozee.pk",                   # Pakistan
+                    "bd.linkedin.com",                               # Bangladesh
+                    "uk.linkedin.com", "reed.co.uk",                 # UK
+                ]
+                if any(fd in url for fd in FOREIGN_DOMAINS):
+                    return False
+
+                FOREIGN_ANCHORS = [
+                    "cairo, egypt", "alexandria, egypt", "egypt only", "based in egypt", "cairo",
+                    "london, uk", "london, united kingdom", "bangalore, india", "bengaluru, india",
+                    "pune, india", "mumbai, india", "hyderabad, india", "delhi, india",
+                    "karachi, pakistan", "lahore, pakistan", "islamabad, pakistan",
+                    "denver, co", "san francisco, ca", "new york, ny",
+                ]
+                if any(fa in text for fa in FOREIGN_ANCHORS) and not any(rg in text for rg in ("saudi", "uae", "dubai", "riyadh", "doha", "qatar", "kuwait", "bahrain", "oman", "worldwide", "global remote")):
+                    return False
 
         return True
 
