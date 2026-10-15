@@ -1558,8 +1558,8 @@ document.addEventListener("DOMContentLoaded", () => {
     else if (event === "run.completed") {
       isRunning = false;
       scene.setAgentState("COMPLETED");
-      hud.setPhaseState("EXPORTING");
-      hud.setWaveformActivity(0.3);
+      hud.setPhaseState("COMPLETED");
+      hud.setWaveformActivity(0.1);
 
       cardStateLabel.textContent = "MISSION COMPLETE";
       analyzingTitle.textContent = "Research Complete";
@@ -1888,7 +1888,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 confidence: runData.counters?.records_verified > 0 ? 0.95 : 0.0,
                 model: currentModel,
                 model_mode: "auto",
-                export_file: runData.exports?.[0]?.file_path || "",
+                export_file: runData.exports?.[0]?.storage_key || runData.exports?.[0]?.file_path || runData.exports?.[0]?.file_name || "",
                 summary: `Mission ${runData.status}. Discovered and verified ${records.length} records.`,
                 pages_fetched: runData.counters?.pages_fetched || 1
               }

@@ -1370,6 +1370,7 @@ class ResearchOrchestrator:
             now_iso = datetime.now(timezone.utc).isoformat()
             self.run_repo.update_run_status(run.id, final_status, finished_at=now_iso)
             self.task_repo.update_task_status(task.id, TaskStatus.COMPLETED)
+            logger.info(f"Run {run.id} finished with status '{final_status.value}' (records verified: {len(final_records)}, pages fetched: {counters.pages_fetched})")
 
             # Calculate average confidence across final verified records or research synthesis
             conf_vals = [r.confidence for r in final_records if r.confidence is not None]
