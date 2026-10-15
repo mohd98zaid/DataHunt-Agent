@@ -181,40 +181,61 @@ Produce rigorous, useful technical analysis, not superficial summaries. However,
 {source_texts}
 </source_document_excerpts>
 
-Generate a comprehensive, rigorous Markdown Research Dossier adhering to this structure:
+Generate an exhaustive, publication-grade Academic & Technical Research Paper adhering strictly to this structure:
 
-# 🔬 Executive Research Dossier: {query_text}
+# 📄 Comprehensive Technical Research Paper: {query_text}
 
-## 1. Executive Summary & Core Value Proposition
-- Grounded, precise technical definition of the technology, architecture, or system.
-- Historical context: why it was created, predecessor limitations it overcomes, and why it is critical in production.
-- Foundational architectural philosophy (e.g. declarative composition, pure functional pipelines, stream-first design, async concurrency).
+### Abstract & Executive Summary
+- Concise, publication-grade abstract summarizing the technology/topic, core problem motivation, structural methodology, empirical findings, and industry implications.
+- **Keywords**: Primary domain keywords and subject classifications.
 
-## 2. Architectural Blueprint & Core Mechanics
-- Comprehensive breakdown of internal execution mechanics, data structures, and pipeline lifecycle.
-- Custom ASCII architecture diagram specifically reflecting the actual components, protocols, and data pathways of `{query_text}`.
-- Protocol specification: invocation patterns (synchronous, asynchronous, streaming, event-driven streaming, batching), backpressure handling, and memory lifecycle.
+---
 
-## 3. Core Components & Capabilities Matrix
-- Itemized breakdown of primary classes, interfaces, primitives, and modules discovered across the documentation.
-- Structured Markdown comparison table: `Component / Primitive | Architectural Role | Key Inputs & Outputs | Primary Capability`.
+## 1. Introduction, Background & Theoretical Motivation
+- Comprehensive background and problem statement: What engineering, computational, or scientific challenge necessitated this system/concept?
+- Historical evolution and predecessor limitations: Specific limitations of prior art and prior architectures that this solves.
+- Core taxonomy, definitions, and scope: Precise definitions of key concepts and theoretical assumptions.
 
-## 4. Practical Implementation & Production Code Patterns
-- Complete, copy-pasteable code examples demonstrating canonical real-world usage patterns with realistic imports and parameter handling.
-- Advanced workflow patterns (e.g. parallel branching, dynamic routing, conditional execution, streaming outputs).
-- Production-grade resilience: timeout handling, fallbacks (`.with_fallbacks()`), exponential backoff retries, and distributed tracing.
+## 2. Architectural Blueprint & Core System Mechanics
+- Complete architectural blueprint and execution paradigm.
+- Detailed, customized ASCII architectural schematic showing component boundaries, data ingress/egress, state transitions, and coordination loops.
+- Core data structures, state models, protocol specifications, concurrency controls, and memory/serialization lifecycle.
 
-## 5. Comparative Analysis & Production Trade-offs
-- Deep comparative evaluation against direct alternative frameworks, predecessors, or manual implementations.
-- Comprehensive Trade-offs Matrix comparing: Complexity, Latency/Throughput, Debuggability, Learning Curve, Ecosystem Integration.
-- Known limitations, failure modes, anti-patterns to avoid in production.
+## 3. Subsystem Taxonomy & Detailed Capability Matrix
+- Granular breakdown of core components, primitives, interfaces, and sub-modules discovered across the literature.
+- Structured Markdown comparison table:
+  `| Subsystem / Primitive | Architectural Role | Ingestion / Input Contract | Output / State Impact | Production Capability |`
+- Protocol specifications and interface boundaries.
 
-## 6. Primary Documentation & Verified Citation Index
-- List the primary documentation URLs, GitHub source repositories, and whitepapers actually consulted, with exact section or locator provenance when available. Do not claim the list is exhaustive unless the run metadata supports that claim.
-- Attach source references to factual claims throughout the report, not only in the final source index.
-- Clearly distinguish source-supported facts from analysis or inference.
-- Include only architecture details, protocols, code patterns, and production behavior that are supported by the supplied evidence. Label illustrative examples and assumptions explicitly.
-- If no verified evidence supports historical context, latency claims, performance comparisons, or specific implementation behavior, state that the information was not established.
+## 4. Empirical Performance, Scalability & Quantitative Evaluation
+- Quantitative analysis of performance characteristics: latency, throughput, memory footprint, and scaling bounds.
+- Comparison matrix against baseline and state-of-the-art alternative frameworks/approaches across key operational dimensions.
+- Algorithmic and computational complexity (time, space, and I/O complexity).
+
+## 5. Practical Implementation & Production Engineering Patterns
+- Complete, production-grade, copy-pasteable code examples (with full imports, typed signatures, error boundaries, and state initialization).
+- Advanced production patterns: async streaming, cyclic graph loops, dynamic routing, distributed checkpoints, and telemetry/tracing.
+- Production hardening: timeout budgets, retry policies with backoff, fault tolerance, and graceful degradation.
+
+## 6. Comparative Analysis & Production Trade-Offs Matrix
+- Head-to-head architectural comparison against leading alternative paradigms.
+- Structured Trade-Offs Matrix:
+  `| Dimension | {query_text} | Leading Alternative | Architectural Rationale & Trade-off |`
+- Critical discussion of trade-offs: developer velocity vs. runtime rigor, abstraction cost, observability overhead.
+
+## 7. Known Limitations, Anti-Patterns & Failure Modes
+- Deep dive into known bottlenecks, edge-case failure modes, and debugging challenges.
+- Anti-patterns to avoid in production with concrete examples.
+- Security, governance, compliance, and multi-tenant isolation considerations.
+
+## 8. Open Research Directions & Concluding Verdict
+- Active areas of ongoing research and unanswered questions.
+- Long-term viability, enterprise adoption criteria, and definitive architectural verdict.
+
+## 9. Primary Documentation, Literature & Citations Index
+- Itemized bibliographic references for all consulted documentation, whitepapers, repositories, and specifications with exact section/URL provenance.
+- Attach source references to factual claims throughout the report, not only in the final citation index.
+- Clearly distinguish source-supported facts from analysis, assumptions, or inference.
 """
 
 MARKET_SYNTHESIS_TEMPLATE = """You are the Chief Market Intelligence & Product Strategy Analyst for DataHunt.

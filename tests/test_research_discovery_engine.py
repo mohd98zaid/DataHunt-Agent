@@ -255,3 +255,45 @@ Jev is TypeSafe's flagship model that processes state snapshots and returns type
     assert "## 1. Executive Answer & Technical Overview" in markdown
     assert "Jev is TypeSafe's flagship model" in markdown
 
+
+def test_comprehensive_research_paper_structure():
+    """Verify research synthesis produces an exhaustive publication-grade research paper."""
+    mock_search = MagicMock()
+    mock_fetch = MagicMock()
+
+    mock_search.execute.return_value = ToolResult(
+        success=True,
+        data=[{"title": "Mamba State Space Models", "url": "https://arxiv.org/abs/2312.00752", "snippet": "Linear-time sequence modeling with selective state spaces."}]
+    )
+
+    doc = SourceDocument(
+        id="doc_mamba",
+        run_id="run_mamba",
+        requested_url="https://arxiv.org/abs/2312.00752",
+        canonical_url="https://arxiv.org/abs/2312.00752",
+        title="Mamba: Linear-Time Sequence Modeling with Selective State Spaces",
+        domain="arxiv.org",
+        extracted_text="Mamba is a selective state space model that achieves 5x higher throughput than Transformers while scaling linearly with sequence length.",
+    )
+    mock_res = MagicMock()
+    mock_res.success = True
+    mock_res.data = doc
+    mock_fetch.execute.return_value = mock_res
+
+    engine = ResearchDiscoveryEngine(search_tool=mock_search, fetch_tool=mock_fetch, gemini_client=None)
+    result = engine.run_research(query="What is Mamba State Space Model?", max_runtime_seconds=15)
+
+    markdown = result["answer_markdown"]
+    assert "# 📄 Comprehensive Technical Research Paper:" in markdown
+    assert "### Abstract & Executive Summary" in markdown
+    assert "Keywords:" in markdown
+    assert "## 1. Executive Answer & Technical Overview" in markdown
+    assert "## 2. Core Principles & Architecture" in markdown
+    assert "## 3. Subsystem Taxonomy & Detailed Capability Matrix" in markdown
+    assert "## 4. Practical Implementation & Production Engineering Patterns" in markdown
+    assert "## 5. Comparative Trade-offs & Production Dimensions" in markdown
+    assert "## 6. Nuances, Constraints & Edge Cases" in markdown
+    assert "## 7. Concluding Verdict & Research Horizons" in markdown
+    assert "## 8. Verified Sources & Primary Documentation" in markdown
+
+

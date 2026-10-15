@@ -981,13 +981,14 @@ class GeminiClient:
         is_job_query = (intent_spec.intent == ResearchIntent.JOB_SEARCH) and (mode != "research")
         is_market = (intent_spec.intent == ResearchIntent.MARKET_RESEARCH)
         is_answer = (
-            intent_spec.requested_output == ResearchOutputType.ANSWER
+            (intent_spec.requested_output == ResearchOutputType.ANSWER
             or intent_spec.intent in (
                 ResearchIntent.HOW_TO,
                 ResearchIntent.EXPLANATION,
                 ResearchIntent.FACTUAL_RESEARCH,
                 ResearchIntent.COMPARISON
-            )
+            ))
+            and (mode != "research")
         )
 
         if is_job_query and verified_records:
@@ -1022,15 +1023,15 @@ class GeminiClient:
                     verified_records_json=json.dumps(verified_records[:10]),
                     source_texts=source_texts[:14000] if source_texts else "No source document text captured."
                 )
-            elif is_answer:
-                prompt = DIRECT_ANSWER_SYNTHESIS_TEMPLATE.format(
+            elif mode == "research" or (not is_answer and (source_texts or verified_records)):
+                prompt = RESEARCH_SYNTHESIS_TEMPLATE.format(
                     query_text=query,
                     run_metadata_json=json.dumps(run_metadata),
                     verified_records_json=json.dumps(verified_records[:10]),
                     source_texts=source_texts[:14000] if source_texts else "No source document text captured."
                 )
-            elif source_texts or verified_records:
-                prompt = RESEARCH_SYNTHESIS_TEMPLATE.format(
+            elif is_answer:
+                prompt = DIRECT_ANSWER_SYNTHESIS_TEMPLATE.format(
                     query_text=query,
                     run_metadata_json=json.dumps(run_metadata),
                     verified_records_json=json.dumps(verified_records[:10]),
@@ -1048,6 +1049,14 @@ class GeminiClient:
         # Intelligent Knowledge Synthesis Fallback (when LLM hits quota limits or is offline)
         if is_market:
             return synthesize_local_market_dossier(
+                query=query,
+                run_metadata=run_metadata,
+                verified_records=verified_records,
+                source_texts=source_texts
+            )
+
+        if mode == "research":
+            return synthesize_local_research_dossier(
                 query=query,
                 run_metadata=run_metadata,
                 verified_records=verified_records,
