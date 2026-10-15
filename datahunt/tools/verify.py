@@ -2,6 +2,7 @@ from typing import Any, Dict, List, Optional
 from datahunt.models import ExtractedRecord, VerificationStatus
 from datahunt.policy import is_public_business_email
 from datahunt.tools.base import ToolResult
+from datahunt.tools.extract import is_aggregator_or_count_title
 # Gemini client import (commented out as sole import in favor of NvidiaClient):
 # from datahunt.llm.gemini_client import GeminiClient
 from datahunt.llm import NvidiaClient, GeminiClient
@@ -22,6 +23,15 @@ GEO_SYNONYMS = {
     "canada": ["canada", "toronto", "vancouver", "montreal", "ca"]
 }
 
+KNOWN_HUBS = {
+    "san francisco", "new york", "london", "singapore", "dubai", "seattle",
+    "austin", "boston", "toronto", "berlin", "chicago", "los angeles", "florida", "tokyo", "paris", "riyadh",
+    "india", "bangalore", "bengaluru", "mumbai", "delhi", "new delhi", "hyderabad", "pune", "chennai", "gurgaon", "noida",
+    "germany", "france", "netherlands", "amsterdam", "ireland", "dublin", "spain", "madrid", "barcelona",
+    "italy", "rome", "milan", "canada", "vancouver", "montreal", "australia", "sydney", "melbourne",
+    "united states", "usa", "california", "texas", "united kingdom", "england", "scotland"
+}
+
 def check_geographic_compliance(job_location: Optional[str], requested_geo: Optional[str]) -> bool:
     if not requested_geo or not str(requested_geo).strip():
         return True
@@ -30,10 +40,6 @@ def check_geographic_compliance(job_location: Optional[str], requested_geo: Opti
 
     geo_lower = str(requested_geo).lower().strip()
     loc_lower = str(job_location).lower().strip()
-
-    # Remote / Worldwide / Anywhere is always compliant
-    if any(rem in loc_lower for rem in ("remote", "anywhere", "worldwide", "global", "unspecified")):
-        return True
 
     # Support composite queries like "Saudi or UAE", "Dubai and Riyadh"
     allowed_terms = set()
@@ -45,16 +51,17 @@ def check_geographic_compliance(job_location: Optional[str], requested_geo: Opti
         else:
             allowed_terms.add(p)
 
+    # 1. Direct allowed region match
     if any(term in loc_lower for term in allowed_terms):
         return True
 
-    # If location explicitly contains a conflicting major hub outside allowed terms, it's a conflict
-    KNOWN_HUBS = {
-        "san francisco", "new york", "london", "singapore", "dubai", "seattle",
-        "austin", "boston", "toronto", "berlin", "chicago", "los angeles", "florida", "tokyo", "paris", "riyadh"
-    }
+    # 2. Conflicting foreign hub / country check
     if any(hub in loc_lower for hub in KNOWN_HUBS if hub not in allowed_terms):
         return False
+
+    # 3. Unanchored Remote / Worldwide / Anywhere is compliant
+    if any(rem in loc_lower for rem in ("remote", "anywhere", "worldwide", "global", "unspecified")):
+        return True
 
     return True
 
@@ -125,13 +132,17 @@ class VerifyTool:
 
         # 4. Check job listing validity (reject login portals, directory roots, aggregator titles)
         if record.record_type == "job_listing":
-            t_lower = str(fields.get("title") or "").strip().lower()
+            raw_title = str(fields.get("title") or "").strip()
+            t_lower = raw_title.lower()
             c_lower = str(fields.get("company") or "").strip().lower()
             if any(lp in t_lower for lp in ("sign in", "log in", "login", "mygreenhouse")):
                 record.warnings.append("Job title is a login portal page")
                 is_verified = False
             elif t_lower and c_lower and (t_lower == c_lower or t_lower.replace(" ", "") == c_lower.replace(" ", "")):
                 record.warnings.append("Job title matches company name (directory root)")
+                is_verified = False
+            elif is_aggregator_or_count_title(raw_title):
+                record.warnings.append(f"Job title '{raw_title}' is an aggregator/listing page, not an individual job listing")
                 is_verified = False
 
         if is_verified:

@@ -342,6 +342,8 @@ def is_valid_job_url(url: str) -> bool:
         # Global aggregators
         "indeed.com", "glassdoor.com", "ziprecruiter.com", "monster.com",
         "simplyhired.com", "jooble.org", "talent.com", "remotedxb.com",
+        "expertini.com", "adzuna.com", "adzuna.ae", "grabjobs.co",
+        "careerjet.com", "careerjet.ae", "drjobs.ae", "recruit.net",
         # UK
         "totaljobs.com", "reed.co.uk",
         # Startup / remote
@@ -353,6 +355,10 @@ def is_valid_job_url(url: str) -> bool:
         "eurojobs.com", "eurotechjobs.com", "justjoin.it", "landing.jobs",
     )
     if any(hostname == ad or hostname.endswith("." + ad) for ad in aggregator_domains):
+        if any(p in path for p in ("/search", "/skill", "/skills", "/category", "/browse", "/tags", "/jobs/")):
+            # If path ends with -jobs or contains a count / aggregator pattern, reject
+            if re.search(r"-\d+-jobs|jobs-in-|\b\d+-", path) or "-jobs" in path:
+                return False
         if any(p in path for p in ("/search", "/skill", "/skills", "/category", "/browse", "/tags")):
             return False
         if "jobs-in" in path and not is_specific_posting:
@@ -365,15 +371,16 @@ def is_valid_job_url(url: str) -> bool:
         return False
 
     # 9. LinkedIn Jobs & Hiring Posts:
-    # Accept /jobs/view/<id>, search results, and public hiring posts (/posts/, /feed/update/, /pulse/)
+    # Accept /jobs/view/<id>, job slugs, and public hiring posts (/posts/, /feed/update/, /pulse/)
+    # Reject generic search result listings (/jobs/search, /jobs/...-jobs, /jobs/collections)
     if "linkedin.com" in hostname:
-        if "/jobs/view/" in path or "/jobs/search" in path:
-            return True
         if "/in/" in path or "/company/" in path:
             return False  # Profile or company pages, not job listings
-        if "/jobs" in path:
+        if any(p in path for p in ("/posts/", "/feed/update/", "/pulse/")):
             return True
-        if "/posts/" in path or "/feed/update/" in path or "/pulse/" in path:
+        if "/jobs/search" in path or "/jobs/collections" in path or "-jobs" in path:
+            return False  # Aggregator search result listing, not an individual job
+        if "/jobs/view/" in path or re.search(r"/jobs/[a-zA-Z0-9_\-]+", path):
             return True
         return False
 

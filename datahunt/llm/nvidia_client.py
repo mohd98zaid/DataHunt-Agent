@@ -709,43 +709,87 @@ class NvidiaClient:
         return scored
 
     @traceable(run_type="chain", name="DataHunt.ExtractFromDocument")
-    def extract_from_document(self, document: Any, spec: ResearchSpec) -> List[Dict[str, Any]]:
-        """Extract structured records from fetched page text."""
-        content = getattr(document, "content_text", "") or ""
-        url = getattr(document, "url", "") or ""
-        title = getattr(document, "title", "") or ""
-        doc_id = getattr(document, "id", "") or "doc_unknown"
+    def extract_from_document(
+        self,
+        *args,
+        document: Any = None,
+        spec: Optional[ResearchSpec] = None,
+        doc_text: Optional[str] = None,
+        doc_metadata: Optional[Dict[str, Any]] = None,
+        record_schema: Optional[Dict[str, Any]] = None,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Extract structured records from fetched page text with universal parameter support."""
+        if args:
+            if len(args) == 2 and (hasattr(args[0], "extracted_text") or hasattr(args[0], "content_text")):
+                document = args[0]
+                spec = args[1]
+            elif len(args) >= 1 and isinstance(args[0], ResearchSpec):
+                spec = args[0]
+                if len(args) >= 2 and doc_text is None:
+                    doc_text = args[1]
+                if len(args) >= 3 and doc_metadata is None:
+                    doc_metadata = args[2]
+                if len(args) >= 4 and record_schema is None:
+                    record_schema = args[3]
+            elif len(args) >= 2 and isinstance(args[1], ResearchSpec):
+                document = args[0]
+                spec = args[1]
+
+        content = (
+            doc_text
+            or (getattr(document, "extracted_text", "") if document else "")
+            or (getattr(document, "content_text", "") if document else "")
+            or (str(document) if isinstance(document, str) else "")
+        )
+        url = (
+            (doc_metadata.get("url") if doc_metadata else "")
+            or (getattr(document, "canonical_url", "") if document else "")
+            or (getattr(document, "requested_url", "") if document else "")
+            or (getattr(document, "url", "") if document else "")
+        )
+        title = (
+            (doc_metadata.get("title") if doc_metadata else "")
+            or (getattr(document, "title", "") if document else "")
+        )
+        doc_id = (
+            (doc_metadata.get("id") if doc_metadata else "")
+            or (getattr(document, "id", "") if document else "")
+            or "doc_unknown"
+        )
 
         if not content.strip():
-            return []
+            return {"records": [], "document_warnings": []}
 
         if self.is_live:
             try:
                 bounded_text = content[:settings.MAX_EXTRACTED_CHARS]
-                doc_metadata = {"url": url, "title": title, "doc_id": doc_id}
-                record_schema = {"requested_fields": spec.requested_fields}
+                meta_payload = {"url": url, "title": title, "doc_id": doc_id}
+                schema_payload = record_schema or {"requested_fields": spec.requested_fields if spec else []}
+                spec_payload = spec.model_dump_json() if spec and hasattr(spec, "model_dump_json") else json.dumps(getattr(spec, "__dict__", {}))
                 prompt = EXTRACTION_TEMPLATE.format(
-                    research_spec_json=spec.model_dump_json(),
-                    record_schema_json=json.dumps(record_schema),
-                    document_metadata_json=json.dumps(doc_metadata),
+                    research_spec_json=spec_payload,
+                    record_schema_json=json.dumps(schema_payload),
+                    document_metadata_json=json.dumps(meta_payload),
                     bounded_document_text=bounded_text,
                 )
                 extracted = self._call_nvidia_json(prompt, schema_description="Extraction schema", stage="extract")
-                if isinstance(extracted, list):
-                    records = extracted
-                elif isinstance(extracted, dict) and "records" in extracted:
-                    records = extracted["records"]
-                else:
-                    records = [extracted] if isinstance(extracted, dict) and extracted else []
+                raw_list = []
+                doc_warns = []
+                if isinstance(extracted, dict):
+                    raw_list = extracted.get("records") or []
+                    doc_warns = extracted.get("document_warnings") or []
+                elif isinstance(extracted, list):
+                    raw_list = extracted
 
                 valid_records = []
-                for r in records:
+                for r in raw_list:
                     if isinstance(r, dict) and any(v for v in r.values() if v):
                         r["document_id"] = doc_id
                         r["source_url"] = url
                         valid_records.append(r)
                 if valid_records:
-                    return valid_records
+                    return {"records": valid_records, "document_warnings": doc_warns}
             except Exception as e:
                 logger.warning(f"Live NVIDIA extraction failed ({e}), using deterministic extractor")
 
@@ -755,23 +799,37 @@ class NvidiaClient:
         if fields:
             fields["document_id"] = doc_id
             fields["source_url"] = url
-            return [fields]
-        return []
+            return {"records": [fields], "document_warnings": []}
+        return {"records": [], "document_warnings": []}
 
     @traceable(run_type="chain", name="DataHunt.VerifyRecord")
-    def verify_record(self, record: Any, evidence: List[Any]) -> Dict[str, Any]:
+    def verify_record(
+        self,
+        record: Any,
+        evidence: List[Any],
+        required_fields: Optional[List[str]] = None,
+        freshness_rule: Optional[Dict[str, Any]] = None,
+        contact_policy: str = "business_public_only",
+        **kwargs
+    ) -> Dict[str, Any]:
         """Verify record against captured evidence."""
-        rec_data = record if isinstance(record, dict) else (record.data if hasattr(record, "data") else {})
+        rec_data = record if isinstance(record, dict) else (
+            record.data if hasattr(record, "data") else (
+                record.fields if hasattr(record, "fields") else {}
+            )
+        )
         ev_data = evidence if isinstance(evidence, list) else []
+        req_f = required_fields or ["title", "company"]
+        fresh_rule = freshness_rule or {}
 
         if self.is_live:
             try:
                 prompt = VERIFICATION_TEMPLATE.format(
                     record_json=json.dumps(rec_data),
                     evidence_json=json.dumps(ev_data[:10]),
-                    required_fields_json=json.dumps(["title", "company"]),
-                    freshness_rule_json=json.dumps({}),
-                    contact_policy="business_public_only",
+                    required_fields_json=json.dumps(req_f),
+                    freshness_rule_json=json.dumps(fresh_rule),
+                    contact_policy=contact_policy,
                 )
                 return self._call_nvidia_json(prompt, schema_description="Verification schema", stage="verify")
             except Exception as e:
@@ -818,16 +876,53 @@ class NvidiaClient:
     @traceable(run_type="chain", name="DataHunt.SummarizeRun")
     def summarize_run(
         self,
-        query: str,
-        run_metadata: Dict[str, Any],
-        verified_records: List[Dict[str, Any]],
+        *args,
+        query: str = "",
+        query_text: str = "",
+        run_metadata: Optional[Dict[str, Any]] = None,
+        verified_records: Optional[List[Dict[str, Any]]] = None,
         source_texts: str = "",
         spec: Optional[ResearchSpec] = None,
         intent_spec: Optional[Any] = None,
+        agent_mode: str = "auto",
+        **kwargs
     ) -> str:
-        """Generate structured executive research summary or dossier."""
-        is_job = (intent_spec and intent_spec.intent == ResearchIntent.JOB_SEARCH) or (spec and spec.agent_mode == "jobs")
-        is_market = (intent_spec and intent_spec.intent == ResearchIntent.MARKET_RESEARCH) or (spec and spec.agent_mode == "market")
+        """Generate structured executive research summary or dossier with universal signature support."""
+        if args:
+            if isinstance(args[0], dict):
+                run_metadata = args[0]
+                if len(args) > 1 and verified_records is None:
+                    verified_records = args[1]
+                if len(args) > 2 and not source_texts:
+                    source_texts = args[2]
+                if len(args) > 3 and not query_text:
+                    query_text = args[3]
+            elif isinstance(args[0], str):
+                query = args[0]
+                if len(args) > 1 and run_metadata is None and isinstance(args[1], dict):
+                    run_metadata = args[1]
+                if len(args) > 2 and verified_records is None:
+                    verified_records = args[2]
+                if len(args) > 3 and not source_texts:
+                    source_texts = args[3]
+
+        resolved_query = (
+            query_text
+            or query
+            or (run_metadata.get("request_text") if run_metadata else "")
+            or (run_metadata.get("topic") if run_metadata else "")
+            or "Research Analysis"
+        )
+        run_meta = run_metadata or {}
+        rec_list = verified_records or []
+
+        resolved_mode = agent_mode if agent_mode != "auto" else run_meta.get("agent_mode", "auto")
+        if not intent_spec:
+            from datahunt.agents.intent_router import IntentRouter
+            intent_spec = IntentRouter(gemini_client=self if getattr(self, "is_live", False) else None).classify(resolved_query, resolved_mode)
+
+        is_job = (intent_spec and intent_spec.intent == ResearchIntent.JOB_SEARCH) or (spec and spec.agent_mode == "jobs") or (resolved_mode == "jobs")
+        is_market = (intent_spec and intent_spec.intent == ResearchIntent.MARKET_RESEARCH) or (spec and spec.agent_mode == "market") or (resolved_mode == "market")
         is_answer = intent_spec and intent_spec.intent in (
             ResearchIntent.HOW_TO, ResearchIntent.EXPLANATION,
             ResearchIntent.FACTUAL_RESEARCH, ResearchIntent.COMPARISON
@@ -837,22 +932,22 @@ class NvidiaClient:
             try:
                 if is_market:
                     prompt = MARKET_SYNTHESIS_TEMPLATE.format(
-                        query_text=query,
-                        run_metadata_json=json.dumps(run_metadata),
-                        verified_records_json=json.dumps(verified_records[:20]),
+                        query_text=resolved_query,
+                        run_metadata_json=json.dumps(run_meta),
+                        verified_records_json=json.dumps(rec_list[:20]),
                         source_texts=source_texts[:15000] if source_texts else "No source text captured.",
                     )
-                elif is_answer or (spec and spec.agent_mode == "research"):
+                elif is_answer or (spec and spec.agent_mode == "research") or resolved_mode == "research":
                     prompt = DIRECT_ANSWER_SYNTHESIS_TEMPLATE.format(
-                        query_text=query,
-                        run_metadata_json=json.dumps(run_metadata),
-                        verified_records_json=json.dumps(verified_records[:20]),
+                        query_text=resolved_query,
+                        run_metadata_json=json.dumps(run_meta),
+                        verified_records_json=json.dumps(rec_list[:20]),
                         source_texts=source_texts[:15000] if source_texts else "No source text captured.",
                     )
                 else:
                     prompt = SUMMARY_TEMPLATE.format(
-                        run_metadata_json=json.dumps(run_metadata),
-                        verified_records_json=json.dumps(verified_records[:20]),
+                        run_metadata_json=json.dumps(run_meta),
+                        verified_records_json=json.dumps(rec_list[:20]),
                     )
 
                 text_output = self._call_nvidia_text(prompt, stage="summarize")
@@ -864,22 +959,22 @@ class NvidiaClient:
         # Deterministic synthesis
         if is_market:
             return synthesize_local_market_dossier(
-                query=query,
-                run_metadata=run_metadata,
-                verified_records=verified_records,
+                query=resolved_query,
+                run_metadata=run_meta,
+                verified_records=rec_list,
                 source_texts=source_texts,
             )
         if is_answer:
             return synthesize_direct_answer(
-                query=query,
-                run_metadata=run_metadata,
-                verified_records=verified_records,
+                query=resolved_query,
+                run_metadata=run_meta,
+                verified_records=rec_list,
                 source_texts=source_texts,
                 intent_spec=intent_spec,
             )
         return synthesize_local_research_dossier(
-            query=query,
-            run_metadata=run_metadata,
-            verified_records=verified_records,
+            query=resolved_query,
+            run_metadata=run_meta,
+            verified_records=rec_list,
             source_texts=source_texts,
         )

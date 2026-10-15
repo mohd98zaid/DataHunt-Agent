@@ -125,7 +125,15 @@ def parse_job_timestamp(
     except Exception:
         pass
 
-    return clean_text, None, "RECENT"
+    # Reject non-date text artifacts (e.g. "Salary range", "Competitive", etc.)
+    non_date_terms = ("salary", "compensation", "competitive", "range", "negotiable", "apply", "full-time", "part-time", "contract", "remote", "hybrid", "overview", "benefit")
+    if any(ndt in clean_text.lower() for ndt in non_date_terms):
+        return None, None, "UNKNOWN"
+
+    if clean_text.lower() in ("recent", "new", "just now", "just posted"):
+        return now.isoformat(), 3600, "RECENT"
+
+    return None, None, "UNKNOWN"
 
 
 def _enrich_job_fields(fields: Dict[str, Any], doc_text: str, url: str) -> Dict[str, Any]:
@@ -179,19 +187,25 @@ def _enrich_job_fields(fields: Dict[str, Any], doc_text: str, url: str) -> Dict[
         from datahunt.agents.query_understanding import detect_local_currency
         fields["currency"] = detect_local_currency(loc, default=None)
 
-    # 3. Experience range
-    exp_m = re.search(r'(\d+)\s*[-–to]+\s*(\d+)\s*(?:years?|yrs?)', text_sample, re.I)
+    # 3. Experience range (scan deeper into document text where requirements/qualifications live)
+    exp_sample = (doc_text or "")[:15000]
+    exp_m = re.search(r'(\d+)\s*[-–to]+\s*(\d+)\s*(?:years?|yrs?)', exp_sample, re.I)
     if exp_m:
         fields["experience_min"] = int(exp_m.group(1))
         fields["experience_max"] = int(exp_m.group(2))
     else:
-        exp_s = re.search(r'(\d+)\+?\s*(?:years?|yrs?)\s*(?:of\s+)?(?:experience|exp)', text_sample, re.I)
-        if exp_s:
-            fields["experience_min"] = int(exp_s.group(1))
+        exp_min_m = re.search(r'(?:minimum|at least|min\.?)\s*(\d+)\+?\s*(?:years?|yrs?)', exp_sample, re.I)
+        if exp_min_m:
+            fields["experience_min"] = int(exp_min_m.group(1))
             fields["experience_max"] = None
         else:
-            fields["experience_min"] = None
-            fields["experience_max"] = None
+            exp_s = re.search(r'(\d+)\+?\s*(?:years?|yrs?)\s*(?:of\s+)?(?:experience|exp|relevant\s+experience)', exp_sample, re.I)
+            if exp_s:
+                fields["experience_min"] = int(exp_s.group(1))
+                fields["experience_max"] = None
+            else:
+                fields["experience_min"] = None
+                fields["experience_max"] = None
 
     # 4. Skills detection
     common_skills = [
@@ -952,6 +966,40 @@ def normalize_text_for_identity(text: Optional[str]) -> str:
     text = re.sub(r"[^\w\s]", "", text)
     return re.sub(r"\s+", " ", text).strip()
 
+def is_aggregator_or_count_title(title: Optional[str]) -> bool:
+    """
+    Detect whether a string is a search aggregator SERP title, job count heading,
+    or directory root rather than a specific individual job opening.
+    Examples:
+      - '18 Genai engineer jobs in Dubai'
+      - '30,081+ Dubaibased Senior Ai Engineer Genai Llms Jobs in Dubai, UAE Local Employers Hiring'
+      - '523 Artificial Intelligence Engineer'
+      - 'Jobs in Dubai - 28,573 Openings'
+    """
+    if not title or not isinstance(title, str):
+        return False
+    t_clean = title.strip()
+    t_low = t_clean.lower()
+
+    # 1. Starts with count: e.g. "18 Genai...", "30,081+...", "523 Artificial...", "100+ Jobs..."
+    if re.search(r"^\s*[\d,]+\+?\s+.*(?:jobs?|openings?|vacancies?|positions?|engineers?|developers?|roles?)\b", t_low):
+        return True
+
+    # 2. Aggregator marketing slogans / banners
+    if any(banner in t_low for banner in (
+        "local employers hiring", "make your job hunting simpler",
+        "local employers", "hiring on indeed", "hiring in dubai",
+        "search results", "browse jobs", "view all jobs",
+    )):
+        return True
+
+    # 3. Aggregator search pattern: e.g. "Genai engineer jobs in Dubai", "AI Engineer Jobs in UAE"
+    if re.search(r"\b(?:jobs?|vacancies?|openings?)\s+in\s+[a-zA-Z\s]+", t_low) and not any(p in t_low for p in ("head of", "lead", "director", "manager of")):
+        if re.search(r"\bjobs\s+in\s+(?:dubai|uae|saudi|riyadh|abu dhabi|middle east|qatar|kuwait|egypt|india|london|us|singapore|remote)\b", t_low):
+            return True
+
+    return False
+
 def is_substantive_record(fields: Dict[str, Any]) -> bool:
     """Validate that an extracted record contains actual factual data, not all-null or model refusal text."""
     if not fields:
@@ -982,6 +1030,10 @@ def is_substantive_record(fields: Dict[str, Any]) -> bool:
 
     title = str(fields.get("title") or fields.get("job_title") or fields.get("name") or "").strip()
     company = str(fields.get("company") or fields.get("company_name") or "").strip()
+
+    # Reject aggregator count titles (e.g. "18 Genai engineer jobs in Dubai", "30,081+ Dubaibased...")
+    if title and is_aggregator_or_count_title(title):
+        return False
 
     # For records that have both title and company set, both must be non-garbage
     if title and _is_garbage_value(title):

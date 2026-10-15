@@ -349,6 +349,40 @@ DISQUALIFYING_JOB_FAMILIES = [
 ]
 
 
+def is_aggregator_or_count_title(title: Optional[str]) -> bool:
+    """
+    Detect whether a string is a search aggregator SERP title, job count heading,
+    or directory root rather than a specific individual job opening.
+    Examples:
+      - '18 Genai engineer jobs in Dubai'
+      - '30,081+ Dubaibased Senior Ai Engineer Genai Llms Jobs in Dubai, UAE Local Employers Hiring'
+      - '523 Artificial Intelligence Engineer'
+    """
+    if not title or not isinstance(title, str):
+        return False
+    t_clean = title.strip()
+    t_low = t_clean.lower()
+
+    # 1. Starts with count: e.g. "18 Genai...", "30,081+...", "523 Artificial...", "100+ Jobs..."
+    if re.search(r"^\s*[\d,]+\+?\s+.*(?:jobs?|openings?|vacancies?|positions?|engineers?|developers?|roles?)\b", t_low):
+        return True
+
+    # 2. Aggregator marketing slogans / banners
+    if any(banner in t_low for banner in (
+        "local employers hiring", "make your job hunting simpler",
+        "local employers", "hiring on indeed", "hiring in dubai",
+        "search results", "browse jobs", "view all jobs",
+    )):
+        return True
+
+    # 3. Aggregator search pattern: e.g. "Genai engineer jobs in Dubai", "AI Engineer Jobs in UAE"
+    if re.search(r"\b(?:jobs?|vacancies?|openings?)\s+in\s+[a-zA-Z\s]+", t_low) and not any(p in t_low for p in ("head of", "lead", "director", "manager of")):
+        if re.search(r"\bjobs\s+in\s+(?:dubai|uae|saudi|riyadh|abu dhabi|middle east|qatar|kuwait|egypt|india|london|us|singapore|remote)\b", t_low):
+            return True
+
+    return False
+
+
 def match_title_relevance(
     req_title: Optional[str],
     job_title: Optional[str],
@@ -364,6 +398,14 @@ def match_title_relevance(
 
     if not job_title or not job_title.strip():
         return MatchStatus.UNKNOWN, 0.3, "Job title not disclosed"
+
+    # Reject aggregator / count titles
+    if is_aggregator_or_count_title(job_title):
+        return (
+            MatchStatus.MISMATCH,
+            0.0,
+            f"Title '{job_title}' is an aggregator/listing page, not an individual job listing"
+        )
 
     req_t = req_title.lower().strip()
     job_t = job_title.lower().strip()
