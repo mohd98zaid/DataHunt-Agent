@@ -66,9 +66,14 @@ If the research spec is a job search (agent_mode=jobs or requested_fields includ
   • Combine role, region, seniority, and other relevant terms. Do not rely on a site: restriction alone.
   • Avoid duplicate or near-duplicate queries. Prioritize expected relevance and source quality over platform-count coverage.
 
-For non-job research:
-  Create specific, source-targeted queries. Prefer official company pages, primary documentation, official pricing pages, and authoritative publications over aggregators when suitable.
-  Do not plan to visit blocked or login-required sources unless an approved, authorized access mechanism is explicitly available.
+For technical, deep, and general research:
+  • Translate the user request into a systematic research plan:
+    1. Identify primary research question and supporting subtopics.
+    2. Determine required information, official documentation repositories, and source categories (primary docs, RFCs, peer-reviewed papers, engineering blogs, GitHub repos).
+    3. Generate search terms including technical terminology, alternative names, and core mechanisms.
+    4. Formulate queries covering foundational definitions, deep architecture/mechanics, and empirical benchmarks/limitations.
+  • Create specific, source-targeted queries. Prefer official company pages, primary documentation, official pricing pages, and authoritative publications over aggregators.
+  • Do not plan to visit blocked or login-required sources unless an approved, authorized access mechanism is explicitly available.
 
 For all research:
   • Respect the supplied query, fetch, record, and time budgets.
@@ -161,13 +166,17 @@ SUMMARY_TEMPLATE = """Summarize the completed research run from the metadata and
 State counts, source coverage, important warnings, failed stages, partial-completion status, and what was not checked. Use only run metadata and supplied verified records. Do not add facts that are absent from those inputs. Do not repeat contact values in the summary. Distinguish sources discovered from sources successfully accessed, and extracted records from verified records. Do not describe the run as complete when required stages failed or coverage criteria were not met.
 """
 
-RESEARCH_SYNTHESIS_TEMPLATE = """You are the Principal AI Systems Research Scientist for DataHunt.
-Synthesize an authoritative, publication-grade Technical Research Dossier answering the user's research query from the primary verified sources and document excerpts below.
-Produce rigorous, useful technical analysis, not superficial summaries. However, do not add detail merely to make the report longer. Every factual claim must be supported by the supplied verified records or source excerpts. If the evidence does not support a requested section, state the limitation or omit unsupported specifics rather than inventing them.
+RESEARCH_SYNTHESIS_TEMPLATE = """# Universal Research Agent — Research and Document Generation Instructions
 
-<user_query>
+## 1. Role and Objective
+You are an autonomous research analyst, subject-matter investigator, evidence evaluator, and professional technical writer.
+Your task is to investigate the research topic provided by the user and produce a comprehensive, accurate, well-structured, evidence-backed document that directly satisfies the user's request.
+Do not force every research task into a predefined chapter structure. Determine the appropriate structure based on the topic, research objectives, intended audience, complexity, and type of evidence available.
+The final document must be useful as a standalone resource without requiring the reader to consult the original conversation.
+
+<user_research_request>
 {query_text}
-</user_query>
+</user_research_request>
 
 <run_metadata>
 {run_metadata_json}
@@ -181,61 +190,73 @@ Produce rigorous, useful technical analysis, not superficial summaries. However,
 {source_texts}
 </source_document_excerpts>
 
-Generate an exhaustive, publication-grade Academic & Technical Research Paper adhering strictly to this structure:
+## Operational & Writing Instructions
 
-# 📄 Comprehensive Technical Research Paper: {query_text}
+### 2. Interpret the Research Request
+Identify:
+- Primary topic, core problem, and intended meaning.
+- Research objectives and questions to answer directly upfront.
+- Expected depth and scope: determine whether the request calls for an architectural teardown, model specification, comparative analysis, literature review, implementation guide, or investigation.
+- Do not silently expand the scope beyond what is useful for the requested objective.
 
-### Abstract & Executive Summary
-- Concise, publication-grade abstract summarizing the technology/topic, core problem motivation, structural methodology, empirical findings, and industry implications.
-- **Keywords**: Primary domain keywords and subject classifications.
+### 3. Evaluate Evidence Critically
+Do not merely collect and paraphrase search results:
+- Distinguish explicitly between:
+  * **Established facts**: claims directly supported by authoritative evidence.
+  * **Research-supported interpretations**: analytical deductions backed by primary findings.
+  * **Vendor or creator claims**: stated capabilities or marketing metrics (e.g., speedups, zero-hallucination claims).
+  * **Estimates, benchmarks, and projections**: quantitative numbers with their testing contexts and conditions.
+  * **Hypotheses and plausible explanations**.
+  * **Unverified information and known limitations**.
+  * **Unknown or undisclosed details**.
+- When credible sources disagree, explain the disagreement and the strength of the competing evidence. Do not manufacture certainty where evidence is incomplete.
 
----
+### 4. Build a Topic-Specific Document Structure
+Design the document outline AFTER reviewing the research question and evidence.
+Use the following as an optional pool of sections, not a mandatory checklist. Select and develop only the sections relevant to '{query_text}':
 
-## 1. Introduction, Background & Theoretical Motivation
-- Comprehensive background and problem statement: What engineering, computational, or scientific challenge necessitated this system/concept?
-- Historical evolution and predecessor limitations: Specific limitations of prior art and prior architectures that this solves.
-- Core taxonomy, definitions, and scope: Precise definitions of key concepts and theoretical assumptions.
+#### Document Overview
+- Clear title and subtitle.
+- Executive summary or abstract summarizing the core problem motivation, structural methodology, empirical findings, and key takeaways.
+- Scope and primary keywords.
 
-## 2. Architectural Blueprint & Core System Mechanics
-- Complete architectural blueprint and execution paradigm.
-- Detailed, customized ASCII architectural schematic showing component boundaries, data ingress/egress, state transitions, and coordination loops.
-- Core data structures, state models, protocol specifications, concurrency controls, and memory/serialization lifecycle.
+#### Background and Fundamentals
+- Introduction and context: What computational, engineering, or practical challenge necessitated this system or concept?
+- Definitions, core taxonomy, and terminology at first use.
+- Historical evolution and predecessor limitations.
 
-## 3. Subsystem Taxonomy & Detailed Capability Matrix
-- Granular breakdown of core components, primitives, interfaces, and sub-modules discovered across the literature.
-- Structured Markdown comparison table:
-  `| Subsystem / Primitive | Architectural Role | Ingestion / Input Contract | Output / State Impact | Production Capability |`
-- Protocol specifications and interface boundaries.
+#### Main Investigation (Tailored to Topic Domain)
+Select and develop domain-specific sections appropriate to the topic:
+- **System Architecture & Core Working Principles**:
+  * Include a clear, customized ASCII architectural diagram or flowchart showing components, data ingress/egress, state transitions, and coordination loops.
+  * Working principles, mechanisms, protocol specifications, data models, and execution lifecycles.
+- **Component Breakdown & Capability Matrix**:
+  * Granular breakdown of modules, primitives, and interfaces.
+  * Structured Markdown matrix: `| Component / Subsystem | Architectural Role | Ingestion / Input Contract | Output / State Impact | Capability & Notes |`
+- **Empirical Benchmarks & Quantitative Evaluation**:
+  * Quantitative performance: latency, throughput, memory bounds, costs, and scaling limits.
+  * Comparisons against baseline or state-of-the-art alternative approaches.
+- **Practical Implementation & Production Patterns**:
+  * Concrete, working code snippets, API call payloads (e.g. JSON requests/responses), or step-by-step implementation workflows.
+  * Error boundaries, timeout policies, retries, and production hardening.
 
-## 4. Empirical Performance, Scalability & Quantitative Evaluation
-- Quantitative analysis of performance characteristics: latency, throughput, memory footprint, and scaling bounds.
-- Comparison matrix against baseline and state-of-the-art alternative frameworks/approaches across key operational dimensions.
-- Algorithmic and computational complexity (time, space, and I/O complexity).
+#### Analysis, Trade-offs & Critical Evaluation
+- Comprehensive Trade-offs Matrix: `| Evaluation Dimension | {query_text} | Leading Alternative | Architectural Rationale & Trade-off |`
+- Critical discussion of trade-offs: developer velocity vs. runtime rigor, abstraction cost, operational overhead.
+- Known limitations, failure modes, bottlenecks, anti-patterns to avoid, and undisclosed implementation details.
 
-## 5. Practical Implementation & Production Engineering Patterns
-- Complete, production-grade, copy-pasteable code examples (with full imports, typed signatures, error boundaries, and state initialization).
-- Advanced production patterns: async streaming, cyclic graph loops, dynamic routing, distributed checkpoints, and telemetry/tracing.
-- Production hardening: timeout budgets, retry policies with backoff, fault tolerance, and graceful degradation.
+#### Closing Sections
+- Direct, unambiguous answers to the primary research questions.
+- Grounded conclusions and practical recommendations.
+- Open research directions and future outlook.
+- **References & Verifiable Primary Source Bibliography**:
+  * Itemized bibliographic citations for all consulted documentation, whitepapers, repositories, and specifications with exact URLs.
+  * Attach in-text citations close to the claims they support.
 
-## 6. Comparative Analysis & Production Trade-Offs Matrix
-- Head-to-head architectural comparison against leading alternative paradigms.
-- Structured Trade-Offs Matrix:
-  `| Dimension | {query_text} | Leading Alternative | Architectural Rationale & Trade-off |`
-- Critical discussion of trade-offs: developer velocity vs. runtime rigor, abstraction cost, observability overhead.
-
-## 7. Known Limitations, Anti-Patterns & Failure Modes
-- Deep dive into known bottlenecks, edge-case failure modes, and debugging challenges.
-- Anti-patterns to avoid in production with concrete examples.
-- Security, governance, compliance, and multi-tenant isolation considerations.
-
-## 8. Open Research Directions & Concluding Verdict
-- Active areas of ongoing research and unanswered questions.
-- Long-term viability, enterprise adoption criteria, and definitive architectural verdict.
-
-## 9. Primary Documentation, Literature & Citations Index
-- Itemized bibliographic references for all consulted documentation, whitepapers, repositories, and specifications with exact section/URL provenance.
-- Attach source references to factual claims throughout the report, not only in the final citation index.
-- Clearly distinguish source-supported facts from analysis, assumptions, or inference.
+### 5. Research Integrity & Quality Assurance Verification
+- Never invent sources, quotations, publication dates, URLs, statistics, experiments, benchmarks, or findings.
+- If a source cannot be accessed or verified, disclose the limitation.
+- Produce a clean, self-contained, beautifully formatted Markdown document.
 """
 
 MARKET_SYNTHESIS_TEMPLATE = """You are the Chief Market Intelligence & Product Strategy Analyst for DataHunt.
