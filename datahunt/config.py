@@ -8,7 +8,18 @@ load_dotenv()
 class Settings:
     APP_NAME: str = "DataHunt"
     
-    # Gemini LLM Settings
+    # LLM Provider Configuration ("nvidia" or "gemini")
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "nvidia")
+
+    # NVIDIA NIM Settings (Free Preview endpoints up to 40 RPM)
+    NVIDIA_API_KEY: str = os.getenv("NVIDIA_API_KEY", "")
+    NVIDIA_BASE_URL: str = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
+    NVIDIA_PRIMARY_MODEL: str = os.getenv("NVIDIA_PRIMARY_MODEL", "openai/gpt-oss-20b")
+    NVIDIA_FALLBACK_MODEL: str = os.getenv("NVIDIA_FALLBACK_MODEL", "nvidia/nemotron-3.5-lightning-30b-a3b")
+    NVIDIA_MAX_OUTPUT_TOKENS: int = int(os.getenv("NVIDIA_MAX_OUTPUT_TOKENS", "2048"))
+    NVIDIA_TEMPERATURE: float = float(os.getenv("NVIDIA_TEMPERATURE", "0.1"))
+
+    # Gemini LLM Settings (kept intact for fallback / alternate provider)
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "auto")
     GEMINI_LITE_MODEL: str = os.getenv("GEMINI_LITE_MODEL", "gemini-flash-lite-latest")
@@ -64,12 +75,24 @@ class Settings:
             os.environ["LANGSMITH_PROJECT"] = self.LANGSMITH_PROJECT
 
     @property
+    def is_nvidia_configured(self) -> bool:
+        return bool(self.NVIDIA_API_KEY and self.NVIDIA_API_KEY.strip())
+
+    @property
     def is_gemini_configured(self) -> bool:
         return bool(self.GEMINI_API_KEY and self.GEMINI_API_KEY.strip())
 
     @property
     def is_langsmith_configured(self) -> bool:
         return bool(self.LANGSMITH_API_KEY and self.LANGSMITH_API_KEY.strip() and self.LANGSMITH_TRACING)
+
+    def masked_nvidia_key(self) -> str:
+        key = self.NVIDIA_API_KEY.strip()
+        if not key:
+            return "<unset>"
+        if len(key) <= 8:
+            return "***"
+        return f"{key[:4]}...{key[-4:]}"
 
     def masked_gemini_key(self) -> str:
         key = self.GEMINI_API_KEY.strip()
@@ -90,6 +113,11 @@ class Settings:
     def to_safe_dict(self) -> dict:
         return {
             "app_name": self.APP_NAME,
+            "llm_provider": self.LLM_PROVIDER,
+            "nvidia_primary_model": self.NVIDIA_PRIMARY_MODEL,
+            "nvidia_fallback_model": self.NVIDIA_FALLBACK_MODEL,
+            "nvidia_configured": self.is_nvidia_configured,
+            "nvidia_key_masked": self.masked_nvidia_key(),
             "gemini_model": self.GEMINI_MODEL,
             "gemini_configured": self.is_gemini_configured,
             "gemini_key_masked": self.masked_gemini_key(),

@@ -1092,19 +1092,29 @@ class LLMSearchProvider:
         blocked_domains: Optional[List[str]] = None
     ) -> List[SearchHit]:
         from datahunt.config import settings
-        if not settings.is_gemini_configured:
+        if not (settings.is_nvidia_configured or settings.is_gemini_configured):
             return []
         try:
             if not self.client:
-                from datahunt.llm.gemini_client import GeminiClient
-                self.client = GeminiClient()
+                # Gemini client initialization (commented out as default in favor of NvidiaClient):
+                # from datahunt.llm.gemini_client import GeminiClient
+                # self.client = GeminiClient()
+                if settings.LLM_PROVIDER == "nvidia" and settings.is_nvidia_configured:
+                    from datahunt.llm.nvidia_client import NvidiaClient
+                    self.client = NvidiaClient()
+                else:
+                    from datahunt.llm.gemini_client import GeminiClient
+                    self.client = GeminiClient()
             if not self.client.is_live:
                 return []
 
-            from datahunt.llm.gemini_client import is_model_cooling, ALL_FREE_TIER_MODELS
-            if all(is_model_cooling(m) for m in ALL_FREE_TIER_MODELS):
-                logger.debug(f"LLM search skipped for '{query}': all Gemini models in cooldown")
-                return []
+            if hasattr(self.client, "candidate_pool"):
+                pass  # NvidiaClient manages per-call fallback internally
+            else:
+                from datahunt.llm.gemini_client import is_model_cooling, ALL_FREE_TIER_MODELS
+                if all(is_model_cooling(m) for m in ALL_FREE_TIER_MODELS):
+                    logger.debug(f"LLM search skipped for '{query}': all Gemini models in cooldown")
+                    return []
 
             prompt = (
                 f"You are a web search index for research and job hunting.\n"

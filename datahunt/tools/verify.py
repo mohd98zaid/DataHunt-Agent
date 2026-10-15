@@ -2,7 +2,9 @@ from typing import Any, Dict, List, Optional
 from datahunt.models import ExtractedRecord, VerificationStatus
 from datahunt.policy import is_public_business_email
 from datahunt.tools.base import ToolResult
-from datahunt.llm.gemini_client import GeminiClient
+# Gemini client import (commented out as sole import in favor of NvidiaClient):
+# from datahunt.llm.gemini_client import GeminiClient
+from datahunt.llm import NvidiaClient, GeminiClient
 
 GEO_SYNONYMS = {
     "uae": ["uae", "united arab emirates", "dubai", "abu dhabi", "sharjah", "ajman", "al ain", "ras al khaimah", "middle east", "mena", "gcc", "ae"],
@@ -60,8 +62,10 @@ class VerifyTool:
     name = "verify_record"
     description = "Verify extracted records against evidence, freshness, and contact policies."
 
-    def __init__(self, gemini_client: Optional[GeminiClient] = None):
-        self.client = gemini_client or GeminiClient()
+    def __init__(self, gemini_client: Optional[Any] = None):
+        # Gemini client initialization (commented out in favor of NvidiaClient):
+        # self.client = gemini_client or GeminiClient()
+        self.client = gemini_client or NvidiaClient()
 
     def execute(
         self,

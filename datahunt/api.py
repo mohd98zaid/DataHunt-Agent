@@ -616,8 +616,11 @@ def apply_job_endpoint(record_id: str, req: JobActionRequest):
 def research_company_endpoint(req: CompanyResearchRequest):
     """Steps 40, 47: Run Company Research Agent on target organization."""
     from datahunt.agents.company_research import CompanyResearchAgent
-    from datahunt.llm import GeminiClient
-    agent = CompanyResearchAgent(gemini_client=GeminiClient())
+    # Gemini client (commented out in favor of NvidiaClient default):
+    # from datahunt.llm import GeminiClient
+    # agent = CompanyResearchAgent(gemini_client=GeminiClient())
+    from datahunt.llm import NvidiaClient
+    agent = CompanyResearchAgent(gemini_client=NvidiaClient())
     profile = agent.research(company_name=req.company_name, force_refresh=req.force_refresh)
     return {"status": "success", "company_profile": profile.model_dump()}
 
@@ -625,8 +628,11 @@ def research_company_endpoint(req: CompanyResearchRequest):
 def interview_prep_endpoint(req: InterviewPrepRequest):
     """Steps 57-60: Run Interview Preparation Agent to generate role Q&A pack."""
     from datahunt.agents.interview_prep import InterviewPrepAgent
-    from datahunt.llm import GeminiClient
-    agent = InterviewPrepAgent(gemini_client=GeminiClient())
+    # Gemini client (commented out in favor of NvidiaClient default):
+    # from datahunt.llm import GeminiClient
+    # agent = InterviewPrepAgent(gemini_client=GeminiClient())
+    from datahunt.llm import NvidiaClient
+    agent = InterviewPrepAgent(gemini_client=NvidiaClient())
     prep_pack = agent.prepare(
         role_title=req.role_title,
         company_name=req.company_name,
@@ -639,8 +645,11 @@ def interview_prep_endpoint(req: InterviewPrepRequest):
 def interview_eval_endpoint(req: InterviewEvalRequest):
     """Step 61: Evaluate mock interview practice response."""
     from datahunt.agents.interview_prep import InterviewPrepAgent
-    from datahunt.llm import GeminiClient
-    agent = InterviewPrepAgent(gemini_client=GeminiClient())
+    # Gemini client (commented out in favor of NvidiaClient default):
+    # from datahunt.llm import GeminiClient
+    # agent = InterviewPrepAgent(gemini_client=GeminiClient())
+    from datahunt.llm import NvidiaClient
+    agent = InterviewPrepAgent(gemini_client=NvidiaClient())
     feedback = agent.evaluate_answer(role_title=req.role_title, question=req.question, answer=req.answer)
     return {"status": "success", "evaluation": feedback}
 

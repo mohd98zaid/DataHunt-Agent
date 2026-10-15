@@ -7,7 +7,9 @@ from datahunt.logger import logger
 from datahunt.models import ExtractedRecord, RecordEvidence, ResearchSpec, SourceDocument
 from datahunt.models.intent import ResearchIntent, ResearchOutputType
 from datahunt.tools.base import ToolResult
-from datahunt.llm.gemini_client import GeminiClient
+# Gemini client import (commented out as sole import in favor of NvidiaClient):
+# from datahunt.llm.gemini_client import GeminiClient
+from datahunt.llm import NvidiaClient, GeminiClient
 
 def parse_job_timestamp(
     text: Optional[str],
@@ -1488,8 +1490,10 @@ class ExtractTool:
     name = "extract_records"
     description = "Extract evidence-backed records conforming to schema from a document."
 
-    def __init__(self, gemini_client: Optional[GeminiClient] = None):
-        self.client = gemini_client or GeminiClient()
+    def __init__(self, gemini_client: Optional[Any] = None):
+        # Gemini client initialization (commented out in favor of NvidiaClient):
+        # self.client = gemini_client or GeminiClient()
+        self.client = gemini_client or NvidiaClient()
 
     def execute(
         self,

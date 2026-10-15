@@ -1,4 +1,10 @@
+# Gemini client (commented out as default in favor of NvidiaClient, but kept available):
+# from datahunt.llm.gemini_client import GeminiClient
 from datahunt.llm.gemini_client import GeminiClient
+from datahunt.llm.nvidia_client import NvidiaClient
+
+# Default LLM Client for DataHunt Workstation
+LLMClient = NvidiaClient
 from datahunt.llm.prompts import (
     SHARED_SYSTEM_PROMPT,
     INTAKE_USER_TEMPLATE,
@@ -13,6 +19,8 @@ from datahunt.llm.prompts import (
 )
 
 __all__ = [
+    "NvidiaClient",
+    "LLMClient",
     "GeminiClient",
     "SHARED_SYSTEM_PROMPT",
     "INTAKE_USER_TEMPLATE",

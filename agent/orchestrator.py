@@ -18,7 +18,9 @@ from datahunt.models import (
     ExportRecord, ExtractedRecord, RecordEvidence
 )
 from datahunt.models.intent import ResearchIntent, ResearchOutputType
-from datahunt.llm import GeminiClient
+# Gemini client import (commented out as default in favor of NvidiaClient):
+# from datahunt.llm import GeminiClient
+from datahunt.llm import NvidiaClient, GeminiClient
 from datahunt.tools import (
     SearchTool, FetchTool, ExtractTool,
     VerifyTool, DedupeTool, ExportTool,
@@ -33,7 +35,7 @@ class ResearchOrchestrator:
     """
     def __init__(
         self,
-        gemini_client: Optional[GeminiClient] = None,
+        gemini_client: Optional[Any] = None,
         search_tool: Optional[SearchTool] = None,
         fetch_tool: Optional[FetchTool] = None,
         extract_tool: Optional[ExtractTool] = None,
@@ -42,7 +44,9 @@ class ResearchOrchestrator:
         export_tool: Optional[ExportTool] = None,
         model: Optional[str] = None,
     ):
-        self.client = gemini_client or GeminiClient(model=model)
+        # Gemini initialization (commented out in favor of NVIDIA NIM free preview endpoints):
+        # self.client = gemini_client or GeminiClient(model=model)
+        self.client = gemini_client or NvidiaClient(model=model)
         self.search_tool = search_tool or SearchTool()
         self.fetch_tool = fetch_tool or FetchTool()
         self.extract_tool = extract_tool or ExtractTool(self.client)
@@ -82,7 +86,12 @@ class ResearchOrchestrator:
     ) -> tuple[ResearchTask, ResearchRun]:
         """Normalize request, enforce intake policies, and initialize database records."""
         if model:
-            run_client = GeminiClient(model=model)
+            # Gemini run_client instantiation (commented out as default in favor of NvidiaClient):
+            # run_client = GeminiClient(model=model)
+            if "gemini" in (model or "").lower():
+                run_client = GeminiClient(model=model)
+            else:
+                run_client = NvidiaClient(model=model)
             if hasattr(self.extract_tool, "client"):
                 self.extract_tool.client = run_client
             if hasattr(self.verify_tool, "client"):

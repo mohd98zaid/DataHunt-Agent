@@ -12,7 +12,9 @@ from typing import Any, Callable, Dict, List, Optional
 from datahunt.config import settings
 from datahunt.errors import DataHuntError, ErrorCode
 from datahunt.logger import logger
-from datahunt.llm import GeminiClient
+# Gemini client import (commented out as sole client in favor of NvidiaClient / any client):
+# from datahunt.llm import GeminiClient
+from datahunt.llm import NvidiaClient, GeminiClient
 from datahunt.tools import SearchTool, FetchTool, ExtractTool, VerifyTool, DedupeTool, ExportTool
 from datahunt.tools.search import is_valid_job_url, canonicalize_url, generate_job_fingerprint
 from datahunt.models import VerificationStatus
@@ -55,7 +57,7 @@ class AgentRuntime:
     and deterministic stop conditions.
     """
 
-    def __init__(self, client: GeminiClient, search: SearchTool, fetch: FetchTool,
+    def __init__(self, client: Any, search: SearchTool, fetch: FetchTool,
                  extract: ExtractTool, verify: VerifyTool, dedupe: DedupeTool, export: ExportTool):
         self.client = client
         self.search = search
