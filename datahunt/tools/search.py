@@ -55,6 +55,18 @@ def canonicalize_url(url: str) -> str:
         return url.strip().rstrip("/")
 
 
+def is_ad_or_tracking_url(url: str) -> bool:
+    """Detect search engine ad clicks, sponsored tracking redirects, and affiliate trackers."""
+    if not url or not isinstance(url, str):
+        return False
+    u = url.lower()
+    return any(p in u for p in (
+        "/aclick?", "/aclick/", "bing.com/aclick", "googleadservices.com",
+        "doubleclick.net", "adclick.", "/adclick?", "adservice.google",
+        "ad.doubleclick", "syndicatedsearch.goog", "/pagead/", "clk.google"
+    ))
+
+
 def generate_job_fingerprint(company: str, title: str, location: str) -> str:
     """Generate a content identity fingerprint for cross-source job deduplication."""
     c = re.sub(r'[^a-z0-9]', '', (company or '').lower())
@@ -711,7 +723,7 @@ class DuckDuckGoSearchProvider:
                                 if m:
                                     actual_url = unquote(m.group(1))
 
-                            if not actual_url.startswith("http") or "duckduckgo.com" in actual_url:
+                            if not actual_url.startswith("http") or "duckduckgo.com" in actual_url or is_ad_or_tracking_url(actual_url):
                                 continue
 
                             domain = urlparse(actual_url).netloc.lower()
@@ -757,7 +769,7 @@ class DuckDuckGoSearchProvider:
                     title = item.get("title") or ""
                     snippet = item.get("body") or item.get("snippet") or ""
 
-                    if not url.startswith("http"):
+                    if not url.startswith("http") or is_ad_or_tracking_url(url):
                         continue
 
                     domain = urlparse(url).netloc.lower()
@@ -809,7 +821,7 @@ class DuckDuckGoSearchProvider:
                             if match:
                                 actual_url = unquote(match.group(1))
 
-                        if not actual_url.startswith("http") or "duckduckgo.com/y.js" in actual_url:
+                        if not actual_url.startswith("http") or "duckduckgo.com/y.js" in actual_url or is_ad_or_tracking_url(actual_url):
                             continue
 
                         domain = urlparse(actual_url).netloc.lower()

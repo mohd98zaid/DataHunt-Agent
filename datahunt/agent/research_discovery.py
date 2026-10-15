@@ -21,7 +21,7 @@ from datahunt.logger import logger
 from datahunt.models.evidence import Evidence
 from datahunt.models.intent import ResearchIntent, ResearchIntentSpec, ResearchOutputType
 from datahunt.models.record import ExtractedRecord, RecordEvidence, VerificationStatus
-from datahunt.tools.search import canonicalize_url
+from datahunt.tools.search import canonicalize_url, is_ad_or_tracking_url
 
 
 class ResearchSourceTier(str, Enum):
@@ -392,10 +392,10 @@ class ResearchDiscoveryEngine:
                 if res.success and res.data:
                     for hit in res.data:
                         u = hit.get("url")
-                        if not u:
+                        if not u or is_ad_or_tracking_url(u):
                             continue
                         canon = canonicalize_url(u)
-                        if canon and canon not in seen_urls:
+                        if canon and canon not in seen_urls and not is_ad_or_tracking_url(canon):
                             seen_urls.add(canon)
                             candidate_hits.append(hit)
             except Exception as e:
@@ -450,18 +450,73 @@ class ResearchDiscoveryEngine:
             return []
 
         tier, base_conf = classify_research_source(url, title)
-
-        # Break text into paragraphs / key sentences
-        paragraphs = [p.strip() for p in text.split("\n\n") if len(p.strip()) > 40]
         evidence_list = []
 
+        # 1. Clean meta description if present in structured metadata block
+        meta_desc = ""
+        meta_match = re.search(r"--- STRUCTURED PAGE METADATA ---\s*(.*?)\s*--- END PAGE METADATA ---", text, re.DOTALL)
+        if meta_match:
+            for line in meta_match.group(1).splitlines():
+                if line.startswith("DESCRIPTION:"):
+                    meta_desc = line[len("DESCRIPTION:"):].strip()
+                    break
+
+        if meta_desc and len(meta_desc) > 30:
+            evidence_list.append(Evidence(
+                claim=meta_desc,
+                source_url=url,
+                source_title=title,
+                source_type=tier.value,
+                confidence=min(1.0, round(base_conf + 0.05, 2)),
+                sentiment="neutral",
+                is_counter_evidence=False,
+                metadata={
+                    "wave": wave,
+                    "query": query,
+                    "domain": urlparse(url).netloc,
+                    "is_meta_description": True,
+                }
+            ))
+
+        # 2. Strip structured headers from page text before extracting paragraphs
+        clean_text = re.sub(
+            r"--- STRUCTURED (?:JOB SCHEMA \(JSON-LD\)|PAGE METADATA) ---.*?--- END (?:STRUCTURED SCHEMA|PAGE METADATA) ---\s*",
+            "",
+            text,
+            flags=re.DOTALL
+        )
+
+        boilerplate_markers = (
+            "skip to main content",
+            "fetch the complete documentation index",
+            "documentation index fetch",
+            "/llms.txt",
+            "cookie policy",
+            "privacy policy",
+            "all rights reserved",
+            "table of contents",
+            "sign in to continue",
+            "terms of service",
+        )
+
+        raw_paragraphs = [p.strip() for p in clean_text.split("\n\n") if len(p.strip()) > 40]
         counter_keywords = {"limitation", "drawback", "bottleneck", "issue", "tradeoff", "trade-off", "latency", "overhead", "complex", "difficulty", "risk", "pitfall"}
 
-        for p in paragraphs[:6]:
-            # Clean snippet
+        for p in raw_paragraphs:
+            if len(evidence_list) >= 6:
+                break
+            p_lower = p.lower()
+            if any(bm in p_lower for bm in boilerplate_markers):
+                continue
+            if p.count("\n") > 5 and sum(len(l) for l in p.splitlines()) / (p.count("\n") + 1) < 25:
+                continue
+
             snippet = " ".join(p.split())
             if len(snippet) > 300:
                 snippet = snippet[:297] + "..."
+
+            if meta_desc and snippet in meta_desc:
+                continue
 
             has_counter_signal = any(k in snippet.lower() for k in counter_keywords)
             flagged_counter = is_counter or has_counter_signal
@@ -497,6 +552,28 @@ class ResearchDiscoveryEngine:
         queries: List[str],
     ) -> str:
         """Generates an evidence-backed authoritative Markdown technical dossier."""
+        # Use live LLM synthesis if available
+        if self.client and getattr(self.client, "is_live", False):
+            try:
+                source_texts = ""
+                for doc in documents[:8]:
+                    snippet = (getattr(doc, "extracted_text", "") or "").strip()
+                    u = getattr(doc, "requested_url", "") or getattr(doc, "canonical_url", "")
+                    if snippet:
+                        source_texts += f"Source URL: {u}\n{snippet[:2500]}\n\n---\n\n"
+                records_data = [{"topic": query, "claim": e.claim, "source_url": e.source_url} for e in evidence[:10]]
+                llm_report = self.client.summarize_run(
+                    run_metadata={"topic": query, "pages_fetched": len(documents), "records_verified": len(evidence)},
+                    verified_records=records_data,
+                    source_texts=source_texts,
+                    query_text=query,
+                    agent_mode="research"
+                )
+                if llm_report and len(llm_report.strip()) > 100:
+                    return llm_report
+            except Exception as e:
+                logger.warning(f"Live LLM research synthesis failed ({e}), using deterministic report")
+
         # Group evidence by primary and counter
         primary_evidence = [e for e in evidence if not e.is_counter_evidence]
         counter_evidence = [e for e in evidence if e.is_counter_evidence]
@@ -644,6 +721,18 @@ Parallel execution in graph systems allows concurrent node evaluations across as
         if not counter_highlights:
             counter_highlights = "- Standard operational prerequisites and domain constraints apply.\n"
 
+        overview_text = ""
+        topic_lower = (intent_spec.topic or "").strip().lower()
+        for ev in primary_evidence:
+            cl = ev.claim.strip()
+            if topic_lower and any(cl.lower().startswith(f"{topic_lower} {v}") for v in ("is", "provides", "enables", "was", "stands")):
+                overview_text = cl
+                break
+        if not overview_text and primary_evidence:
+            overview_text = primary_evidence[0].claim
+        if not overview_text:
+            overview_text = intent_spec.reason or f"Comprehensive technical breakdown addressing: '{query}'"
+
         return f"""# 🧭 Research Intelligence Dossier: {query}
 
 **Topic:** {intent_spec.topic or query}  
@@ -655,9 +744,7 @@ Parallel execution in graph systems allows concurrent node evaluations across as
 
 ## 1. Executive Answer & Technical Overview
 
-{intent_spec.reason or f"Comprehensive technical breakdown addressing: '{query}'"}
-
-Key findings substantiate that execution requires systematic alignment with official protocols, adherence to standards, and awareness of architectural constraints.
+{overview_text}
 
 ---
 
@@ -688,6 +775,8 @@ Key findings substantiate that execution requires systematic alignment with offi
             rec = ExtractedRecord(
                 id=rec_id,
                 run_id=run_id,
+                record_type="research_evidence",
+                canonical_url=ev.source_url,
                 fields={
                     "topic": ev.metadata.get("query", ""),
                     "claim": ev.claim,

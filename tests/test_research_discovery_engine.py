@@ -187,3 +187,71 @@ def test_what_is_langgraph_explanation():
     assert "LangGraph" in result["answer_markdown"]
     assert len(result["evidence"]) >= 1
     assert result["evidence"][0].source_type == ResearchSourceTier.OFFICIAL_DOCS.value
+
+
+def test_metadata_and_navigation_stripping_and_direct_overview():
+    """Verify metadata headers and navigation boilerplate are sanitized and direct definition is placed in overview."""
+    mock_search = MagicMock()
+    mock_fetch = MagicMock()
+
+    mock_search.execute.return_value = ToolResult(
+        success=True,
+        data=[{"title": "TypeSafe Jev", "url": "https://typesafe.example.com/jev", "snippet": "System One model"}]
+    )
+
+    dirty_text = """--- STRUCTURED PAGE METADATA ---
+DESCRIPTION: Jev is TypeSafe's flagship model and the first System One model.
+TITLE: Introduction - TypeSafe
+--- END PAGE METADATA ---
+
+Introduction - TypeSafe Documentation Index
+Fetch the complete documentation index at:
+/llms.txt
+Skip to main content
+
+Jev is TypeSafe's flagship model that processes state snapshots and returns typed JSON.
+"""
+
+    doc = SourceDocument(
+        id="doc_jev",
+        run_id="run_jev_test",
+        requested_url="https://typesafe.example.com/jev",
+        canonical_url="https://typesafe.example.com/jev",
+        title="Introduction - TypeSafe",
+        domain="typesafe.example.com",
+        extracted_text=dirty_text,
+    )
+    mock_res = MagicMock()
+    mock_res.success = True
+    mock_res.data = doc
+    mock_fetch.execute.return_value = mock_res
+
+    engine = ResearchDiscoveryEngine(
+        search_tool=mock_search,
+        fetch_tool=mock_fetch,
+        gemini_client=None,
+    )
+
+    result = engine.run_research(query="What is Jev", max_runtime_seconds=15)
+    assert result["status"] == "completed"
+
+    claims = [e.claim for e in result["evidence"]]
+    # Must NOT contain raw metadata fence or navigation noise
+    assert not any("--- STRUCTURED PAGE METADATA ---" in c for c in claims)
+    assert not any("Skip to main content" in c for c in claims)
+    assert not any("/llms.txt" in c for c in claims)
+
+    # Must contain clean description
+    assert any("Jev is TypeSafe's flagship model" in c for c in claims)
+
+    # Records must be research_evidence with canonical_url
+    records = result["records"]
+    assert len(records) > 0
+    assert records[0].record_type == "research_evidence"
+    assert records[0].canonical_url == "https://typesafe.example.com/jev"
+
+    # Overview in Markdown must lead with direct definition
+    markdown = result["answer_markdown"]
+    assert "## 1. Executive Answer & Technical Overview" in markdown
+    assert "Jev is TypeSafe's flagship model" in markdown
+
