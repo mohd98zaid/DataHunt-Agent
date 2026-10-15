@@ -657,11 +657,14 @@ class NvidiaClient:
 
         if self.is_live:
             try:
+                bounded_text = content[:settings.MAX_EXTRACTED_CHARS]
+                doc_metadata = {"url": url, "title": title, "doc_id": doc_id}
+                record_schema = {"requested_fields": spec.requested_fields}
                 prompt = EXTRACTION_TEMPLATE.format(
-                    document_text=content[:settings.MAX_EXTRACTED_CHARS],
-                    document_url=url,
-                    document_title=title,
-                    requested_fields=json.dumps(spec.requested_fields),
+                    research_spec_json=spec.model_dump_json(),
+                    record_schema_json=json.dumps(record_schema),
+                    document_metadata_json=json.dumps(doc_metadata),
+                    bounded_document_text=bounded_text,
                 )
                 extracted = self._call_nvidia_json(prompt, schema_description="Extraction schema", stage="extract")
                 if isinstance(extracted, list):
@@ -702,6 +705,9 @@ class NvidiaClient:
                 prompt = VERIFICATION_TEMPLATE.format(
                     record_json=json.dumps(rec_data),
                     evidence_json=json.dumps(ev_data[:10]),
+                    required_fields_json=json.dumps(["title", "company"]),
+                    freshness_rule_json=json.dumps({}),
+                    contact_policy="business_public_only",
                 )
                 return self._call_nvidia_json(prompt, schema_description="Verification schema", stage="verify")
             except Exception as e:
@@ -723,8 +729,8 @@ class NvidiaClient:
         if self.is_live:
             try:
                 prompt = DEDUPLICATION_TEMPLATE.format(
-                    record1_json=json.dumps(d1),
-                    record2_json=json.dumps(d2),
+                    record_a_json=json.dumps(d1),
+                    record_b_json=json.dumps(d2),
                 )
                 return self._call_nvidia_json(prompt, schema_description="Dedupe schema", stage="dedupe")
             except Exception as e:
@@ -766,19 +772,25 @@ class NvidiaClient:
         if self.is_live:
             try:
                 if is_market:
-                    tmpl = MARKET_SYNTHESIS_TEMPLATE
+                    prompt = MARKET_SYNTHESIS_TEMPLATE.format(
+                        query_text=query,
+                        run_metadata_json=json.dumps(run_metadata),
+                        verified_records_json=json.dumps(verified_records[:20]),
+                        source_texts=source_texts[:15000] if source_texts else "No source text captured.",
+                    )
                 elif is_answer or (spec and spec.agent_mode == "research"):
-                    tmpl = DIRECT_ANSWER_SYNTHESIS_TEMPLATE
+                    prompt = DIRECT_ANSWER_SYNTHESIS_TEMPLATE.format(
+                        query_text=query,
+                        run_metadata_json=json.dumps(run_metadata),
+                        verified_records_json=json.dumps(verified_records[:20]),
+                        source_texts=source_texts[:15000] if source_texts else "No source text captured.",
+                    )
                 else:
-                    tmpl = SUMMARY_TEMPLATE
+                    prompt = SUMMARY_TEMPLATE.format(
+                        run_metadata_json=json.dumps(run_metadata),
+                        verified_records_json=json.dumps(verified_records[:20]),
+                    )
 
-                prompt = tmpl.format(
-                    query=query,
-                    task_spec_json=spec.model_dump_json() if spec else "{}",
-                    run_metadata_json=json.dumps(run_metadata),
-                    verified_records_json=json.dumps(verified_records[:20]),
-                    source_texts=source_texts[:15000],
-                )
                 text_output = self._call_nvidia_text(prompt, stage="summarize")
                 if text_output and len(text_output.strip()) > 100:
                     return text_output.strip()
