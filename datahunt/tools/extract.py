@@ -958,6 +958,21 @@ def extract_job_records_from_document(
         "warnings": []
     }]
 
+def _heuristic_extract_job(
+    doc_text: str,
+    url: str = "",
+    title: str = "",
+    topic: str = "",
+    geography: str = ""
+) -> Optional[Dict[str, Any]]:
+    """Heuristic offline extractor fallback for a single job document."""
+    meta = {"url": url, "title": title}
+    records = extract_job_records_from_document(doc_text, meta, topic=topic, geography=geography)
+    if records:
+        r = records[0]
+        return r.get("fields") if isinstance(r, dict) and "fields" in r else r
+    return None
+
 def normalize_text_for_identity(text: Optional[str]) -> str:
     """Normalize text by lowercasing and stripping punctuation for dedupe matching."""
     if not text:

@@ -517,7 +517,13 @@ class DiscoveryEngine:
                     "no.", "fi.", "ie.", "nz.", "za.", "ph.", "pk.", "bd.", "vn.",
                     "th.", "my.", "id.", "eg.", "tr.", "cn.", "hk.", "tw.", "kr."
                 )
-                is_foreign_country = any(clean_netloc.startswith(p) for p in FOREIGN_COUNTRY_SUBDOMAINS)
+                FOREIGN_COUNTRY_TLDS = (
+                    ".fr", ".de", ".it", ".es", ".ru", ".in", ".co.uk", ".ca",
+                    ".com.br", ".pl", ".nl", ".jp", ".cn", ".au", ".uk", ".br",
+                    ".ch", ".se", ".no", ".fi", ".ie", ".nz", ".za", ".ph", ".pk",
+                    ".bd", ".vn", ".th", ".my", ".id", ".tr", ".kr"
+                )
+                is_foreign_country = any(clean_netloc.startswith(p) for p in FOREIGN_COUNTRY_SUBDOMAINS) or any(clean_netloc.endswith(tld) for tld in FOREIGN_COUNTRY_TLDS)
                 
                 if (
                     not is_social_or_search

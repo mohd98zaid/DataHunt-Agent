@@ -637,7 +637,7 @@ class JobTrackingRepository:
                     OR r.fields_json LIKE '%"employment_type"%'
                     OR r.fields_json LIKE '%"company"%'
                 )
-                AND r.verification_status NOT IN ('rejected', 'duplicate')
+                AND r.verification_status IN ('verified', 'needs_review')
                 AND COALESCE(JSON_EXTRACT(r.fields_json, '$.score_breakdown.title.status'), '') != 'MISMATCH'
                 AND (r.confidence >= 0.5 OR r.confidence IS NULL)
             """

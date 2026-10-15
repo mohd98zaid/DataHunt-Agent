@@ -738,6 +738,7 @@ class NvidiaClient:
 
         content = (
             doc_text
+            or kwargs.get("content", "")
             or (getattr(document, "extracted_text", "") if document else "")
             or (getattr(document, "content_text", "") if document else "")
             or (str(document) if isinstance(document, str) else "")
@@ -794,12 +795,19 @@ class NvidiaClient:
                 logger.warning(f"Live NVIDIA extraction failed ({e}), using deterministic extractor")
 
         # Deterministic offline extractor
-        from datahunt.tools.extract import _heuristic_extract_job
-        fields = _heuristic_extract_job(content, url, title)
-        if fields:
-            fields["document_id"] = doc_id
-            fields["source_url"] = url
-            return {"records": [fields], "document_warnings": []}
+        from datahunt.tools.extract import extract_job_records_from_document, _heuristic_extract_job
+        spec_geo = getattr(spec.geography, "name", "") or getattr(spec.geography, "country", "") or "" if getattr(spec, "geography", None) else ""
+        raw_recs = extract_job_records_from_document(content, {"url": url, "title": title}, topic=getattr(spec, "topic", "") or "", geography=spec_geo)
+        if raw_recs:
+            extracted_list = []
+            for item in raw_recs:
+                f = item.get("fields") if isinstance(item, dict) and "fields" in item else item
+                if isinstance(f, dict) and any(v for v in f.values() if v):
+                    f["document_id"] = doc_id
+                    f["source_url"] = url
+                    extracted_list.append(f)
+            if extracted_list:
+                return {"records": extracted_list, "document_warnings": []}
         return {"records": [], "document_warnings": []}
 
     @traceable(run_type="chain", name="DataHunt.VerifyRecord")

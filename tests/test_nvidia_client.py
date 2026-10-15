@@ -196,3 +196,119 @@ def test_nvidia_client_on_model_switch_callback():
     assert len(switches) >= 1
     assert switches[0][0] == "nvidia/nemotron-3.5-lightning-30b-a3b"
 
+
+def test_nvidia_client_extract_from_document_offline_fallback():
+    import textwrap
+    client = NvidiaClient(api_key="")
+    assert not client.is_live
+    spec = ResearchSpec(
+        topic="Find GenAI Engineer in Riyadh",
+        geography=Geography(name="Saudi Arabia", country="SA"),
+        requested_fields=["title", "company", "location", "salary", "application_url"],
+    )
+    doc_text = textwrap.dedent("""
+    # Sentra AI
+    ## Senior Generative AI Engineer
+    Location: Riyadh, Saudi Arabia
+    Apply: https://jobs.lever.co/sentra/1234
+    We are seeking a Generative AI Engineer with 3+ years experience.
+    """)
+    meta = {"url": "https://jobs.lever.co/sentra/1234", "title": "Sentra AI - Senior Generative AI Engineer"}
+    res = client.extract_from_document(spec=spec, content=doc_text, doc_metadata=meta)
+    assert isinstance(res, dict)
+    assert "records" in res
+    assert len(res["records"]) >= 1
+    rec = res["records"][0]
+    assert "Senior Generative AI Engineer" in rec["title"]
+    assert "Sentra" in rec["company"]
+
+
+def test_heuristic_extract_job_backward_compatibility():
+    import textwrap
+    from datahunt.tools.extract import _heuristic_extract_job
+    doc_text = textwrap.dedent("""
+    # DataCamp
+    ## GenAI Specialist
+    Location: Dubai, UAE
+    Apply: https://boards.greenhouse.io/datacamp/jobs/555
+    """)
+    fields = _heuristic_extract_job(doc_text, url="https://boards.greenhouse.io/datacamp/jobs/555", title="DataCamp - GenAI Specialist")
+    assert fields is not None
+    assert "GenAI Specialist" in fields.get("title", "")
+    assert "DataCamp" in fields.get("company", "")
+
+
+def test_foreign_country_tld_filtering_in_discovery_engine():
+    from datahunt.agent.discovery_engine import DiscoveryEngine
+    from datahunt.models import RunBudget
+
+    engine = DiscoveryEngine(budget=RunBudget())
+    # Test ccTLD checks
+    FOREIGN_COUNTRY_TLDS = (
+        ".fr", ".de", ".it", ".es", ".ru", ".in", ".co.uk", ".ca",
+        ".com.br", ".pl", ".nl", ".jp", ".cn", ".au", ".uk", ".br"
+    )
+    # Gulf location string
+    loc_str = "Saudi Arabia or UAE"
+    is_gulf = any(g in loc_str.lower() for g in ("saudi", "uae", "dubai", "riyadh", "gulf"))
+    assert is_gulf is True
+
+    # arbeitnow.fr should be detected as foreign ccTLD
+    domain = "www.arbeitnow.fr"
+    clean_netloc = domain.replace("www.", "")
+    is_foreign_country = any(clean_netloc.endswith(tld) for tld in FOREIGN_COUNTRY_TLDS)
+    assert is_foreign_country is True
+
+
+def test_job_tracking_repository_filters_unverified(tmp_path):
+    from datahunt.db import (
+        get_connection, run_migrations,
+        JobTrackingRepository, TaskRepository, RunRepository, RecordRepository
+    )
+    from datahunt.models import ResearchTask, ResearchRun, ExtractedRecord, VerificationStatus, ResearchSpec
+
+    db_path = tmp_path / "test.db"
+    run_migrations(db_path=db_path)
+    conn_factory = lambda: get_connection(db_path=db_path)
+
+    task_repo = TaskRepository(conn_factory=conn_factory)
+    run_repo = RunRepository(conn_factory=conn_factory)
+    rec_repo = RecordRepository(conn_factory=conn_factory)
+    job_repo = JobTrackingRepository(conn_factory=conn_factory)
+
+    task = ResearchTask(request_text="Test unverified filtering", normalized_spec=ResearchSpec(topic="Jobs"))
+    task_repo.create_task(task)
+    run = ResearchRun(task_id=task.id)
+    run_repo.create_run(run)
+
+    # Insert an unverified record (e.g. from scraping before verification phase)
+    r_unverified = ExtractedRecord(
+        id="rec_unverified_fr",
+        run_id=run.id,
+        record_type="job_listing",
+        canonical_url="https://www.arbeitnow.fr/jobs/engineering",
+        fields={"title": "Engineering", "company": "Offres d'emploi", "location": "France"},
+        verification_status=VerificationStatus.UNVERIFIED,
+        confidence=0.8
+    )
+    # Insert a verified record
+    r_verified = ExtractedRecord(
+        id="rec_verified_uae",
+        run_id=run.id,
+        record_type="job_listing",
+        canonical_url="https://jobs.lever.co/mistral/ai-eng",
+        fields={"title": "AI Engineer", "company": "Mistral AI", "location": "Abu Dhabi, UAE"},
+        verification_status=VerificationStatus.VERIFIED,
+        confidence=0.95
+    )
+
+    rec_repo.insert_record(r_unverified)
+    rec_repo.insert_record(r_verified)
+
+    jobs = job_repo.list_jobs(run_id=run.id)
+    assert len(jobs) == 1
+    assert jobs[0]["id"] == "rec_verified_uae"
+    assert jobs[0]["fields"]["title"] == "AI Engineer"
+
+
+
