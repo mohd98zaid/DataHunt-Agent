@@ -128,11 +128,35 @@ class NvidiaClient:
         base_url: Optional[str] = None,
         model: Optional[str] = None,
         fallback_model: Optional[str] = None,
+        on_model_switch: Optional[Any] = None,
     ):
         self.api_key = (api_key if api_key is not None else settings.NVIDIA_API_KEY).strip()
         self.base_url = (base_url or getattr(settings, "NVIDIA_BASE_URL", DEFAULT_NVIDIA_BASE_URL)).strip()
-        self.primary_model = model or getattr(settings, "NVIDIA_PRIMARY_MODEL", DEFAULT_PRIMARY_MODEL)
-        self.fallback_model = fallback_model or getattr(settings, "NVIDIA_FALLBACK_MODEL", DEFAULT_FALLBACK_MODEL)
+
+        # Normalize model selection and map backward-compatible aliases
+        raw_model = (model or "").strip()
+        default_primary = getattr(settings, "NVIDIA_PRIMARY_MODEL", DEFAULT_PRIMARY_MODEL)
+        default_fallback = getattr(settings, "NVIDIA_FALLBACK_MODEL", DEFAULT_FALLBACK_MODEL)
+
+        if not raw_model or raw_model.lower() == "auto":
+            self.primary_model = default_primary
+            self.fallback_model = fallback_model or default_fallback
+            self._mode = "auto"
+        elif any(k in raw_model.lower() for k in ("primary", "gpt-oss", "lite")):
+            self.primary_model = default_primary
+            self.fallback_model = fallback_model or default_fallback
+            self._mode = "primary"
+        elif any(k in raw_model.lower() for k in ("fallback", "nemotron", "flash", "3.8")):
+            self.primary_model = default_fallback
+            self.fallback_model = default_primary
+            self._mode = "fallback"
+        else:
+            self.primary_model = raw_model
+            self.fallback_model = fallback_model or default_fallback
+            self._mode = "dedicated"
+
+        self.last_active_model: str = self.primary_model
+        self.on_model_switch = on_model_switch
         self.max_tokens = int(getattr(settings, "NVIDIA_MAX_OUTPUT_TOKENS", 2048))
         self.temperature = float(getattr(settings, "NVIDIA_TEMPERATURE", 0.1))
 
@@ -150,6 +174,21 @@ class NvidiaClient:
                 )
             except Exception as e:
                 logger.error(f"Failed to initialize NVIDIA NIM client: {e}")
+
+    @property
+    def model(self) -> str:
+        """Return currently active model name in real time."""
+        return getattr(self, "last_active_model", None) or self.primary_model
+
+    @model.setter
+    def model(self, value: str) -> None:
+        self.primary_model = value
+        self.last_active_model = value
+
+    @property
+    def mode(self) -> str:
+        """Return current model routing mode ('auto', 'primary', 'fallback', 'dedicated')."""
+        return getattr(self, "_mode", "auto")
 
     @property
     def is_live(self) -> bool:
@@ -209,6 +248,18 @@ class NvidiaClient:
                     time.sleep(cooldown_left)
 
             _pace_nvidia_request(0.15)
+
+            # Track active model and notify subscribers in real time
+            if current_model != getattr(self, "last_active_model", None):
+                prev_model = getattr(self, "last_active_model", self.primary_model)
+                self.last_active_model = current_model
+                if callable(getattr(self, "on_model_switch", None)):
+                    try:
+                        self.on_model_switch(current_model, f"Failover switch from {prev_model}")
+                    except Exception as ex:
+                        logger.debug(f"Error in on_model_switch callback: {ex}")
+            else:
+                self.last_active_model = current_model
 
             system_instruction = f"{SHARED_SYSTEM_PROMPT}\nYou MUST output valid JSON only. Format: {schema_description}."
             # Ensure sufficient tokens for reasoning models (nemotron uses reasoning tokens)
@@ -322,6 +373,19 @@ class NvidiaClient:
                     time.sleep(cooldown_left)
 
             _pace_nvidia_request(0.15)
+
+            # Track active model and notify subscribers in real time
+            if current_model != getattr(self, "last_active_model", None):
+                prev_model = getattr(self, "last_active_model", self.primary_model)
+                self.last_active_model = current_model
+                if callable(getattr(self, "on_model_switch", None)):
+                    try:
+                        self.on_model_switch(current_model, f"Failover switch from {prev_model}")
+                    except Exception as ex:
+                        logger.debug(f"Error in on_model_switch callback: {ex}")
+            else:
+                self.last_active_model = current_model
+
             try:
                 response = self._client.chat.completions.create(
                     model=current_model,

@@ -83,7 +83,7 @@ class CreateTaskRequest(BaseModel):
     allowed_domains: List[str] = Field(default_factory=list)
     blocked_domains: List[str] = Field(default_factory=list)
     run_in_background: bool = Field(False, description="Whether to execute asynchronously")
-    model: Optional[str] = Field("auto", description="AI model engine: auto, gemini-flash-lite-latest, or gemini-3.8-flash")
+    model: Optional[str] = Field("auto", description="AI model engine: auto, openai/gpt-oss-20b, or nvidia/nemotron-3.5-lightning-30b-a3b")
     agent_mode: Optional[str] = Field("auto", description="Agent mode: auto, jobs, research, or market")
 
 def run_task_background(run_id: str, model: Optional[str] = None):
@@ -132,13 +132,19 @@ def api_health():
         db_ok = True
     except Exception:
         db_ok = False
-        
+
+    primary = getattr(settings, "NVIDIA_PRIMARY_MODEL", "openai/gpt-oss-20b")
+    fallback = getattr(settings, "NVIDIA_FALLBACK_MODEL", "nvidia/nemotron-3.5-lightning-30b-a3b")
     return {
         "status": "healthy" if db_ok else "degraded",
         "database": "connected" if db_ok else "unreachable",
+        "llm_provider": settings.LLM_PROVIDER,
+        "nvidia_configured": bool(settings.NVIDIA_API_KEY),
+        "primary_model": primary,
+        "fallback_model": fallback,
+        "models_available": ["auto", primary, fallback, "gemini-flash-lite-latest", "gemini-3.8-flash"],
+        "model": primary,
         "gemini_configured": settings.is_gemini_configured,
-        "model": settings.GEMINI_MODEL,
-        "models_available": ["auto", "gemini-flash-lite-latest", "gemini-3.8-flash"]
     }
 
 @app.post("/tasks", status_code=201)
@@ -177,7 +183,7 @@ def create_task(req: CreateTaskRequest, background_tasks: BackgroundTasks):
                 "records_verified": result["records_verified"],
                 "records_rejected": result["records_rejected"],
                 "confidence": result.get("confidence", 0.95 if result.get("records_verified", 0) > 0 else 0.0),
-                "model": result.get("model", "gemini-3.8-flash"),
+                "model": result.get("model", getattr(settings, "NVIDIA_PRIMARY_MODEL", "openai/gpt-oss-20b")),
                 "model_mode": result.get("model_mode", "auto"),
                 "export_file": result.get("export_file"),
                 "summary": result.get("summary")

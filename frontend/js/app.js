@@ -229,17 +229,24 @@ window.setModel = function(mode) {
   document.querySelectorAll("#model-toggle-group .freshness-chip").forEach(el => el.classList.remove("active"));
   let chipId = "model-chip-auto";
   let labelText = "🔄 MULTI-MODEL";
-  if (mode.includes("lite")) {
-    chipId = "model-chip-lite";
-    labelText = "⚡ LITE";
-  } else if (mode.includes("flash") || mode.includes("3.8")) {
-    chipId = "model-chip-flash";
-    labelText = "🚀 3.8 FLASH";
+  let targetText = "TARGET: NVIDIA DUAL-CORE AUTO";
+
+  if (mode.includes("gpt-oss") || mode === "primary" || mode.includes("lite")) {
+    chipId = "model-chip-gpt-oss";
+    labelText = "⚡ GPT-OSS 20B";
+    targetText = "TARGET: OPENAI/GPT-OSS-20B";
+  } else if (mode.includes("nemotron") || mode === "fallback" || mode.includes("flash") || mode.includes("3.8")) {
+    chipId = "model-chip-nemotron";
+    labelText = "🚀 NEMOTRON 30B";
+    targetText = "TARGET: NVIDIA NEMOTRON-30B";
   }
-  const activeBtn = document.getElementById(chipId);
+  const activeBtn = document.getElementById(chipId) || document.getElementById("model-chip-auto");
   if (activeBtn) activeBtn.classList.add("active");
   const modelTag = document.getElementById("active-model-tag");
   if (modelTag) modelTag.textContent = labelText;
+  const targetHeader = document.getElementById("target-neural-core");
+  if (targetHeader) targetHeader.textContent = targetText;
+
   console.log("[DataHunt] AI model engine set to:", mode);
   if (hud && typeof hud.appendLog === "function") {
     hud.appendLog("MODEL", `Neural Core configured: ${labelText}`);
@@ -1271,11 +1278,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Multi-Model Neural Core Buttons
   const modelAuto = document.getElementById("model-chip-auto");
-  const modelLite = document.getElementById("model-chip-lite");
-  const modelFlash = document.getElementById("model-chip-flash");
+  const modelGptOss = document.getElementById("model-chip-gpt-oss") || document.getElementById("model-chip-lite");
+  const modelNemotron = document.getElementById("model-chip-nemotron") || document.getElementById("model-chip-flash");
   if (modelAuto) modelAuto.addEventListener("click", () => window.setModel("auto"));
-  if (modelLite) modelLite.addEventListener("click", () => window.setModel("lite"));
-  if (modelFlash) modelFlash.addEventListener("click", () => window.setModel("flash"));
+  if (modelGptOss) modelGptOss.addEventListener("click", () => window.setModel("openai/gpt-oss-20b"));
+  if (modelNemotron) modelNemotron.addEventListener("click", () => window.setModel("nvidia/nemotron-3.5-lightning-30b-a3b"));
 
   // Query Presets Container (delegated click handling)
   const presetsContainer = document.getElementById("dynamic-presets-container");
@@ -1402,6 +1409,17 @@ document.addEventListener("DOMContentLoaded", () => {
           if (exportDesc) exportDesc.textContent = `Export ready: ${exp.export_format?.toUpperCase()}`;
         }
 
+        if (run.model) {
+          const modelTag = document.getElementById("active-model-tag");
+          const targetHeader = document.getElementById("target-neural-core");
+          let display = run.model;
+          if (display.includes("gpt-oss")) display = (run.model_mode === "auto" ? "🔄 AUTO (GPT-OSS 20B)" : "⚡ GPT-OSS 20B");
+          else if (display.includes("nemotron")) display = (run.model_mode === "auto" ? "🚀 FALLBACK (NEMOTRON 30B)" : "🚀 NEMOTRON 30B");
+          else if (display.includes("flash")) display = "🚀 FLASH";
+          if (modelTag) modelTag.textContent = display;
+          if (targetHeader) targetHeader.textContent = `TARGET: ${run.model.toUpperCase()}`;
+        }
+
         if (hud && typeof hud.appendLog === "function") {
           hud.appendLog("COMPLETE", `Session state restored from backend: ${run.counters?.records_verified || 0} records.`);
         }
@@ -1429,17 +1447,26 @@ document.addEventListener("DOMContentLoaded", () => {
     const { event, data } = msg;
 
     if (event === "model.active") {
-      const label = data.label || data.model;
+      const activeModel = data.model || "openai/gpt-oss-20b";
+      const label = data.label || `Neural Core: ${activeModel}`;
       hud.appendLog("MODEL", `Neural Core: ${label}`);
       const modelTag = document.getElementById("active-model-tag");
+      const targetHeader = document.getElementById("target-neural-core");
       if (modelTag) {
-        if (data.mode === "auto") {
-          modelTag.textContent = "🔄 MULTI-MODEL";
+        if (activeModel.includes("gpt-oss")) {
+          modelTag.textContent = (data.mode === "auto") ? "🔄 AUTO (GPT-OSS 20B)" : "⚡ GPT-OSS 20B";
+        } else if (activeModel.includes("nemotron")) {
+          modelTag.textContent = (data.mode === "auto") ? "🚀 FALLBACK (NEMOTRON 30B)" : "🚀 NEMOTRON 30B";
+        } else if (data.mode === "auto") {
+          modelTag.textContent = `🔄 MULTI-MODEL (${activeModel.split("/").pop()})`;
         } else if (data.mode === "lite" || (data.model && data.model.includes("lite"))) {
           modelTag.textContent = "⚡ LITE";
         } else {
-          modelTag.textContent = "🚀 3.8 FLASH";
+          modelTag.textContent = `🤖 ${activeModel.split("/").pop()}`;
         }
+      }
+      if (targetHeader) {
+        targetHeader.textContent = `TARGET: ${activeModel.toUpperCase()}`;
       }
     }
     else if (event === "phase.change") {
@@ -1570,6 +1597,17 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       if (data.pages_fetched !== undefined && statPages) {
         statPages.textContent = data.pages_fetched;
+      }
+
+      if (data.model) {
+        const modelTag = document.getElementById("active-model-tag");
+        const targetHeader = document.getElementById("target-neural-core");
+        let display = data.model;
+        if (display.includes("gpt-oss")) display = (data.model_mode === "auto" ? "🔄 AUTO (GPT-OSS 20B)" : "⚡ GPT-OSS 20B");
+        else if (display.includes("nemotron")) display = (data.model_mode === "auto" ? "🚀 FALLBACK (NEMOTRON 30B)" : "🚀 NEMOTRON 30B");
+        else display = `🤖 ${display.split("/").pop()}`;
+        if (modelTag) modelTag.textContent = display;
+        if (targetHeader) targetHeader.textContent = `TARGET: ${data.model.toUpperCase()}`;
       }
 
       // Store summary for modal view

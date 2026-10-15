@@ -49,7 +49,7 @@
           <span style="color: var(--neon-cyan);">LANGSMITH: ACTIVE</span>
         </div>
         <div class="status-indicator">
-          <span>TARGET: GEMINI MULTI-MODEL</span>
+          <span id="target-neural-core">TARGET: NVIDIA DUAL-CORE AUTO</span>
         </div>
         <div class="status-indicator">
           <span>LATENCY: <span id="ping-text" style="color: var(--neon-cyan);">12ms</span></span>
@@ -96,9 +96,9 @@
 
         <div class="preset-label" style="margin-top: 14px;">Multi-Model Neural Core</div>
         <div class="freshness-toggle-group" id="model-toggle-group">
-          <button type="button" class="freshness-chip active" id="model-chip-auto" onclick="window.setModel && window.setModel('auto')" title="Hybrid Multi-Model (Lite for Planning + 3.8 Flash for Synthesis with Auto-Fallback)">🔄 MULTI-MODEL</button>
-          <button type="button" class="freshness-chip" id="model-chip-lite" onclick="window.setModel && window.setModel('lite')" title="Gemini Lite (Ultra-fast, lowest latency)">⚡ LITE</button>
-          <button type="button" class="freshness-chip" id="model-chip-flash" onclick="window.setModel && window.setModel('flash')" title="Gemini 3.8 Flash (Multimodal deep reasoning)">🚀 3.8 FLASH</button>
+          <button type="button" class="freshness-chip active" id="model-chip-auto" onclick="window.setModel && window.setModel('auto')" title="Dual-Model Auto Core (Primary: openai/gpt-oss-20b + Fallback: nvidia/nemotron-3.5-lightning-30b-a3b)">🔄 MULTI-MODEL</button>
+          <button type="button" class="freshness-chip" id="model-chip-gpt-oss" onclick="window.setModel && window.setModel('openai/gpt-oss-20b')" title="OpenAI GPT-OSS 20B (Primary fast agentic model, 1.1s latency)">⚡ GPT-OSS 20B</button>
+          <button type="button" class="freshness-chip" id="model-chip-nemotron" onclick="window.setModel && window.setModel('nvidia/nemotron-3.5-lightning-30b-a3b')" title="NVIDIA Nemotron 3.5 Lightning 30B (Deep reasoning auto-fallback)">🚀 NEMOTRON 30B</button>
         </div>
       </div>
 

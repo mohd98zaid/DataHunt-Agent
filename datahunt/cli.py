@@ -164,7 +164,7 @@ def main():
     sub_run = subparsers.add_parser("run", help="Start a new research run")
     sub_run.add_argument("query", type=str, help="Research query (e.g. 'Find 20 AI jobs in Dubai')")
     sub_run.add_argument("--agent", type=str, choices=["auto", "jobs", "research", "market"], default="auto", help="Specialized agent profile to deploy")
-    sub_run.add_argument("--model", type=str, choices=["auto", "gemini-flash-lite-latest", "gemini-3.8-flash"], default="auto", help="AI model engine to use")
+    sub_run.add_argument("--model", type=str, default="auto", help="AI model engine to use (e.g. auto, openai/gpt-oss-20b, nvidia/nemotron-3.5-lightning-30b-a3b)")
     sub_run.add_argument("--max-records", type=int, default=50, help="Maximum records to retrieve")
     sub_run.add_argument("--freshness", type=int, default=7, help="Freshness window in days")
     sub_run.add_argument("--format", type=str, choices=["json", "csv", "xlsx", "md", "docx"], default="json", help="Export format")

@@ -150,3 +150,49 @@ def test_nvidia_client_backward_compat_aliases():
     choice.message.content = "Plain text answer"
     res_text = client._call_gemini_text("test text")
     assert res_text == "Plain text answer"
+
+
+def test_nvidia_client_model_and_mode_properties():
+    # Default auto
+    client_auto = NvidiaClient(api_key="test-key", model="auto")
+    assert client_auto.model == "openai/gpt-oss-20b"
+    assert client_auto.mode == "auto"
+
+    # Primary alias
+    client_primary = NvidiaClient(api_key="test-key", model="primary")
+    assert client_primary.model == "openai/gpt-oss-20b"
+    assert client_primary.mode == "primary"
+
+    # Fallback / Nemotron alias
+    client_nemotron = NvidiaClient(api_key="test-key", model="nemotron")
+    assert client_nemotron.model == "nvidia/nemotron-3.5-lightning-30b-a3b"
+    assert client_nemotron.mode == "fallback"
+
+
+def test_nvidia_client_on_model_switch_callback():
+    switches = []
+
+    def on_switch(new_model, reason):
+        switches.append((new_model, reason))
+
+    client = NvidiaClient(api_key="test-key", on_model_switch=on_switch)
+    client.is_live = True
+
+    mock_openai = MagicMock()
+    client._client = mock_openai
+
+    # Make first call succeed with fallback model to trigger switch
+    choice = MagicMock()
+    choice.message.content = '{"ok": true}'
+    mock_openai.chat.completions.create.return_value = MagicMock(choices=[choice])
+
+    client._client.chat.completions.create = MagicMock(return_value=MagicMock(choices=[choice]))
+    # Force cooldown on primary model so fallback is used
+    record_nvidia_cooldown("openai/gpt-oss-20b", 30.0, "testing failover")
+    
+    result = client._call_nvidia_json("test failover prompt")
+    assert result == {"ok": True}
+    assert client.model == "nvidia/nemotron-3.5-lightning-30b-a3b"
+    assert len(switches) >= 1
+    assert switches[0][0] == "nvidia/nemotron-3.5-lightning-30b-a3b"
+

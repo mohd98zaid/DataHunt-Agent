@@ -92,12 +92,14 @@ class ResearchOrchestrator:
                 run_client = GeminiClient(model=model)
             else:
                 run_client = NvidiaClient(model=model)
+            self.run_client = run_client
             if hasattr(self.extract_tool, "client"):
                 self.extract_tool.client = run_client
             if hasattr(self.verify_tool, "client"):
                 self.verify_tool.client = run_client
         else:
             run_client = self.client
+            self.run_client = run_client
         operator_defaults = {
             "max_records": max_records,
             "freshness_days": freshness_days,
@@ -200,9 +202,24 @@ class ResearchOrchestrator:
             "status": "PLANNING"
         })
 
-        model_mode = getattr(self.client, "mode", "auto")
-        model_name = getattr(self.client, "model", "gemini-3.8-flash")
-        model_label = f"Gemini ({model_name})"
+        active_client = getattr(self, "run_client", None) or self.client
+        model_mode = getattr(active_client, "mode", "auto")
+        model_name = getattr(active_client, "model", getattr(settings, "NVIDIA_PRIMARY_MODEL", "openai/gpt-oss-20b"))
+        provider_name = "NVIDIA NIM" if ("gpt" in model_name or "nemotron" in model_name) else "Gemini"
+        model_label = f"{provider_name} ({model_name})"
+
+        def _on_model_switch_handler(new_model: str, reason: str = ""):
+            new_prov = "NVIDIA NIM" if ("gpt" in new_model or "nemotron" in new_model) else "Gemini"
+            emit_event("model.active", {
+                "model": new_model,
+                "mode": getattr(active_client, "mode", "auto"),
+                "label": f"{new_prov} ({new_model})",
+                "reason": reason
+            })
+
+        if hasattr(active_client, "on_model_switch"):
+            active_client.on_model_switch = _on_model_switch_handler
+
         emit_event("model.active", {
             "model": model_name,
             "mode": model_mode,
@@ -1369,8 +1386,8 @@ class ResearchOrchestrator:
                 "pages_fetched": counters.pages_fetched,
                 "pages_failed": counters.pages_failed,
                 "confidence": avg_conf,
-                "model": getattr(self.client, "model", "gemini-3.8-flash"),
-                "model_mode": getattr(self.client, "mode", "auto"),
+                "model": getattr(active_client, "model", getattr(settings, "NVIDIA_PRIMARY_MODEL", "openai/gpt-oss-20b")),
+                "model_mode": getattr(active_client, "mode", "auto"),
                 "export_file": export_data.get("file_name"),
                 "export_path": export_data.get("file_path"),
                 "warnings": warnings,
