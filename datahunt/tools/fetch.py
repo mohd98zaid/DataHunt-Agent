@@ -189,7 +189,7 @@ def fetch_greenhouse_jobs_api(company_slug: str, run_id: str) -> "ToolResult":
 
                 # Convert job list to structured markdown for extraction
                 md_lines = [f"# {company_slug.replace('-', ' ').title()} — Open Positions\n"]
-                for job in jobs[:50]:
+                for job in jobs:
                     title = job.get("title", "")
                     job_url = job.get("absolute_url", "")
                     location = ""

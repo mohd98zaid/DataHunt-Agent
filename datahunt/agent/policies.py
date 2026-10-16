@@ -523,6 +523,7 @@ class QualificationResult(BaseModel):
     title_match: MatchStatus
     location_match: MatchStatus
     experience_match: MatchStatus
+    experience_verified: bool = True
     skill_match: MatchStatus = MatchStatus.UNKNOWN
     salary_match: MatchStatus = MatchStatus.MATCH
     required_skills: List[str] = Field(default_factory=list)
@@ -744,8 +745,9 @@ class QualificationPolicy:
 
         # 3. Experience Policy
         e_status, e_reason = self.evaluate_experience(req_exp_min, req_exp_max, exp_min, exp_max)
+        exp_verified = (e_status != MatchStatus.UNKNOWN)
         if e_status == MatchStatus.UNKNOWN:
-            warnings.append(e_reason)
+            warnings.append(f"{e_reason} (marked unverified)")
         else:
             reasons.append(e_reason)
         if e_status == MatchStatus.MISMATCH:
@@ -789,25 +791,56 @@ class QualificationPolicy:
             rejection_reasons.append(f"excluded_company:{company}")
 
         # 7. Freshness & Stale Job Policy
-        # Reject jobs exceeding freshness threshold (default 60 days unless explicitly configured on request)
-        max_freshness_days = getattr(job_req, "freshness_days", None) or 60
-        posted_age_s = fields.get("posted_age_seconds")
-        if posted_age_s is not None:
-            posted_age_days = posted_age_s / 86400.0
-            if posted_age_days > max_freshness_days:
-                rejection_reasons.append(
-                    f"stale_job:Posted {round(posted_age_days)} days ago (exceeds {max_freshness_days}d freshness threshold)"
-                )
+        raw_q = getattr(job_req, "raw_query", "") or ""
+        raw_q_lower = raw_q.lower()
+        req_freshness = getattr(job_req, "freshness_days", None)
+
+        is_all_time = (
+            getattr(job_req, "is_all_time", False)
+            or req_freshness in (0, -1, 99999)
+            or any(w in raw_q_lower for w in ("all time", "all-time", "any time", "anytime", "all open", "all active"))
+        )
+
+        is_recent_24h = (
+            req_freshness == 1
+            or any(w in raw_q_lower for w in ("24h", "24 hours", "0sec", "0 sec", "past day", "today", "past 24"))
+        )
+
+        if is_all_time:
+            # Scenario C: All-Time Search — preserve open postings without artificial cutoffs
+            pass
+        elif is_recent_24h:
+            # Scenario D: Strict Recent Search (24h / 0sec)
+            posted_age_s = fields.get("posted_age_seconds")
+            cand_posted = str(fields.get("posted_at") or "").lower().strip()
+            if posted_age_s is not None:
+                if posted_age_s > 86400:
+                    rejection_reasons.append(
+                        f"stale_job:Posted {round(posted_age_s / 3600, 1)}h ago (exceeds 24h threshold)"
+                    )
+            elif cand_posted and any(r in cand_posted for r in ("just now", "0 sec", "0sec", "hour", "hours", "minute", "minutes", "today")):
+                pass
+            else:
+                rejection_reasons.append("stale_job:Posting date unknown or older than 24h in strict recent search")
         else:
-            cand_posted = str(fields.get("posted_at") or "").lower()
-            if any(stale in cand_posted for stale in ("year ago", "years ago", "mo ago", "months ago")):
-                rejection_reasons.append(
-                    f"stale_job:Posting age '{cand_posted}' exceeds {max_freshness_days}d freshness threshold"
-                )
-            elif any(old_yr in cand_posted for old_yr in ("2020", "2021", "2022", "2023", "2024", "2025")):
-                rejection_reasons.append(
-                    f"stale_job:Posting dated {cand_posted} is from past year (exceeds {max_freshness_days}d freshness threshold)"
-                )
+            max_freshness_days = req_freshness or 60
+            posted_age_s = fields.get("posted_age_seconds")
+            if posted_age_s is not None:
+                posted_age_days = posted_age_s / 86400.0
+                if posted_age_days > max_freshness_days:
+                    rejection_reasons.append(
+                        f"stale_job:Posted {round(posted_age_days)} days ago (exceeds {max_freshness_days}d freshness threshold)"
+                    )
+            else:
+                cand_posted = str(fields.get("posted_at") or "").lower()
+                if any(stale in cand_posted for stale in ("year ago", "years ago", "mo ago", "months ago")):
+                    rejection_reasons.append(
+                        f"stale_job:Posting age '{cand_posted}' exceeds {max_freshness_days}d freshness threshold"
+                    )
+                elif any(old_yr in cand_posted for old_yr in ("2020", "2021", "2022", "2023", "2024")):
+                    rejection_reasons.append(
+                        f"stale_job:Posting dated {cand_posted} is from past year (exceeds {max_freshness_days}d freshness threshold)"
+                    )
 
         # Hard Qualification Determination
         is_qualified = (len(rejection_reasons) == 0)
@@ -842,6 +875,7 @@ class QualificationPolicy:
             title_match=t_status,
             location_match=l_status,
             experience_match=e_status,
+            experience_verified=exp_verified,
             skill_match=s_status,
             salary_match=sal_status,
             required_skills=req_explicit_skills,

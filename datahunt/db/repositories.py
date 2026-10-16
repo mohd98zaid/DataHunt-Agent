@@ -619,7 +619,7 @@ class JobTrackingRepository:
         finally:
             conn.close()
 
-    def list_jobs(self, run_id: Optional[str] = None, limit: int = 200) -> List[Dict[str, Any]]:
+    def list_jobs(self, run_id: Optional[str] = None, limit: int = 200, offset: int = 0) -> List[Dict[str, Any]]:
         conn = self.conn_factory()
         try:
             # Inner query selects all candidate job records.
@@ -696,9 +696,9 @@ class JobTrackingRepository:
                 ) sub
                 WHERE sub._rn = 1
                 ORDER BY sub.scraped_at DESC
-                LIMIT :limit;
+                LIMIT :limit OFFSET :offset;
             """
-            params: Dict[str, Any] = {"limit": limit}
+            params: Dict[str, Any] = {"limit": limit, "offset": offset}
             if run_id:
                 params["run_id"] = run_id
 

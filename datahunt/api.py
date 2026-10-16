@@ -300,9 +300,16 @@ class BulkDeleteJobsRequest(BaseModel):
     record_ids: List[str] = Field(..., min_length=1)
 
 @app.get("/api/jobs")
-def list_jobs(run_id: Optional[str] = None, limit: int = Query(200, ge=1, le=500)):
+def list_jobs(
+    response: Response,
+    run_id: Optional[str] = None,
+    limit: int = Query(200, ge=1, le=5000),
+    offset: int = Query(0, ge=0)
+):
     """List tracked jobs with their application status, interview status, and scraped metadata."""
-    return job_repo.list_jobs(run_id=run_id, limit=limit)
+    jobs = job_repo.list_jobs(run_id=run_id, limit=limit, offset=offset)
+    response.headers["X-Total-Count"] = str(len(jobs))
+    return jobs
 
 @app.get("/api/jobs/saved")
 def get_saved_jobs_endpoint():

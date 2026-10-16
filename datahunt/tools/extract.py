@@ -203,6 +203,9 @@ def _enrich_job_fields(fields: Dict[str, Any], doc_text: str, url: str) -> Dict[
             if exp_s:
                 fields["experience_min"] = int(exp_s.group(1))
                 fields["experience_max"] = None
+            elif re.search(r'\b(entry\s*level|fresher|junior\s*level|intern|internship|graduate|new grad)\b', exp_sample, re.I):
+                fields["experience_min"] = 0
+                fields["experience_max"] = 2
             else:
                 fields["experience_min"] = None
                 fields["experience_max"] = None

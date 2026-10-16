@@ -474,8 +474,8 @@ async function loadJobs(overrideRunId) {
     updateRunScopeBanner(runId);
 
     const apiUrl = runId
-      ? `/api/jobs?run_id=${encodeURIComponent(runId)}&limit=500`
-      : `/api/jobs?limit=500`;
+      ? `/api/jobs?run_id=${encodeURIComponent(runId)}&limit=2000`
+      : `/api/jobs?limit=2000`;
 
     const res = await fetch(apiUrl);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);

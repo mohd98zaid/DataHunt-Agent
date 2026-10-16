@@ -92,9 +92,10 @@ class DiscoveryEngine:
         has_uae = any(k in loc_lower for k in ("uae", "dubai", "abu dhabi", "sharjah", "emirates"))
         has_saudi = any(k in loc_lower for k in ("saudi", "riyadh", "jeddah", "dammam", "khobar", "ksa"))
         has_qatar = any(k in loc_lower for k in ("qatar", "doha"))
+        has_india = any(k in loc_lower for k in ("india", "bangalore", "bengaluru", "mumbai", "delhi", "hyderabad", "pune", "chennai", "gurgaon", "gurugram", "noida"))
         is_generic_gulf = any(k in loc_lower for k in ("gulf", "middle east", "mena", "gcc"))
         is_gulf = has_uae or has_saudi or has_qatar or is_generic_gulf
-        region_label = "Gulf/MENA" if is_gulf else (loc_str or "Global")
+        region_label = "Gulf/MENA" if is_gulf else ("India" if has_india else (loc_str or "Global"))
 
         # Determine discrete target focal locations
         target_locations: List[str] = []
@@ -107,6 +108,8 @@ class DiscoveryEngine:
                 target_locations = ["Doha", "Qatar"]
             else:
                 target_locations = ["Dubai", "Abu Dhabi", "Sharjah", "Riyadh", "Jeddah", "UAE", "Saudi Arabia"]
+        elif has_india:
+            target_locations = ["Bengaluru", "Hyderabad", "Pune", "Gurgaon", "Noida", "Mumbai", "India"]
         elif state.locations:
             for loc in state.locations:
                 parts = re.split(r"\s+or\s+|\s*,\s*", str(loc), flags=re.IGNORECASE)
@@ -128,11 +131,21 @@ class DiscoveryEngine:
 
         # 1. Regional Job Boards (Priority 1 for Gulf/Regional sweeps)
         if is_gulf:
-            regional_targets = [
-                ("naukrigulf.com", f'site:naukrigulf.com "{role_clean}" {primary_loc}'.strip()),
-                ("bayt.com", f'site:bayt.com "{role_clean}" {primary_loc}'.strip()),
-                ("gulftalent.com", f'site:gulftalent.com "{role_clean}" {primary_loc}'.strip()),
-            ]
+            regional_hubs = []
+            if has_uae or is_generic_gulf:
+                regional_hubs.append("Dubai")
+            if has_saudi:
+                regional_hubs.append("Riyadh")
+            if not regional_hubs:
+                regional_hubs = [primary_loc]
+
+            regional_targets = []
+            for rhub in regional_hubs:
+                regional_targets.extend([
+                    ("naukrigulf.com", f'site:naukrigulf.com "{role_clean}" {rhub}'.strip()),
+                    ("bayt.com", f'site:bayt.com "{role_clean}" {rhub}'.strip()),
+                    ("gulftalent.com", f'site:gulftalent.com "{role_clean}" {rhub}'.strip()),
+                ])
             if has_uae or is_generic_gulf:
                 regional_targets.append(("linkedin.com", f'site:linkedin.com/jobs "{role_clean}" Dubai'))
                 if "Abu Dhabi" in target_locations:
@@ -143,6 +156,12 @@ class DiscoveryEngine:
                     regional_targets.append(("linkedin.com", f'site:linkedin.com/jobs "{alt_role}" Dubai'))
             if has_saudi or is_generic_gulf:
                 regional_targets.append(("linkedin.com", f'site:linkedin.com/jobs "{role_clean}" Riyadh'))
+                if "Jeddah" in target_locations:
+                    regional_targets.append(("linkedin.com", f'site:linkedin.com/jobs "{role_clean}" Jeddah'))
+                if "Dammam" in target_locations:
+                    regional_targets.append(("linkedin.com", f'site:linkedin.com/jobs "{role_clean}" Dammam'))
+                if alt_role:
+                    regional_targets.append(("linkedin.com", f'site:linkedin.com/jobs "{alt_role}" Riyadh'))
             if has_qatar and not (has_uae or has_saudi):
                 regional_targets.append(("linkedin.com", f'site:linkedin.com/jobs "{role_clean}" Doha'))
 
@@ -159,13 +178,37 @@ class DiscoveryEngine:
                     reason=f"Regional job board sweep on {src}",
                     location=loc_str,
                 ))
+        elif has_india:
+            india_targets = [
+                ("naukri.com", f'site:naukri.com "{role_clean}" India'.strip()),
+                ("instahyre.com", f'site:instahyre.com "{role_clean}"'.strip()),
+                ("foundit.in", f'site:foundit.in "{role_clean}"'.strip()),
+                ("linkedin.com", f'site:linkedin.com/jobs "{role_clean}" India'),
+                ("linkedin.com", f'site:linkedin.com/jobs "{role_clean}" Bengaluru'),
+            ]
+            if alt_role:
+                india_targets.append(("linkedin.com", f'site:linkedin.com/jobs "{alt_role}" India'))
+
+            for src, q in india_targets:
+                tasks.append(SearchTask(
+                    id=f"r1_india_{len(tasks)}",
+                    task_type=SearchTaskType.REGIONAL_BOARD_SEARCH,
+                    query=q,
+                    source=src,
+                    source_type=DiscoveredSourceType.REGIONAL_BOARD,
+                    priority=1,
+                    depth=0,
+                    round=1,
+                    reason=f"Indian regional job board sweep on {src}",
+                    location="India",
+                ))
 
         # 2. Major Job Boards (Priority 2, or Priority 1 for LinkedIn when non-gulf)
         major_targets = [
             ("indeed.com", f'site:indeed.com/jobs "{role_clean}" {primary_loc}'.strip()),
             ("glassdoor.com", f'site:glassdoor.com "{role_clean}" {primary_loc}'.strip()),
         ]
-        if not is_gulf:
+        if not is_gulf and not has_india:
             major_targets.insert(0, ("linkedin.com", f'site:linkedin.com/jobs "{role_clean}" {primary_loc}'.strip()))
 
         for src, q in major_targets:
@@ -189,6 +232,9 @@ class DiscoveryEngine:
                 li_post_tasks.append(f'site:linkedin.com/posts "hiring" "{role_clean}" Dubai')
             if has_saudi or is_generic_gulf:
                 li_post_tasks.append(f'site:linkedin.com/posts "hiring" "{role_clean}" Riyadh')
+        elif has_india:
+            li_post_tasks.append(f'site:linkedin.com/posts "hiring" "{role_clean}" Bengaluru')
+            li_post_tasks.append(f'site:linkedin.com/posts "hiring" "{role_clean}" India')
         elif primary_loc:
             li_post_tasks.append(f'site:linkedin.com/posts "hiring" "{role_clean}" {primary_loc}')
         else:
@@ -224,7 +270,15 @@ class DiscoveryEngine:
 
         # 4. ATS Portals (Priority 2)
         # Query primary hubs individually so search engines match discrete ATS postings
-        ats_hubs = target_locations[:2] if target_locations else ([primary_loc] if primary_loc else [""])
+        if has_uae and has_saudi:
+            ats_hubs = ["Dubai", "Abu Dhabi", "Riyadh", "Jeddah"]
+        elif has_india:
+            ats_hubs = ["India", "Bengaluru", "Hyderabad", "Pune"]
+        elif target_locations:
+            ats_hubs = target_locations[:4]
+        else:
+            ats_hubs = [primary_loc] if primary_loc else [""]
+
         for hub in ats_hubs:
             hub_suffix = f" {hub.strip()}" if hub and hub.strip() else ""
             tasks.append(SearchTask(
@@ -278,34 +332,44 @@ class DiscoveryEngine:
 
         # Secondary ATS title sweep for high-demand AI roles
         if alt_role:
-            primary_suffix = f" {primary_loc.strip()}" if primary_loc and primary_loc.strip() else ""
-            tasks.append(SearchTask(
-                id=f"r1_ats_alt_{len(tasks)}",
-                task_type=SearchTaskType.ATS_SEARCH,
-                query=f'site:boards.greenhouse.io "{alt_role}"{primary_suffix}',
-                source="boards.greenhouse.io",
-                source_type=DiscoveredSourceType.ATS_PORTAL,
-                priority=2,
-                depth=0,
-                round=1,
-                reason=f"Direct ATS harvest on Greenhouse for '{alt_role}' ({primary_loc or 'Global'})",
-                location=primary_loc or loc_str,
-            ))
-            tasks.append(SearchTask(
-                id=f"r1_ats_alt_{len(tasks)}",
-                task_type=SearchTaskType.ATS_SEARCH,
-                query=f'site:jobs.lever.co "{alt_role}"{primary_suffix}',
-                source="jobs.lever.co",
-                source_type=DiscoveredSourceType.ATS_PORTAL,
-                priority=2,
-                depth=0,
-                round=1,
-                reason=f"Direct ATS harvest on Lever for '{alt_role}' ({primary_loc or 'Global'})",
-                location=primary_loc or loc_str,
-            ))
+            alt_hubs = ["Dubai", "Riyadh"] if (has_uae and has_saudi) else (["India", "Bengaluru"] if has_india else ([primary_loc] if primary_loc else [""]))
+            for ahub in alt_hubs:
+                ahub_suffix = f" {ahub.strip()}" if ahub and ahub.strip() else ""
+                tasks.append(SearchTask(
+                    id=f"r1_ats_alt_{len(tasks)}",
+                    task_type=SearchTaskType.ATS_SEARCH,
+                    query=f'site:boards.greenhouse.io "{alt_role}"{ahub_suffix}',
+                    source="boards.greenhouse.io",
+                    source_type=DiscoveredSourceType.ATS_PORTAL,
+                    priority=2,
+                    depth=0,
+                    round=1,
+                    reason=f"Direct ATS harvest on Greenhouse for '{alt_role}' ({ahub or 'Global'})",
+                    location=ahub or loc_str,
+                ))
+                tasks.append(SearchTask(
+                    id=f"r1_ats_alt_{len(tasks)}",
+                    task_type=SearchTaskType.ATS_SEARCH,
+                    query=f'site:jobs.lever.co "{alt_role}"{ahub_suffix}',
+                    source="jobs.lever.co",
+                    source_type=DiscoveredSourceType.ATS_PORTAL,
+                    priority=2,
+                    depth=0,
+                    round=1,
+                    reason=f"Direct ATS harvest on Lever for '{alt_role}' ({ahub or 'Global'})",
+                    location=ahub or loc_str,
+                ))
 
         # 5. Direct In-Depth Web Search (Priority 2)
-        sweep_locs = target_locations[:3] if target_locations else ([loc_str] if loc_str else [""])
+        if has_uae and has_saudi:
+            sweep_locs = ["Dubai", "Abu Dhabi", "Riyadh", "Jeddah", "UAE", "Saudi Arabia"]
+        elif has_india:
+            sweep_locs = ["Bengaluru", "Hyderabad", "Pune", "Gurgaon", "Mumbai", "India"]
+        elif target_locations:
+            sweep_locs = target_locations[:6]
+        else:
+            sweep_locs = [loc_str] if loc_str else [""]
+
         for sloc in sweep_locs:
             s_suffix = f" {sloc.strip()}" if sloc and sloc.strip() else ""
             tasks.append(SearchTask(

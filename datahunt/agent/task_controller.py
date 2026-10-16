@@ -92,12 +92,12 @@ class TaskController:
         # 2. Discovery Harvesting
         discovered_entities: List[EntityIdentity] = []
         raw_documents: List[Dict[str, Any]] = []
-        queries_to_run = source_plan.search_queries[:3] or [query]
+        queries_to_run = source_plan.search_queries or [query]
 
         for q in queries_to_run:
             if time.time() > deadline:
                 break
-            s_res = self.search_tool.execute(query=q, max_results=5)
+            s_res = self.search_tool.execute(query=q, max_results=max(target_count, 15))
             if s_res.success and s_res.data:
                 hits = s_res.data.get("results", [])
                 for h in hits:
@@ -197,14 +197,14 @@ class TaskController:
         # 7. Adaptive Gap-Filling Search (if gaps identified and time permits)
         if not coverage_state.is_sufficient and coverage_state.missing_gaps and time.time() < (deadline - 10):
             gap_queries = []
-            for g in coverage_state.missing_gaps[:2]:
-                gap_queries.extend(g.suggested_queries[:1])
+            for g in coverage_state.missing_gaps:
+                gap_queries.extend(g.suggested_queries)
 
             for gq in gap_queries:
                 if time.time() > deadline:
                     break
                 logger.info(f"TaskController: Performing adaptive gap search: '{gq}'")
-                gap_res = self.search_tool.execute(query=gq, max_results=2)
+                gap_res = self.search_tool.execute(query=gq, max_results=10)
                 if gap_res.success and gap_res.data:
                     for h in gap_res.data.get("results", []):
                         u = h.get("url") or h.get("link")
