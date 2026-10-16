@@ -229,6 +229,10 @@ def is_valid_job_url(url: str) -> bool:
     if "greenhouse.io" in u_lower and "error=true" in u_lower:
         return False
 
+    # Reject expired LinkedIn and job board redirect parameters
+    if "expired_jd_redirect" in u_lower:
+        return False
+
     # 1. Reject authentication & login endpoints across all domains
     if any(auth_part in u_lower for auth_part in (
         "/users/sign_in", "/users/login", "/sign_in", "/signin", "/login",
@@ -252,6 +256,10 @@ def is_valid_job_url(url: str) -> bool:
 
     hostname = parsed.hostname or ""
     path = parsed.path or ""
+
+    # Reject dummy / mock domains in production discovery
+    if "example.com" in hostname or "localhost" in hostname:
+        return False
 
     if hostname.startswith("people.") or hostname.startswith("talent.") or hostname.startswith("candidate.") or hostname.startswith("candidates."):
         return False

@@ -130,10 +130,18 @@ def is_actual_job_posting(doc: "SourceDocument") -> tuple[bool, str]:
         "this job has expired", "job is no longer available",
         "this position has been closed", "position has been filled",
         "applications are now closed", "no longer accepting applications",
-        "this listing has expired"
+        "this listing has expired", "the job you are looking for is no longer open",
+        "this job is no longer accepting applications"
     )
     if any(sig in text for sig in expired_signals):
         return False, "Job posting has expired or closed"
+
+    req_url_low = (doc.requested_url or "").lower()
+    fin_url_low = (doc.final_url or "").lower()
+    if "example.com" in req_url_low or "example.com" in fin_url_low:
+        return False, "Placeholder or mock example.com URL"
+    if "expired_jd_redirect" in req_url_low or "expired_jd_redirect" in fin_url_low:
+        return False, "Job expired redirect detected"
 
     # 3. Aggregator Category / Search Result Form Rejection
     # If it has more than 10 separate job links and no primary role description
@@ -421,15 +429,46 @@ class FetchTool:
                         current_url = urljoin(cleaned_url, location)
                         logger.info(f"Following redirect {redirect_count}/{self.max_redirects} to: {current_url}")
 
-                        # Intercept Greenhouse ?error=true redirects — the job is on an EU or
-                        # private board. Extract the company slug and fetch via the JSON API instead.
                         parsed_redir = urlparse(current_url)
+                        redir_host = (parsed_redir.hostname or "").lower()
+                        redir_path = parsed_redir.path or ""
+                        redir_query = parsed_redir.query or ""
+
+                        # 1. Reject dummy / mock domains
+                        if "example.com" in redir_host or "localhost" in redir_host:
+                            logger.info(f"Rejecting redirect to mock/example domain: {current_url}")
+                            return ToolResult(
+                                success=False,
+                                error=DataHuntError(
+                                    ErrorCode.FETCH_BLOCKED,
+                                    user_message="Redirected to placeholder/mock domain.",
+                                    operator_message=f"Mock redirect to {current_url}"
+                                )
+                            )
+
+                        # 2. LinkedIn expired job redirect or search redirect
                         if (
-                            "greenhouse.io" in (parsed_redir.hostname or "")
-                            and "error=" in (parsed_redir.query or "")
+                            "expired_jd_redirect" in current_url
+                            or "expired_jd_redirect" in redir_query
+                            or ("linkedin.com" in redir_host and redir_path.startswith("/jobs/search"))
                         ):
-                            # Extract company slug from the path: /canonical → "canonical"
-                            path_segs = [s for s in parsed_redir.path.strip("/").split("/") if s]
+                            logger.info(f"LinkedIn expired job redirect detected: {current_url}")
+                            return ToolResult(
+                                success=False,
+                                error=DataHuntError(
+                                    ErrorCode.FETCH_BLOCKED,
+                                    user_message="Job posting has expired or closed.",
+                                    operator_message=f"Expired job redirect to {current_url}"
+                                )
+                            )
+
+                        # 3. Intercept Greenhouse ?error=true redirects — the job is on an EU or
+                        # private board. Extract the company slug and fetch via the JSON API instead.
+                        if (
+                            "greenhouse.io" in redir_host
+                            and "error=" in redir_query
+                        ):
+                            path_segs = [s for s in redir_path.strip("/").split("/") if s]
                             if path_segs:
                                 gh_slug = path_segs[0]
                                 logger.info(

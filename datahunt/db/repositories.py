@@ -722,13 +722,18 @@ class JobTrackingRepository:
                 def _is_good_url(u: str) -> bool:
                     if not u or len(u) < 10:
                         return False
-                    bad_endings = ("/oops", "/404", "/not-found", "/error")
+                    u_lower = u.lower()
+                    if "example.com" in u_lower or "localhost" in u_lower:
+                        return False
+                    if "error=true" in u_lower or "expired_jd_redirect" in u_lower:
+                        return False
+                    bad_endings = ("/oops", "/404", "/not-found", "/error", "/closed")
                     return not any(u.rstrip("/").lower().endswith(e) for e in bad_endings)
 
                 display_url = (
-                    row["canonical_url"]
-                    if _is_good_url(row["canonical_url"]) and not _is_good_url(raw_app_url)
-                    else (raw_app_url or row["canonical_url"])
+                    raw_app_url
+                    if _is_good_url(raw_app_url)
+                    else (row["canonical_url"] if _is_good_url(row["canonical_url"]) else (raw_app_url or row["canonical_url"]))
                 )
                 jobs.append({
                     "id": row["id"],

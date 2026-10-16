@@ -458,6 +458,7 @@ function updateRunScopeBanner(runId) {
 window.clearRunScopeFilter = function() {
   const url = new URL(window.location);
   url.searchParams.delete("run_id");
+  url.searchParams.set("all", "1");
   window.history.pushState({}, "", url);
   loadJobs(null);
 };
@@ -470,7 +471,23 @@ async function loadJobs(overrideRunId) {
 
   try {
     const urlParams = new URLSearchParams(window.location.search);
-    const runId = overrideRunId !== undefined ? overrideRunId : urlParams.get("run_id");
+    let runId = overrideRunId !== undefined ? overrideRunId : urlParams.get("run_id");
+
+    // If no run_id specified and user has not explicitly requested all jobs, default to latest active/completed run
+    if (!runId && !urlParams.has("all")) {
+      try {
+        const latestRes = await fetch("/runs/latest");
+        if (latestRes.ok) {
+          const latestRun = await latestRes.json();
+          if (latestRun && latestRun.id) {
+            runId = latestRun.id;
+          }
+        }
+      } catch (e) {
+        console.debug("Could not determine latest run:", e);
+      }
+    }
+
     updateRunScopeBanner(runId);
 
     const baseApiUrl = runId
@@ -908,27 +925,24 @@ function renderTable(jobs) {
     const badge = f.freshness_badge || "Recent";
     const is0sec = badge.includes("0-SEC") || badge.includes("JUST NOW");
 
-    // Prefer stable canonical_url over ephemeral ATS redirect URLs.
-    // Workable, Greenhouse, Lever, Ashby all issue session-specific application_url tokens
-    // that expire and produce /oops 404 pages. The canonical_url (scrape source) stays valid.
     const _rawAppUrl  = f.application_url || "";
     const _canonUrl   = job.canonical_url  || "";
-    const _ATS_DOMAINS = ["workable.com", "greenhouse.io", "lever.co", "ashbyhq.com",
-                           "apply.", "jobs.lever", "boards.greenhouse"];
-    const _isAtsUrl = (u) => _ATS_DOMAINS.some(d => u.includes(d));
-    const _isBrokenUrl = (u) => !u || u === "#" || u.includes("/oops") || u.includes("/404")
-                              || u.length < 10 || /^https?:\/\/[^/]+\/?$/.test(u);
+    const _isBrokenUrl = (u) => {
+      if (!u || u === "#" || typeof u !== "string" || u.length < 10) return true;
+      const low = u.toLowerCase();
+      if (low.includes("example.com") || low.includes("localhost")) return true;
+      if (low.includes("/oops") || low.includes("/404") || low.includes("error=true") || low.includes("expired_jd_redirect")) return true;
+      if (/^https?:\/\/[^/]+\/?$/.test(u)) return true;
+      return false;
+    };
 
     let applyUrl;
-    if (_isBrokenUrl(_rawAppUrl)) {
-      // application_url is broken/expired — use canonical scrape URL instead
-      applyUrl = _canonUrl || "#";
-    } else if (_isAtsUrl(_rawAppUrl) && !_isBrokenUrl(_canonUrl)) {
-      // For ATS platforms, prefer the scrape URL which is the canonical job page
-      // (the application_url is often a deep redirect that expires)
+    if (!_isBrokenUrl(_rawAppUrl)) {
+      applyUrl = _rawAppUrl;
+    } else if (!_isBrokenUrl(_canonUrl)) {
       applyUrl = _canonUrl;
     } else {
-      applyUrl = _rawAppUrl || _canonUrl || "#";
+      applyUrl = "#";
     }
     applyUrl = sanitizeUrl(applyUrl);
     
@@ -1253,15 +1267,24 @@ window.openJobDetail = async function(recordId) {
 
   const applyLink = document.getElementById("modal-direct-apply-link");
   if (applyLink) {
-    // Reuse the same ATS-aware URL logic as the table row
     const _mRaw   = f.application_url || "";
     const _mCanon = job.canonical_url  || "";
-    const _mBad   = (u) => !u || u === "#" || u.includes("/oops") || u.includes("/404") || u.length < 10;
-    const _mAts   = (u) => ["workable.com","greenhouse.io","lever.co","ashbyhq.com","apply.","jobs.lever","boards.greenhouse"].some(d => u.includes(d));
+    const _mBad   = (u) => {
+      if (!u || u === "#" || typeof u !== "string" || u.length < 10) return true;
+      const low = u.toLowerCase();
+      if (low.includes("example.com") || low.includes("localhost")) return true;
+      if (low.includes("/oops") || low.includes("/404") || low.includes("error=true") || low.includes("expired_jd_redirect")) return true;
+      if (/^https?:\/\/[^/]+\/?$/.test(u)) return true;
+      return false;
+    };
     let modalApplyUrl;
-    if (_mBad(_mRaw))              modalApplyUrl = _mCanon || "#";
-    else if (_mAts(_mRaw) && !_mBad(_mCanon)) modalApplyUrl = _mCanon;
-    else                           modalApplyUrl = _mRaw || _mCanon || "#";
+    if (!_mBad(_mRaw)) {
+      modalApplyUrl = _mRaw;
+    } else if (!_mBad(_mCanon)) {
+      modalApplyUrl = _mCanon;
+    } else {
+      modalApplyUrl = "#";
+    }
     applyLink.href = sanitizeUrl(modalApplyUrl);
     applyLink.onclick = function(e) {
       handleApplyClick(recordId, e);
