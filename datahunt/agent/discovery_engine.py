@@ -864,28 +864,39 @@ class DiscoveryEngine:
             effective_count = len(state.verified_records)
 
         # Target results reached
+        is_fast = getattr(state, "collection_mode", None) != "thorough"
         if effective_count >= state.target_results:
-            has_geo_coverage = True
-            if state.locations and len(state.locations) > 1:
-                target_locs = [l.lower() for l in state.locations]
-                found_locs = set()
-                for rec in state.qualified_records:
-                    rec_loc = (rec.fields.get("location") or "").lower()
-                    for tl in target_locs:
-                        if tl in rec_loc or any(alias in rec_loc for alias in ("riyadh", "jeddah", "dammam") if tl == "saudi arabia") or any(alias in rec_loc for alias in ("dubai", "abu dhabi", "sharjah") if tl == "uae"):
-                            found_locs.add(tl)
-                if len(found_locs) < len(target_locs) and discovery_state.current_round < 3:
-                    has_geo_coverage = False
+            has_pending = bool(
+                discovery_state.task_queue
+                or getattr(discovery_state, "pending_crawl_tasks", None)
+            )
+            if is_fast or not has_pending:
+                has_geo_coverage = True
+                if state.locations and len(state.locations) > 1:
+                    target_locs = [l.lower() for l in state.locations]
+                    found_locs = set()
+                    for rec in state.qualified_records:
+                        rec_loc = (rec.fields.get("location") or "").lower()
+                        for tl in target_locs:
+                            if tl in rec_loc or any(alias in rec_loc for alias in ("riyadh", "jeddah", "dammam") if tl == "saudi arabia") or any(alias in rec_loc for alias in ("dubai", "abu dhabi", "sharjah") if tl == "uae"):
+                                found_locs.add(tl)
+                    if len(found_locs) < len(target_locs) and discovery_state.current_round < 3:
+                        has_geo_coverage = False
 
-            if has_geo_coverage and discovery_state.coverage_matrix.is_balanced(min_categories=2):
-                return True, StopReason.TARGET_QUALIFIED_REACHED, f"Target results ({effective_count}/{state.target_results}) reached with balanced coverage"
-            elif discovery_state.current_round >= 3:
-                return True, StopReason.TARGET_QUALIFIED_REACHED, f"Target results ({effective_count}/{state.target_results}) reached across {discovery_state.current_round} rounds"
+                if has_geo_coverage and discovery_state.coverage_matrix.is_balanced(min_categories=2):
+                    return True, StopReason.TARGET_QUALIFIED_REACHED, f"Target results ({effective_count}/{state.target_results}) reached with balanced coverage"
+                elif discovery_state.current_round >= 3:
+                    return True, StopReason.TARGET_QUALIFIED_REACHED, f"Target results ({effective_count}/{state.target_results}) reached across {discovery_state.current_round} rounds"
 
         # Diminishing returns detection
         if discovery_state.consecutive_low_yield_rounds >= 2:
-            if effective_count > 0 and discovery_state.coverage_matrix.is_balanced(min_categories=2):
-                return True, StopReason.DIMINISHING_RETURNS, f"Diminishing returns across 2 consecutive rounds; {effective_count} qualified jobs found"
+            has_pending = bool(
+                discovery_state.task_queue
+                or getattr(discovery_state, "pending_crawl_tasks", None)
+            )
+            if is_fast or not has_pending:
+                if effective_count > 0 and discovery_state.coverage_matrix.is_balanced(min_categories=2):
+                    return True, StopReason.DIMINISHING_RETURNS, f"Diminishing returns across 2 consecutive rounds; {effective_count} qualified jobs found"
 
         # No more tasks in queue
         if not discovery_state.task_queue and discovery_state.current_round > 1:

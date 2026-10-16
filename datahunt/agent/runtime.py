@@ -84,6 +84,11 @@ class AgentRuntime:
 
         # Initialize canonical job request if in jobs mode
         if state.mode in ("jobs", "job"):
+            q_low = (state.request or "").lower()
+            if "--fast" in q_low or "mode:fast" in q_low or "fast_mode" in q_low or state.collection_mode == "fast":
+                state.collection_mode = "fast"
+            else:
+                state.collection_mode = "thorough"
             emit("status", {"message": "Intent: JOB_SEARCH", "phase": "PLANNING"})
             if not state.canonical_job_request:
                 if not state.request or not state.request.strip():
@@ -252,63 +257,99 @@ class AgentRuntime:
 
         role_keywords = list(dict.fromkeys(
             state.explicit_titles + state.expanded_titles
-        ))[:4] or ["Engineer"]
+        )) or ["Engineer"]
         locations = state.locations or ([state.explicit_location] if state.explicit_location else [])
 
-        # Derive crawl budget from run budget (leave headroom for search phase)
-        max_pages = min(
-            state.max_fetch_calls // 4,
-            80,
-        )
+        # Derive crawl budget from discovery budget or state limits (no hardcoded 25/6/80 caps)
+        db = state.discovery_budget
+        max_sources = getattr(db, "max_sources", 500) if db else 500
+        max_pages_per_source = getattr(db, "max_pages_per_source", 50) if db else 50
+        max_total_pages = getattr(db, "max_fetches", state.max_fetch_calls) if db else state.max_fetch_calls
+        max_total_jobs = getattr(db, "max_total_jobs", 20000) if db else 20000
+
         budget = CrawlBudget(
-            max_sources=25,
-            max_pages_per_source=6,
-            max_total_pages=max_pages,
-            max_total_jobs=min(state.max_fetch_calls * 5, 1000),
+            max_sources=max_sources,
+            max_pages_per_source=max_pages_per_source,
+            max_total_pages=max_total_pages,
+            max_total_jobs=max_total_jobs,
             request_timeout=10.0,
-            per_domain_delay=0.5,
-            max_workers=6,
+            per_domain_delay=0.25,
+            max_workers=8,
         )
 
         crawler = MultiSourceCrawler(budget=budget)
         crawl_result = None
 
         # Check if we have queued CrawlTasks in DiscoveryState
-        pending_tasks = []
+        # Process in concurrency batches until queue is exhausted or deadline/budget reached
+        batch_size = 8
         if state.discovery_state and state.discovery_state.pending_crawl_tasks:
-            while state.discovery_state.pending_crawl_tasks and len(pending_tasks) < 6:
-                t = state.discovery_state.pending_crawl_tasks.pop(0)
-                t.status = CrawlTaskStatus.ACTIVE
-                state.discovery_state.active_crawl_tasks.append(t)
-                pending_tasks.append(t)
+            while state.discovery_state.pending_crawl_tasks:
+                if state.deadline > 0 and time.time() >= state.deadline:
+                    break
 
-        if pending_tasks:
-            emit("status", {
-                "message": f"Direct crawl: processing {len(pending_tasks)} discovered source tasks",
-                "phase": "CRAWLING",
-            })
-            try:
-                crawl_result = crawler.crawl_tasks(
-                    tasks=pending_tasks,
-                    role_keywords=role_keywords,
-                    deadline=state.deadline,
-                    external_emit=emit,
-                    discovery_state=state.discovery_state,
-                )
-                for t in pending_tasks:
-                    if t in state.discovery_state.active_crawl_tasks:
-                        state.discovery_state.active_crawl_tasks.remove(t)
-                    t.status = CrawlTaskStatus.COMPLETED
-                    state.discovery_state.completed_crawl_tasks.append(t)
-                    key = f"{t.source_type}:{t.source}:{t.company or ''}:{t.location or ''}:{t.page}".lower()
-                    state.discovery_state.crawled_sources.add(key)
-            except Exception as e:
-                logger.warning(f"Error crawling tasks: {e}")
-                for t in pending_tasks:
-                    if t in state.discovery_state.active_crawl_tasks:
-                        state.discovery_state.active_crawl_tasks.remove(t)
-                    t.status = CrawlTaskStatus.FAILED
-                    state.discovery_state.failed_crawl_tasks.append(t)
+                batch = []
+                while state.discovery_state.pending_crawl_tasks and len(batch) < batch_size:
+                    t = state.discovery_state.pending_crawl_tasks.pop(0)
+                    t.status = CrawlTaskStatus.ACTIVE
+                    state.discovery_state.active_crawl_tasks.append(t)
+                    batch.append(t)
+
+                if not batch:
+                    break
+
+                emit("status", {
+                    "message": f"Direct crawl: processing batch of {len(batch)} source tasks ({len(state.discovery_state.pending_crawl_tasks)} remaining)",
+                    "phase": "CRAWLING",
+                })
+                try:
+                    crawl_res = crawler.crawl_tasks(
+                        tasks=batch,
+                        role_keywords=role_keywords,
+                        deadline=state.deadline,
+                        external_emit=emit,
+                        discovery_state=state.discovery_state,
+                    )
+                    if crawl_result is None:
+                        crawl_result = crawl_res
+                    else:
+                        crawl_result.sources_discovered += crawl_res.sources_discovered
+                        crawl_result.sources_crawled += crawl_res.sources_crawled
+                        crawl_result.sources_blocked += crawl_res.sources_blocked
+                        crawl_result.pages_fetched += crawl_res.pages_fetched
+                        crawl_result.job_links_discovered += crawl_res.job_links_discovered
+                        crawl_result.jobs_extracted += crawl_res.jobs_extracted
+                        crawl_result.crawled_jobs.extend(crawl_res.crawled_jobs)
+                        crawl_result.candidate_urls.extend(crawl_res.candidate_urls)
+                        crawl_result.events.extend(crawl_res.events)
+                        crawl_result.task_outcomes.update(crawl_res.task_outcomes)
+                        crawl_result.task_reasons.update(crawl_res.task_reasons)
+
+                    for t in batch:
+                        if t in state.discovery_state.active_crawl_tasks:
+                            state.discovery_state.active_crawl_tasks.remove(t)
+                        outcome = crawl_res.task_outcomes.get(t.id, CrawlTaskStatus.COMPLETED)
+                        t.status = outcome
+                        if outcome == CrawlTaskStatus.COMPLETED:
+                            state.discovery_state.completed_crawl_tasks.append(t)
+                        elif outcome == CrawlTaskStatus.BLOCKED:
+                            state.discovery_state.blocked_crawl_tasks.append(t)
+                        elif outcome == CrawlTaskStatus.PARTIAL:
+                            state.discovery_state.partial_crawl_tasks.append(t)
+                        else:
+                            state.discovery_state.failed_crawl_tasks.append(t)
+                        key = f"{t.source_type}:{t.source}:{t.company or ''}:{t.location or ''}:{t.page}".lower()
+                        state.discovery_state.crawled_sources.add(key)
+                except Exception as e:
+                    logger.warning(f"Error crawling tasks batch: {e}")
+                    for t in batch:
+                        if t in state.discovery_state.active_crawl_tasks:
+                            state.discovery_state.active_crawl_tasks.remove(t)
+                        t.status = CrawlTaskStatus.FAILED
+                        state.discovery_state.failed_crawl_tasks.append(t)
+
+            if not state.discovery_state.pending_crawl_tasks:
+                state.crawl_done = True
         else:
             state.crawl_done = True
             discovered_ats = dict(state.discovery_state.discovered_ats) if state.discovery_state else {}
@@ -1057,6 +1098,8 @@ class AgentRuntime:
             emit("status", {"message": f"Found {len(final_records)} qualified results", "phase": "COMPLETED"})
 
         result_status = "completed" if len(final_records) >= state.target_results else ("partial" if final_records else "failed")
+        if coverage_report_dict and "run_status" in coverage_report_dict:
+            result_status = coverage_report_dict["run_status"]
 
         # Transform to canonical JobRecord list if in jobs mode
         canonical_job_records = []

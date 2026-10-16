@@ -123,6 +123,9 @@ class AgentState:
     actions_taken: List[str] = field(default_factory=list)
     discovery_state: Optional[Any] = None
     discovery_budget: Optional[Any] = None
+    collection_mode: Optional[str] = None  # None / "thorough" / "fast"
+    coverage_report: Dict[str, Any] = field(default_factory=dict)
+    can_resume: bool = False
 
     def add_observation(self, obs: str):
         self.observations.append(obs)

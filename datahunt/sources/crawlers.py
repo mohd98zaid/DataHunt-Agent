@@ -28,6 +28,7 @@ from bs4 import BeautifulSoup
 from datahunt.logger import logger
 from datahunt.policy import validate_url_ssrf, check_domain_policy
 from datahunt.errors import DataHuntError
+from datahunt.agent.discovery_models import CrawlTaskStatus
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Crawl Budget
@@ -36,13 +37,13 @@ from datahunt.errors import DataHuntError
 @dataclass
 class CrawlBudget:
     """Controls total crawl resource usage per run."""
-    max_sources: int = 20
-    max_pages_per_source: int = 5
-    max_total_pages: int = 60
-    max_total_jobs: int = 500
+    max_sources: int = 500
+    max_pages_per_source: int = 50
+    max_total_pages: int = 500
+    max_total_jobs: int = 20000
     request_timeout: float = 12.0
     per_domain_delay: float = 0.5   # seconds between requests to same domain
-    max_workers: int = 6             # concurrent crawl threads
+    max_workers: int = 8             # concurrent crawl threads
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -349,55 +350,72 @@ def crawl_lever_company(
     """
     source_id = f"lever:{company_slug}"
     jobs: List[CrawledJob] = []
-    api_url = f"https://api.lever.co/v0/postings/{company_slug}?mode=json"
+    skip = 0
+    limit = 100
+    seen_skips: Set[int] = set()
 
-    emit(CrawlEvent(CrawlEventType.SOURCE_STARTED, source_id, url=api_url,
+    emit(CrawlEvent(CrawlEventType.SOURCE_STARTED, source_id, url="",
                     message=f"Lever API for {company_slug}"))
-    rate_limiter.wait("api.lever.co")
-    resp = _safe_get(api_url, timeout=budget.request_timeout,
-                     extra_headers={"Accept": "application/json"})
-    if not resp or resp.status_code != 200:
-        emit(CrawlEvent(CrawlEventType.SOURCE_BLOCKED, source_id, url=api_url,
-                        message=f"Lever API unavailable for {company_slug}"))
-        return jobs
 
-    try:
-        raw_jobs = resp.json()
-    except Exception:
-        return jobs
-
-    if not isinstance(raw_jobs, list):
-        raw_jobs = raw_jobs.get("postings", []) if isinstance(raw_jobs, dict) else []
-
-    emit(CrawlEvent(CrawlEventType.PAGE_FETCHED, source_id, url=api_url,
-                    count=len(raw_jobs), message=f"Lever API: {len(raw_jobs)} postings"))
-
-    for job in raw_jobs:
-        if len(jobs) >= budget.max_total_jobs:
+    while len(jobs) < budget.max_total_jobs:
+        if skip in seen_skips:
             break
-        title = job.get("text", "") or job.get("title", "")
-        if not is_broadly_relevant_job_title(title, role_keywords):
-            continue
-        categories = job.get("categories", {})
-        location = categories.get("location", "") if isinstance(categories, dict) else ""
-        apply_url = job.get("hostedUrl", job.get("applyUrl", ""))
-        posted_at = str(job.get("createdAt", ""))
-        team = categories.get("team", "") if isinstance(categories, dict) else ""
+        seen_skips.add(skip)
 
-        crawled = CrawledJob(
-            source_id=source_id,
-            source_name=f"Lever ({company_slug})",
-            title=title,
-            company=company_slug.replace("-", " ").title(),
-            location=location,
-            url=apply_url,
-            apply_url=apply_url,
-            posted_at=posted_at,
-            raw_fields={"team": team, "lever_company": company_slug},
-        )
-        jobs.append(crawled)
-        emit(CrawlEvent(CrawlEventType.JOB_EXTRACTED, source_id, url=apply_url,
-                        message=f"{title} @ {crawled.company}"))
+        api_url = f"https://api.lever.co/v0/postings/{company_slug}?mode=json&limit={limit}&skip={skip}"
+        rate_limiter.wait("api.lever.co")
+        resp = _safe_get(api_url, timeout=budget.request_timeout,
+                         extra_headers={"Accept": "application/json"})
+        if not resp or resp.status_code != 200:
+            if skip == 0:
+                emit(CrawlEvent(CrawlEventType.SOURCE_BLOCKED, source_id, url=api_url,
+                                message=f"Lever API unavailable for {company_slug}"))
+            break
+
+        try:
+            raw_jobs = resp.json()
+        except Exception:
+            break
+
+        if not isinstance(raw_jobs, list):
+            raw_jobs = raw_jobs.get("postings", []) if isinstance(raw_jobs, dict) else []
+
+        if not raw_jobs:
+            break
+
+        emit(CrawlEvent(CrawlEventType.PAGE_FETCHED, source_id, url=api_url,
+                        count=len(raw_jobs), message=f"Lever API: {len(raw_jobs)} postings (skip {skip})"))
+
+        for job in raw_jobs:
+            if len(jobs) >= budget.max_total_jobs:
+                break
+            title = job.get("text", "") or job.get("title", "")
+            if not is_broadly_relevant_job_title(title, role_keywords):
+                continue
+            categories = job.get("categories", {})
+            location = categories.get("location", "") if isinstance(categories, dict) else ""
+            apply_url = job.get("hostedUrl", job.get("applyUrl", ""))
+            posted_at = str(job.get("createdAt", ""))
+            team = categories.get("team", "") if isinstance(categories, dict) else ""
+
+            crawled = CrawledJob(
+                source_id=source_id,
+                source_name=f"Lever ({company_slug})",
+                title=title,
+                company=company_slug.replace("-", " ").title(),
+                location=location,
+                url=apply_url,
+                apply_url=apply_url,
+                posted_at=posted_at,
+                raw_fields={"team": team, "lever_company": company_slug},
+            )
+            jobs.append(crawled)
+            emit(CrawlEvent(CrawlEventType.JOB_EXTRACTED, source_id, url=apply_url,
+                            message=f"{title} @ {crawled.company}"))
+
+        skip += len(raw_jobs)
+        if len(raw_jobs) < limit:
+            break
 
     emit(CrawlEvent(CrawlEventType.SOURCE_COMPLETED, source_id,
                     count=len(jobs), message=f"Lever {company_slug}: {len(jobs)} jobs"))
@@ -476,60 +494,80 @@ def crawl_workable_company(
     emit: Callable[[CrawlEvent], None],
 ) -> List[CrawledJob]:
     """
-    Crawl Workable's public job board for a company via their published JSON feed.
+    Crawl Workable's public job board for a company via their published JSON feed,
+    following nextPage pagination tokens.
     """
     source_id = f"workable:{company_slug}"
     jobs: List[CrawledJob] = []
-    api_url = f"https://apply.workable.com/api/v3/accounts/{company_slug}/jobs"
+    seen_tokens: Set[str] = set()
+    next_token: Optional[str] = None
 
-    emit(CrawlEvent(CrawlEventType.SOURCE_STARTED, source_id, url=api_url,
+    emit(CrawlEvent(CrawlEventType.SOURCE_STARTED, source_id, url="",
                     message=f"Workable API for {company_slug}"))
-    rate_limiter.wait("apply.workable.com")
-    resp = _safe_get(api_url, timeout=budget.request_timeout,
-                     extra_headers={"Accept": "application/json"})
-    if not resp or resp.status_code != 200:
-        emit(CrawlEvent(CrawlEventType.SOURCE_BLOCKED, source_id, url=api_url,
-                        message=f"Workable API unavailable for {company_slug}"))
-        return jobs
 
-    try:
-        data = resp.json()
-    except Exception:
-        return jobs
-
-    raw_jobs = data.get("results", []) if isinstance(data, dict) else []
-    emit(CrawlEvent(CrawlEventType.PAGE_FETCHED, source_id, url=api_url,
-                    count=len(raw_jobs), message=f"Workable API: {len(raw_jobs)} jobs"))
-
-    for job in raw_jobs:
-        if len(jobs) >= budget.max_total_jobs:
+    while len(jobs) < budget.max_total_jobs:
+        if next_token and next_token in seen_tokens:
             break
-        title = job.get("title", "")
-        if not is_broadly_relevant_job_title(title, role_keywords):
-            continue
-        location = job.get("location", {})
-        if isinstance(location, dict):
-            location = location.get("city", "") or location.get("country", "")
+        if next_token:
+            seen_tokens.add(next_token)
+            api_url = f"https://apply.workable.com/api/v3/accounts/{company_slug}/jobs?token={next_token}"
         else:
-            location = str(location or "")
-        shortcode = job.get("shortcode", "")
-        apply_url = f"https://apply.workable.com/{company_slug}/j/{shortcode}" if shortcode else ""
-        posted_at = job.get("published", "")
+            api_url = f"https://apply.workable.com/api/v3/accounts/{company_slug}/jobs"
 
-        crawled = CrawledJob(
-            source_id=source_id,
-            source_name=f"Workable ({company_slug})",
-            title=title,
-            company=company_slug.replace("-", " ").title(),
-            location=location,
-            url=apply_url,
-            apply_url=apply_url,
-            posted_at=posted_at,
-            raw_fields={"workable_company": company_slug, "shortcode": shortcode},
-        )
-        jobs.append(crawled)
-        emit(CrawlEvent(CrawlEventType.JOB_EXTRACTED, source_id, url=apply_url,
-                        message=f"{title} @ {crawled.company}"))
+        rate_limiter.wait("apply.workable.com")
+        resp = _safe_get(api_url, timeout=budget.request_timeout,
+                         extra_headers={"Accept": "application/json"})
+        if not resp or resp.status_code != 200:
+            if not jobs and next_token is None:
+                emit(CrawlEvent(CrawlEventType.SOURCE_BLOCKED, source_id, url=api_url,
+                                message=f"Workable API unavailable for {company_slug}"))
+            break
+
+        try:
+            data = resp.json()
+        except Exception:
+            break
+
+        raw_jobs = data.get("results", []) if isinstance(data, dict) else []
+        if not raw_jobs:
+            break
+
+        emit(CrawlEvent(CrawlEventType.PAGE_FETCHED, source_id, url=api_url,
+                        count=len(raw_jobs), message=f"Workable API: {len(raw_jobs)} jobs"))
+
+        for job in raw_jobs:
+            if len(jobs) >= budget.max_total_jobs:
+                break
+            title = job.get("title", "")
+            if not is_broadly_relevant_job_title(title, role_keywords):
+                continue
+            location = job.get("location", {})
+            if isinstance(location, dict):
+                location = location.get("city", "") or location.get("country", "")
+            else:
+                location = str(location or "")
+            shortcode = job.get("shortcode", "")
+            apply_url = f"https://apply.workable.com/{company_slug}/j/{shortcode}" if shortcode else ""
+            posted_at = job.get("published", "")
+
+            crawled = CrawledJob(
+                source_id=source_id,
+                source_name=f"Workable ({company_slug})",
+                title=title,
+                company=company_slug.replace("-", " ").title(),
+                location=location,
+                url=apply_url,
+                apply_url=apply_url,
+                posted_at=posted_at,
+                raw_fields={"workable_company": company_slug, "shortcode": shortcode},
+            )
+            jobs.append(crawled)
+            emit(CrawlEvent(CrawlEventType.JOB_EXTRACTED, source_id, url=apply_url,
+                            message=f"{title} @ {crawled.company}"))
+
+        next_token = data.get("nextPage") if isinstance(data, dict) else None
+        if not next_token:
+            break
 
     emit(CrawlEvent(CrawlEventType.SOURCE_COMPLETED, source_id,
                     count=len(jobs), message=f"Workable {company_slug}: {len(jobs)} jobs"))
@@ -544,65 +582,86 @@ def crawl_smartrecruiters_company(
     emit: Callable[[CrawlEvent], None],
 ) -> List[CrawledJob]:
     """
-    Crawl SmartRecruiters public job search API for a company.
+    Crawl SmartRecruiters public job search API for a company with offset/limit pagination.
     """
     source_id = f"smartrecruiters:{company_slug}"
     jobs: List[CrawledJob] = []
     query = "+".join(role_keywords[:2]) if role_keywords else ""
-    api_url = (
-        f"https://api.smartrecruiters.com/v1/companies/{company_slug}/postings"
-        f"{'?q=' + query if query else ''}"
-    )
+    offset = 0
+    limit = 100
+    seen_offsets: Set[int] = set()
 
-    emit(CrawlEvent(CrawlEventType.SOURCE_STARTED, source_id, url=api_url,
+    emit(CrawlEvent(CrawlEventType.SOURCE_STARTED, source_id, url="",
                     message=f"SmartRecruiters API for {company_slug}"))
-    rate_limiter.wait("api.smartrecruiters.com")
-    resp = _safe_get(api_url, timeout=budget.request_timeout,
-                     extra_headers={"Accept": "application/json"})
-    if not resp or resp.status_code != 200:
-        emit(CrawlEvent(CrawlEventType.SOURCE_BLOCKED, source_id, url=api_url,
-                        message=f"SmartRecruiters API unavailable for {company_slug}"))
-        return jobs
 
-    try:
-        data = resp.json()
-    except Exception:
-        return jobs
-
-    raw_jobs = data.get("content", []) if isinstance(data, dict) else []
-    emit(CrawlEvent(CrawlEventType.PAGE_FETCHED, source_id, url=api_url,
-                    count=len(raw_jobs), message=f"SmartRecruiters: {len(raw_jobs)} jobs"))
-
-    for job in raw_jobs:
-        if len(jobs) >= budget.max_total_jobs:
+    while len(jobs) < budget.max_total_jobs:
+        if offset in seen_offsets:
             break
-        title = job.get("name", "")
-        if not is_broadly_relevant_job_title(title, role_keywords):
-            continue
-        loc = job.get("location", {})
-        location = ""
-        if isinstance(loc, dict):
-            city = loc.get("city", "")
-            country = loc.get("country", "")
-            location = f"{city}, {country}".strip(", ")
-        job_id = job.get("id", "")
-        apply_url = f"https://jobs.smartrecruiters.com/{company_slug}/{job_id}" if job_id else ""
-        posted_at = job.get("releasedDate", "")
+        seen_offsets.add(offset)
 
-        crawled = CrawledJob(
-            source_id=source_id,
-            source_name=f"SmartRecruiters ({company_slug})",
-            title=title,
-            company=company_slug.replace("-", " ").title(),
-            location=location,
-            url=apply_url,
-            apply_url=apply_url,
-            posted_at=posted_at,
-            raw_fields={"sr_company": company_slug, "sr_job_id": job_id},
+        api_url = (
+            f"https://api.smartrecruiters.com/v1/companies/{company_slug}/postings"
+            f"?limit={limit}&offset={offset}"
+            f"{'&q=' + query if query else ''}"
         )
-        jobs.append(crawled)
-        emit(CrawlEvent(CrawlEventType.JOB_EXTRACTED, source_id, url=apply_url,
-                        message=f"{title} @ {crawled.company}"))
+        rate_limiter.wait("api.smartrecruiters.com")
+        resp = _safe_get(api_url, timeout=budget.request_timeout,
+                         extra_headers={"Accept": "application/json"})
+        if not resp or resp.status_code != 200:
+            if offset == 0:
+                emit(CrawlEvent(CrawlEventType.SOURCE_BLOCKED, source_id, url=api_url,
+                                message=f"SmartRecruiters API unavailable for {company_slug}"))
+            break
+
+        try:
+            data = resp.json()
+        except Exception:
+            break
+
+        raw_jobs = data.get("content", []) if isinstance(data, dict) else []
+        if not raw_jobs:
+            break
+
+        emit(CrawlEvent(CrawlEventType.PAGE_FETCHED, source_id, url=api_url,
+                        count=len(raw_jobs), message=f"SmartRecruiters: {len(raw_jobs)} jobs (offset {offset})"))
+
+        for job in raw_jobs:
+            if len(jobs) >= budget.max_total_jobs:
+                break
+            title = job.get("name", "")
+            if not is_broadly_relevant_job_title(title, role_keywords):
+                continue
+            loc = job.get("location", {})
+            location = ""
+            if isinstance(loc, dict):
+                city = loc.get("city", "")
+                country = loc.get("country", "")
+                location = f"{city}, {country}".strip(", ")
+            job_id = job.get("id", "")
+            apply_url = f"https://jobs.smartrecruiters.com/{company_slug}/{job_id}" if job_id else ""
+            posted_at = job.get("releasedDate", "")
+
+            crawled = CrawledJob(
+                source_id=source_id,
+                source_name=f"SmartRecruiters ({company_slug})",
+                title=title,
+                company=company_slug.replace("-", " ").title(),
+                location=location,
+                url=apply_url,
+                apply_url=apply_url,
+                posted_at=posted_at,
+                raw_fields={"sr_company": company_slug, "sr_job_id": job_id},
+            )
+            jobs.append(crawled)
+            emit(CrawlEvent(CrawlEventType.JOB_EXTRACTED, source_id, url=apply_url,
+                            message=f"{title} @ {crawled.company}"))
+
+        total_found = data.get("totalFound") if isinstance(data, dict) else None
+        offset += len(raw_jobs)
+        if total_found is not None and offset >= total_found:
+            break
+        if len(raw_jobs) < limit:
+            break
 
     emit(CrawlEvent(CrawlEventType.SOURCE_COMPLETED, source_id,
                     count=len(jobs), message=f"SmartRecruiters {company_slug}: {len(jobs)} jobs"))
@@ -705,8 +764,12 @@ def crawl_regional_board_html(
 
     current_url = listing_url
     pages_fetched = 0
+    seen_page_urls: Set[str] = set()
 
     for page_num in range(1, budget.max_pages_per_source + 1):
+        if not current_url or current_url in seen_page_urls:
+            break
+        seen_page_urls.add(current_url)
         if len(jobs) >= budget.max_total_jobs:
             break
 
@@ -872,8 +935,12 @@ def crawl_career_page(
         return job_urls, ats_redirect
 
     current_url = career_url
+    seen_page_urls: Set[str] = set()
 
     for page_num in range(1, budget.max_pages_per_source + 1):
+        if not current_url or current_url in seen_page_urls:
+            break
+        seen_page_urls.add(current_url)
         rate_limiter.wait(domain)
         resp = _safe_get(current_url, timeout=budget.request_timeout)
         if not resp or resp.status_code >= 400:
@@ -948,6 +1015,8 @@ class CrawlResult:
     candidate_urls: List[Dict[str, Any]] = field(default_factory=list)
     events: List[CrawlEvent] = field(default_factory=list)
     source_telemetry: Dict[str, Any] = field(default_factory=dict)
+    task_outcomes: Dict[str, Any] = field(default_factory=dict)
+    task_reasons: Dict[str, str] = field(default_factory=dict)
 
     def merge_jobs(self) -> List[CrawledJob]:
         """Return deduplicated jobs by identity_key."""
@@ -1326,10 +1395,15 @@ class MultiSourceCrawler:
                             result.crawled_jobs.extend(ats_jobs)
                             result.jobs_extracted += len(ats_jobs)
                             result.sources_crawled += 1
+                            result.task_outcomes[task.id] = CrawlTaskStatus.COMPLETED
                         else:
                             result.sources_blocked += 1
+                            result.task_outcomes[task.id] = CrawlTaskStatus.BLOCKED
+                            result.task_reasons[task.id] = f"ATS API for {company} blocked or yielded 0 jobs"
                     else:
                         result.sources_blocked += 1
+                        result.task_outcomes[task.id] = CrawlTaskStatus.BLOCKED
+                        result.task_reasons[task.id] = f"ATS platform {plat} or company slug {company} missing"
 
                 # 2. Company Career Page Crawling with ATS detection
                 elif source_type in ("company_career_page", "career_page") or "career" in source_type:
@@ -1366,7 +1440,7 @@ class MultiSourceCrawler:
                                 result.jobs_extracted += len(ats_jobs)
                                 result.sources_crawled += 1
 
-                    if job_urls:
+                    if job_urls or ats_info:
                         result.sources_crawled += 1
                         result.job_links_discovered += len(job_urls)
                         for u in job_urls:
@@ -1377,8 +1451,11 @@ class MultiSourceCrawler:
                                 location=getattr(task, "location", "") or "",
                                 url=u, apply_url=u,
                             ))
+                        result.task_outcomes[task.id] = CrawlTaskStatus.COMPLETED
                     else:
                         result.sources_blocked += 1
+                        result.task_outcomes[task.id] = CrawlTaskStatus.BLOCKED
+                        result.task_reasons[task.id] = f"Career page {url} yielded 0 links or was blocked"
 
                 # 3. Regional or Major Board Crawling
                 elif source_type in ("regional_board", "major_board", "board"):
@@ -1399,8 +1476,11 @@ class MultiSourceCrawler:
                         result.sources_crawled += 1
                         result.job_links_discovered += sum(1 for j in board_jobs if not j.title)
                         result.jobs_extracted += sum(1 for j in board_jobs if j.title)
+                        result.task_outcomes[task.id] = CrawlTaskStatus.COMPLETED
                     else:
                         result.sources_blocked += 1
+                        result.task_outcomes[task.id] = CrawlTaskStatus.BLOCKED
+                        result.task_reasons[task.id] = f"Board {url} yielded 0 jobs or was blocked"
 
                 else:
                     job_urls, _ = crawl_career_page(
@@ -1422,14 +1502,22 @@ class MultiSourceCrawler:
                                 location=getattr(task, "location", "") or "",
                                 url=u, apply_url=u,
                             ))
+                        result.task_outcomes[task.id] = CrawlTaskStatus.COMPLETED
                     else:
                         result.sources_blocked += 1
+                        result.task_outcomes[task.id] = CrawlTaskStatus.BLOCKED
+                        result.task_reasons[task.id] = f"Source {url} yielded 0 links or was blocked"
 
             except Exception as e:
                 logger.warning(f"Error executing crawl task [{task.id}]: {e}")
                 result.sources_blocked += 1
+                result.task_outcomes[task.id] = CrawlTaskStatus.FAILED
+                result.task_reasons[task.id] = str(e)
                 emit(CrawlEvent(CrawlEventType.SOURCE_BLOCKED, getattr(task, "source", "unknown"), url=url,
                                 message=f"Task error: {e}"))
+
+            if hasattr(task, "status") and task.id in result.task_outcomes:
+                task.status = result.task_outcomes[task.id]
 
         with self._lock:
             result.events = list(self._events)

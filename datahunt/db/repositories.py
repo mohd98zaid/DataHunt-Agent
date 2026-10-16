@@ -742,6 +742,75 @@ class JobTrackingRepository:
         finally:
             conn.close()
 
+    def count_jobs(self, run_id: Optional[str] = None) -> int:
+        """
+        Count total deduplicated matching jobs for a given run (or globally).
+        Uses the exact same qualification, verification, and deduplication logic as list_jobs.
+        """
+        conn = self.conn_factory()
+        try:
+            base_filter = """
+                (
+                    r.record_type = 'job_listing'
+                    OR r.canonical_url LIKE '%greenhouse.io%'
+                    OR r.canonical_url LIKE '%lever.co%'
+                    OR r.canonical_url LIKE '%ashbyhq.com%'
+                    OR r.canonical_url LIKE '%workable.com%'
+                    OR r.fields_json LIKE '%"salary"%'
+                    OR r.fields_json LIKE '%"employment_type"%'
+                    OR r.fields_json LIKE '%"company"%'
+                )
+                AND r.verification_status IN ('verified', 'needs_review')
+                AND COALESCE(JSON_EXTRACT(r.fields_json, '$.score_breakdown.title.status'), '') != 'MISMATCH'
+                AND (r.confidence >= 0.5 OR r.confidence IS NULL)
+            """
+            garbage_filter = """
+                AND COALESCE(
+                    JSON_EXTRACT(r.fields_json, '$.title'),
+                    JSON_EXTRACT(r.fields_json, '$.name'),
+                    ''
+                ) NOT IN ('', 'Current', '# Deps', '#', 'N/A', 'None', 'Null', 'Undefined', 'Unknown')
+                AND LENGTH(TRIM(COALESCE(
+                    JSON_EXTRACT(r.fields_json, '$.title'),
+                    JSON_EXTRACT(r.fields_json, '$.name'),
+                    ''
+                ))) >= 3
+            """
+            run_filter = "AND r.run_id = :run_id" if run_id else ""
+            sql = f"""
+                SELECT COUNT(*) as total FROM (
+                    SELECT
+                        r.id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY
+                                LOWER(TRIM(COALESCE(
+                                    JSON_EXTRACT(r.fields_json, '$.title'),
+                                    JSON_EXTRACT(r.fields_json, '$.name'), ''
+                                ))),
+                                LOWER(TRIM(COALESCE(
+                                    JSON_EXTRACT(r.fields_json, '$.company'),
+                                    JSON_EXTRACT(r.fields_json, '$.company_name'),
+                                    d.domain, ''
+                                )))
+                            ORDER BY
+                                CASE WHEN r.verification_status != 'duplicate' THEN 0 ELSE 1 END,
+                                r.confidence DESC,
+                                r.created_at DESC
+                        ) AS _rn
+                    FROM extracted_records r
+                    LEFT JOIN source_documents d ON r.source_document_id = d.id
+                    WHERE {base_filter} {garbage_filter} {run_filter}
+                ) sub
+                WHERE sub._rn = 1;
+            """
+            params: Dict[str, Any] = {}
+            if run_id:
+                params["run_id"] = run_id
+            row = conn.execute(sql, params).fetchone()
+            return int(row["total"]) if row and row["total"] is not None else 0
+        finally:
+            conn.close()
+
     def update_status(
         self,
         record_id: str,

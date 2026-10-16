@@ -54,6 +54,8 @@ class CrawlTaskStatus(str, Enum):
     PENDING = "PENDING"
     ACTIVE = "ACTIVE"
     COMPLETED = "COMPLETED"
+    PARTIAL = "PARTIAL"
+    RETRY_PENDING = "RETRY_PENDING"
     FAILED = "FAILED"
     BLOCKED = "BLOCKED"
 
@@ -80,13 +82,16 @@ class CrawlTask:
 class DiscoveryBudget:
     max_runtime_seconds: float = 300.0
     max_concurrent_tasks: int = 8
-    max_source_discoveries: int = 100
-    max_company_discoveries: int = 100
-    max_ats_discoveries: int = 100
-    max_fetches: int = 300
-    max_search_requests: int = 150
+    max_source_discoveries: int = 500
+    max_company_discoveries: int = 500
+    max_ats_discoveries: int = 500
+    max_sources: int = 500
+    max_pages_per_source: int = 50
+    max_total_jobs: int = 20000
+    max_fetches: int = 500
+    max_search_requests: int = 250
     max_expansion_rounds: int = 12
-    max_llm_calls: int = 80
+    max_llm_calls: int = 150
 
 
 @dataclass
@@ -186,6 +191,8 @@ class DiscoveryState:
     active_crawl_tasks: List[CrawlTask] = field(default_factory=list)
     completed_crawl_tasks: List[CrawlTask] = field(default_factory=list)
     failed_crawl_tasks: List[CrawlTask] = field(default_factory=list)
+    blocked_crawl_tasks: List[CrawlTask] = field(default_factory=list)
+    partial_crawl_tasks: List[CrawlTask] = field(default_factory=list)
     crawled_sources: Set[str] = field(default_factory=set)
 
     def enqueue_crawl_task(self, task: CrawlTask) -> bool:

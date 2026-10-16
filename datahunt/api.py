@@ -308,7 +308,8 @@ def list_jobs(
 ):
     """List tracked jobs with their application status, interview status, and scraped metadata."""
     jobs = job_repo.list_jobs(run_id=run_id, limit=limit, offset=offset)
-    response.headers["X-Total-Count"] = str(len(jobs))
+    total_count = job_repo.count_jobs(run_id=run_id)
+    response.headers["X-Total-Count"] = str(total_count)
     return jobs
 
 @app.get("/api/jobs/saved")

@@ -801,16 +801,25 @@ class QualificationPolicy:
             or any(w in raw_q_lower for w in ("all time", "all-time", "any time", "anytime", "all open", "all active"))
         )
 
+        is_live_mode = any(w in raw_q_lower for w in ("0sec", "0 sec", "0-sec", "live mode", "live-mode", "immediate"))
+
         is_recent_24h = (
-            req_freshness == 1
-            or any(w in raw_q_lower for w in ("24h", "24 hours", "0sec", "0 sec", "past day", "today", "past 24"))
+            not is_live_mode
+            and (
+                req_freshness == 1
+                or any(w in raw_q_lower for w in ("24h", "24 hours", "past day", "today", "past 24"))
+            )
         )
 
         if is_all_time:
             # Scenario C: All-Time Search — preserve open postings without artificial cutoffs
             pass
+        elif is_live_mode:
+            # Scenario D: 0-sec / Live Mode — continuous/immediate discovery mode, not strict 0-sec age requirement.
+            # Preserves active postings and unverified dates.
+            pass
         elif is_recent_24h:
-            # Scenario D: Strict Recent Search (24h / 0sec)
+            # Scenario E: Strict Recent Search (24h)
             posted_age_s = fields.get("posted_age_seconds")
             cand_posted = str(fields.get("posted_at") or "").lower().strip()
             if posted_age_s is not None:

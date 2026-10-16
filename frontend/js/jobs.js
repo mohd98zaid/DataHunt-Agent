@@ -473,13 +473,44 @@ async function loadJobs(overrideRunId) {
     const runId = overrideRunId !== undefined ? overrideRunId : urlParams.get("run_id");
     updateRunScopeBanner(runId);
 
-    const apiUrl = runId
-      ? `/api/jobs?run_id=${encodeURIComponent(runId)}&limit=2000`
-      : `/api/jobs?limit=2000`;
+    const baseApiUrl = runId
+      ? `/api/jobs?run_id=${encodeURIComponent(runId)}`
+      : `/api/jobs`;
 
-    const res = await fetch(apiUrl);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    allJobs = await res.json();
+    const batchSize = 1000;
+    let offset = 0;
+    let fetchedJobs = [];
+    let totalExpected = null;
+
+    while (true) {
+      const pageUrl = `${baseApiUrl}${baseApiUrl.includes('?') ? '&' : '?'}limit=${batchSize}&offset=${offset}`;
+      const res = await fetch(pageUrl);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const totalHeader = res.headers.get("X-Total-Count");
+      if (totalHeader !== null) {
+        const parsedTotal = parseInt(totalHeader, 10);
+        if (!isNaN(parsedTotal)) {
+          totalExpected = parsedTotal;
+        }
+      }
+
+      const batch = await res.json();
+      if (!Array.isArray(batch) || batch.length === 0) {
+        break;
+      }
+      fetchedJobs.push(...batch);
+      offset += batch.length;
+
+      if (totalExpected !== null && fetchedJobs.length >= totalExpected) {
+        break;
+      }
+      if (batch.length < batchSize) {
+        break;
+      }
+    }
+
+    allJobs = fetchedJobs;
     _locationCache.clear();  // invalidate cached location parses for new data
     populateFilterDropdowns(allJobs);
     updateStatPills(allJobs);

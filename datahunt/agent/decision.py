@@ -49,13 +49,20 @@ class DecisionEngine:
             if stop_flag:
                 return AgentAction.STOP, stop_msg
         else:
+            is_fast = getattr(state, "collection_mode", None) != "thorough"
+            has_pending = bool(
+                (state.search_plan and state.search_plan_index < len(state.search_plan))
+                or state.candidate_urls
+            )
             if effective_count >= state.target_results:
-                return AgentAction.STOP, f"Target results reached ({effective_count}/{state.target_results})"
+                if is_fast or not has_pending:
+                    return AgentAction.STOP, f"Target results reached ({effective_count}/{state.target_results})"
 
             if state.consecutive_low_yield_iterations >= CONSECUTIVE_LOW_YIELD_LIMIT:
                 if effective_count > 0:
-                    return AgentAction.STOP, f"Diminishing returns: {CONSECUTIVE_LOW_YIELD_LIMIT} consecutive low-yield iterations"
-                elif state.search_plan_index < len(state.search_plan):
+                    if is_fast or not has_pending:
+                        return AgentAction.STOP, f"Diminishing returns: {CONSECUTIVE_LOW_YIELD_LIMIT} consecutive low-yield iterations, returning {effective_count} results found"
+                elif state.search_plan and state.search_plan_index < len(state.search_plan):
                     return AgentAction.EXPAND_SEARCH, "Low yield from current strategy, trying next tier"
 
         # 1. Verify and deterministically qualify unverified raw records
