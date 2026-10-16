@@ -49,6 +49,53 @@ class SearchTask:
     location: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "task_type": self.task_type.value if hasattr(self.task_type, "value") else str(self.task_type),
+            "query": self.query,
+            "source": self.source,
+            "source_type": self.source_type.value if hasattr(self.source_type, "value") else str(self.source_type),
+            "priority": self.priority,
+            "depth": self.depth,
+            "round": self.round,
+            "page": self.page,
+            "reason": self.reason,
+            "company": self.company,
+            "ats_platform": self.ats_platform,
+            "location": self.location,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "SearchTask":
+        tt_val = d.get("task_type", SearchTaskType.GENERAL_SEARCH.value)
+        try:
+            tt = SearchTaskType(tt_val)
+        except Exception:
+            tt = SearchTaskType.GENERAL_SEARCH
+        st_val = d.get("source_type", DiscoveredSourceType.MAJOR_BOARD.value)
+        try:
+            st = DiscoveredSourceType(st_val)
+        except Exception:
+            st = DiscoveredSourceType.MAJOR_BOARD
+        return cls(
+            id=d["id"],
+            task_type=tt,
+            query=d.get("query", ""),
+            source=d.get("source", ""),
+            source_type=st,
+            priority=d.get("priority", 2),
+            depth=d.get("depth", 0),
+            round=d.get("round", 1),
+            page=d.get("page", 1),
+            reason=d.get("reason", ""),
+            company=d.get("company"),
+            ats_platform=d.get("ats_platform"),
+            location=d.get("location"),
+            metadata=dict(d.get("metadata", {})),
+        )
+
 
 class CrawlTaskStatus(str, Enum):
     PENDING = "PENDING"
@@ -76,6 +123,48 @@ class CrawlTask:
     status: CrawlTaskStatus = CrawlTaskStatus.PENDING
     reason: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "source": self.source,
+            "source_type": self.source_type,
+            "url": self.url,
+            "company": self.company,
+            "ats_platform": self.ats_platform,
+            "location": self.location,
+            "query": self.query,
+            "priority": self.priority,
+            "depth": self.depth,
+            "page": self.page,
+            "status": self.status.value if hasattr(self.status, "value") else str(self.status),
+            "reason": self.reason,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "CrawlTask":
+        status_val = d.get("status", CrawlTaskStatus.PENDING.value)
+        try:
+            status_enum = CrawlTaskStatus(status_val)
+        except Exception:
+            status_enum = CrawlTaskStatus.PENDING
+        return cls(
+            id=d["id"],
+            source=d.get("source", ""),
+            source_type=d.get("source_type", "web"),
+            url=d.get("url", ""),
+            company=d.get("company"),
+            ats_platform=d.get("ats_platform"),
+            location=d.get("location"),
+            query=d.get("query"),
+            priority=d.get("priority", 2),
+            depth=d.get("depth", 0),
+            page=d.get("page", 1),
+            status=status_enum,
+            reason=d.get("reason", ""),
+            metadata=dict(d.get("metadata", {})),
+        )
 
 
 @dataclass
@@ -170,6 +259,21 @@ class SourceCoverageMatrix:
         """Returns True if at least min_categories distinct source categories were searched."""
         covered = sum(1 for c in self.CATEGORIES if self.is_covered(c))
         return covered >= min_categories
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "target_regions": list(self.target_regions),
+            "searched": {k: list(v) for k, v in self.searched.items()},
+            "hits_by_category": dict(self.hits_by_category),
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "SourceCoverageMatrix":
+        mat = cls(target_regions=d.get("target_regions", ["general"]))
+        for k, v in d.get("searched", {}).items():
+            mat.searched[k] = set(v)
+        mat.hits_by_category = dict(d.get("hits_by_category", {}))
+        return mat
 
 
 @dataclass
@@ -305,3 +409,65 @@ class DiscoveryState:
         dup_penalty = duplicate_rate * 0.4
         rej_penalty = rejection_rate * 0.3
         data["productivity_score"] = max(round(base_score - dup_penalty - rej_penalty, 3), 0.05)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "discovered_sources": {
+                k: (v.value if hasattr(v, "value") else str(v))
+                for k, v in self.discovered_sources.items()
+            },
+            "searched_sources": list(self.searched_sources),
+            "pending_sources": list(self.pending_sources),
+            "failed_sources": list(self.failed_sources),
+            "discovered_companies": self.discovered_companies,
+            "discovered_ats": self.discovered_ats,
+            "discovered_boards": list(self.discovered_boards),
+            "executed_queries": list(self.executed_queries),
+            "task_queue": [t.to_dict() for t in self.task_queue],
+            "completed_tasks": [t.to_dict() for t in self.completed_tasks],
+            "pending_crawl_tasks": [t.to_dict() for t in self.pending_crawl_tasks],
+            "active_crawl_tasks": [t.to_dict() for t in self.active_crawl_tasks],
+            "completed_crawl_tasks": [t.to_dict() for t in self.completed_crawl_tasks],
+            "failed_crawl_tasks": [t.to_dict() for t in self.failed_crawl_tasks],
+            "blocked_crawl_tasks": [t.to_dict() for t in self.blocked_crawl_tasks],
+            "partial_crawl_tasks": [t.to_dict() for t in self.partial_crawl_tasks],
+            "crawled_sources": list(self.crawled_sources),
+            "current_round": self.current_round,
+            "coverage_matrix": self.coverage_matrix.to_dict() if self.coverage_matrix else {},
+            "round_yields": {str(k): v for k, v in self.round_yields.items()},
+            "round_novel_candidates": {str(k): v for k, v in self.round_novel_candidates.items()},
+            "consecutive_low_yield_rounds": self.consecutive_low_yield_rounds,
+            "source_productivity": self.source_productivity,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "DiscoveryState":
+        ds = cls()
+        ds.discovered_sources = {
+            k: (DiscoveredSourceType(v) if v in DiscoveredSourceType._value2member_map_ else v)
+            for k, v in d.get("discovered_sources", {}).items()
+        }
+        ds.searched_sources = set(d.get("searched_sources", []))
+        ds.pending_sources = set(d.get("pending_sources", []))
+        ds.failed_sources = set(d.get("failed_sources", []))
+        ds.discovered_companies = dict(d.get("discovered_companies", {}))
+        ds.discovered_ats = dict(d.get("discovered_ats", {}))
+        ds.discovered_boards = set(d.get("discovered_boards", []))
+        ds.executed_queries = set(d.get("executed_queries", []))
+        ds.task_queue = [SearchTask.from_dict(t) for t in d.get("task_queue", [])]
+        ds.completed_tasks = [SearchTask.from_dict(t) for t in d.get("completed_tasks", [])]
+        ds.pending_crawl_tasks = [CrawlTask.from_dict(t) for t in d.get("pending_crawl_tasks", [])]
+        ds.active_crawl_tasks = [CrawlTask.from_dict(t) for t in d.get("active_crawl_tasks", [])]
+        ds.completed_crawl_tasks = [CrawlTask.from_dict(t) for t in d.get("completed_crawl_tasks", [])]
+        ds.failed_crawl_tasks = [CrawlTask.from_dict(t) for t in d.get("failed_crawl_tasks", [])]
+        ds.blocked_crawl_tasks = [CrawlTask.from_dict(t) for t in d.get("blocked_crawl_tasks", [])]
+        ds.partial_crawl_tasks = [CrawlTask.from_dict(t) for t in d.get("partial_crawl_tasks", [])]
+        ds.crawled_sources = set(d.get("crawled_sources", []))
+        ds.current_round = d.get("current_round", 1)
+        if d.get("coverage_matrix"):
+            ds.coverage_matrix = SourceCoverageMatrix.from_dict(d["coverage_matrix"])
+        ds.round_yields = {int(k): v for k, v in d.get("round_yields", {}).items()}
+        ds.round_novel_candidates = {int(k): v for k, v in d.get("round_novel_candidates", {}).items()}
+        ds.consecutive_low_yield_rounds = d.get("consecutive_low_yield_rounds", 0)
+        ds.source_productivity = dict(d.get("source_productivity", {}))
+        return ds

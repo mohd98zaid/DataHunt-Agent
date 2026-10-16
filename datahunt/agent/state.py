@@ -136,6 +136,166 @@ class AgentState:
     def record_action(self, action: str):
         self.actions_taken.append(action)
 
+    def to_checkpoint_dict(self) -> Dict[str, Any]:
+        """Serialize complete state including queues, cursors, and records for durable resumption."""
+        rec_to_dict = lambda r: (r.model_dump() if hasattr(r, "model_dump") else (r.__dict__ if hasattr(r, "__dict__") else dict(r)))
+        return {
+            "request": self.request,
+            "run_id": self.run_id,
+            "task_id": self.task_id,
+            "objective": self.objective,
+            "mode": self.mode,
+            "collection_mode": self.collection_mode,
+            "canonical_job_request": (
+                self.canonical_job_request.model_dump()
+                if hasattr(self.canonical_job_request, "model_dump")
+                else (self.canonical_job_request.__dict__ if hasattr(self.canonical_job_request, "__dict__") else None)
+            ),
+            "explicit_location": self.explicit_location,
+            "locations": list(self.locations),
+            "location_operator": self.location_operator,
+            "explicit_experience_min": self.explicit_experience_min,
+            "explicit_experience_max": self.explicit_experience_max,
+            "explicit_skills": list(self.explicit_skills),
+            "explicit_titles": list(self.explicit_titles),
+            "remote_allowed": self.remote_allowed,
+            "expanded_titles": list(self.expanded_titles),
+            "expanded_skills": list(self.expanded_skills),
+            "inferred_skills": list(self.inferred_skills),
+            "search_plan": list(self.search_plan),
+            "search_plan_index": self.search_plan_index,
+            "candidate_urls": list(self.candidate_urls),
+            "seen_urls": list(self.seen_urls),
+            "seen_search_urls": list(self.seen_search_urls),
+            "seen_canonical_urls": list(self.seen_canonical_urls),
+            "seen_document_ids": list(self.seen_document_ids),
+            "seen_application_urls": list(self.seen_application_urls),
+            "seen_source_job_ids": list(self.seen_source_job_ids),
+            "seen_job_fingerprints": list(self.seen_job_fingerprints),
+            "extracted_doc_ids": list(self.extracted_doc_ids),
+            "processed_record_ids": list(self.processed_record_ids),
+            "raw_records": [rec_to_dict(r) for r in self.raw_records],
+            "verified_records": [rec_to_dict(r) for r in self.verified_records],
+            "qualified_records": [rec_to_dict(r) for r in self.qualified_records],
+            "disqualified_records": [rec_to_dict(r) for r in self.disqualified_records],
+            "rejected_records": [rec_to_dict(r) for r in self.rejected_records],
+            "duplicate_records": [rec_to_dict(r) for r in self.duplicate_records],
+            "raw_record_generation": self.raw_record_generation,
+            "last_verified_generation": self.last_verified_generation,
+            "rejection_reasons_tally": dict(self.rejection_reasons_tally),
+            "source_distribution": dict(self.source_distribution),
+            "crawl_sources_discovered": self.crawl_sources_discovered,
+            "crawl_sources_crawled": self.crawl_sources_crawled,
+            "crawl_sources_blocked": self.crawl_sources_blocked,
+            "crawl_pages_fetched": self.crawl_pages_fetched,
+            "crawl_job_links_discovered": self.crawl_job_links_discovered,
+            "crawl_done": self.crawl_done,
+            "observations": list(self.observations),
+            "warnings": list(self.warnings),
+            "iteration": self.iteration,
+            "search_calls": self.search_calls,
+            "fetch_calls": self.fetch_calls,
+            "llm_calls": self.llm_calls,
+            "pages_failed": self.pages_failed,
+            "max_iterations": self.max_iterations,
+            "max_search_calls": self.max_search_calls,
+            "max_fetch_calls": self.max_fetch_calls,
+            "max_llm_calls": self.max_llm_calls,
+            "target_results": self.target_results,
+            "deadline": self.deadline,
+            "status": self.status.value if hasattr(self.status, "value") else str(self.status),
+            "completion_reason": self.completion_reason,
+            "actions_taken": list(self.actions_taken),
+            "can_resume": self.can_resume,
+            "coverage_report": dict(self.coverage_report),
+            "discovery_state": self.discovery_state.to_dict() if hasattr(self.discovery_state, "to_dict") else None,
+        }
+
+    @classmethod
+    def from_checkpoint_dict(cls, d: Dict[str, Any]) -> "AgentState":
+        from datahunt.models import ExtractedRecord
+        from datahunt.agent.discovery_models import DiscoveryState
+        status_val = d.get("status", AgentStatus.INITIALIZING.value)
+        try:
+            status_enum = AgentStatus(status_val)
+        except Exception:
+            status_enum = AgentStatus.INITIALIZING
+
+        state = cls(
+            request=d["request"],
+            run_id=d["run_id"],
+            task_id=d["task_id"],
+            objective=d.get("objective", ""),
+            mode=d.get("mode", "jobs"),
+            collection_mode=d.get("collection_mode"),
+            explicit_location=d.get("explicit_location"),
+            locations=list(d.get("locations", [])),
+            location_operator=d.get("location_operator", "OR"),
+            explicit_experience_min=d.get("explicit_experience_min"),
+            explicit_experience_max=d.get("explicit_experience_max"),
+            explicit_skills=list(d.get("explicit_skills", [])),
+            explicit_titles=list(d.get("explicit_titles", [])),
+            remote_allowed=d.get("remote_allowed"),
+            expanded_titles=list(d.get("expanded_titles", [])),
+            expanded_skills=list(d.get("expanded_skills", [])),
+            inferred_skills=list(d.get("inferred_skills", [])),
+            search_plan=list(d.get("search_plan", [])),
+            search_plan_index=d.get("search_plan_index", 0),
+            candidate_urls=list(d.get("candidate_urls", [])),
+            seen_urls=set(d.get("seen_urls", [])),
+            seen_search_urls=set(d.get("seen_search_urls", [])),
+            seen_canonical_urls=set(d.get("seen_canonical_urls", [])),
+            seen_document_ids=set(d.get("seen_document_ids", [])),
+            seen_application_urls=set(d.get("seen_application_urls", [])),
+            seen_source_job_ids=set(d.get("seen_source_job_ids", [])),
+            seen_job_fingerprints=set(d.get("seen_job_fingerprints", [])),
+            extracted_doc_ids=set(d.get("extracted_doc_ids", [])),
+            processed_record_ids=set(d.get("processed_record_ids", [])),
+            raw_records=[ExtractedRecord(**r) if isinstance(r, dict) else r for r in d.get("raw_records", [])],
+            verified_records=[ExtractedRecord(**r) if isinstance(r, dict) else r for r in d.get("verified_records", [])],
+            qualified_records=[ExtractedRecord(**r) if isinstance(r, dict) else r for r in d.get("qualified_records", [])],
+            disqualified_records=[ExtractedRecord(**r) if isinstance(r, dict) else r for r in d.get("disqualified_records", [])],
+            rejected_records=[ExtractedRecord(**r) if isinstance(r, dict) else r for r in d.get("rejected_records", [])],
+            duplicate_records=[ExtractedRecord(**r) if isinstance(r, dict) else r for r in d.get("duplicate_records", [])],
+            raw_record_generation=d.get("raw_record_generation", 0),
+            last_verified_generation=d.get("last_verified_generation", -1),
+            rejection_reasons_tally=dict(d.get("rejection_reasons_tally", {})),
+            source_distribution=dict(d.get("source_distribution", {})),
+            crawl_sources_discovered=d.get("crawl_sources_discovered", 0),
+            crawl_sources_crawled=d.get("crawl_sources_crawled", 0),
+            crawl_sources_blocked=d.get("crawl_sources_blocked", 0),
+            crawl_pages_fetched=d.get("crawl_pages_fetched", 0),
+            crawl_job_links_discovered=d.get("crawl_job_links_discovered", 0),
+            crawl_done=d.get("crawl_done", False),
+            observations=list(d.get("observations", [])),
+            warnings=list(d.get("warnings", [])),
+            iteration=d.get("iteration", 0),
+            search_calls=d.get("search_calls", 0),
+            fetch_calls=d.get("fetch_calls", 0),
+            llm_calls=d.get("llm_calls", 0),
+            pages_failed=d.get("pages_failed", 0),
+            max_iterations=d.get("max_iterations", 200),
+            max_search_calls=d.get("max_search_calls", 150),
+            max_fetch_calls=d.get("max_fetch_calls", 300),
+            max_llm_calls=d.get("max_llm_calls", 100),
+            target_results=d.get("target_results", 50),
+            deadline=d.get("deadline", 0.0),
+            status=status_enum,
+            completion_reason=d.get("completion_reason"),
+            actions_taken=list(d.get("actions_taken", [])),
+            can_resume=d.get("can_resume", False),
+            coverage_report=dict(d.get("coverage_report", {})),
+        )
+        if d.get("canonical_job_request"):
+            try:
+                from datahunt.agents.query_understanding import JobSearchRequest
+                state.canonical_job_request = JobSearchRequest(**d["canonical_job_request"])
+            except Exception:
+                pass
+        if d.get("discovery_state"):
+            state.discovery_state = DiscoveryState.from_dict(d["discovery_state"])
+        return state
+
 
 def get_unprocessed_record_ids(state: AgentState) -> Set[str]:
     """Return set of all record IDs that have reached any terminal processing state."""

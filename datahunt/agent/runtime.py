@@ -72,6 +72,8 @@ class AgentRuntime:
         self.source_registry = JobSourceRegistry()
         from .discovery_engine import DiscoveryEngine
         self.discovery_engine = DiscoveryEngine()
+        from datahunt.db import CheckpointRepository
+        self.checkpoint_repo = CheckpointRepository()
 
     def _init_state(self, state: AgentState, emit: Callable[[str, Dict], None]):
         """Initialize state, canonical job request, discovery state, and search plan."""
@@ -165,12 +167,25 @@ class AgentRuntime:
         emit("status", {"message": f"Formulated {len(state.search_plan)} search queries", "phase": "PLANNED"})
         state.record_action("planned")
 
+    def save_checkpoint(self, state: AgentState) -> Optional[int]:
+        """Save a durable state checkpoint to the database."""
+        run_id = getattr(state, "run_id", None) or getattr(state, "task_id", None)
+        if not run_id:
+            return None
+        try:
+            data = state.to_checkpoint_dict()
+            return self.checkpoint_repo.save_checkpoint(run_id, data, seq=state.iteration)
+        except Exception as e:
+            logger.warning(f"Failed to save checkpoint for run {run_id}: {e}")
+            return None
+
     def run(self, state: AgentState, emit: Callable[[str, Dict], None]) -> Dict[str, Any]:
         """
         Execute the agent loop until a stop condition is reached.
         Returns the final result dict.
         """
         self._init_state(state, emit)
+        self.save_checkpoint(state)
 
         while True:
             state.iteration += 1
@@ -182,6 +197,7 @@ class AgentRuntime:
 
             if action == AgentAction.STOP:
                 state.completion_reason = reason
+                self.save_checkpoint(state)
                 break
 
             elif action == AgentAction.CRAWL_DIRECT:
@@ -198,6 +214,70 @@ class AgentRuntime:
 
             elif action == AgentAction.ANALYZE:
                 self._act_analyze(state, emit)
+
+            self.save_checkpoint(state)
+
+        return self._finalize(state, emit)
+
+    def resume(self, run_id: str, emit: Callable[[str, Dict], None]) -> Dict[str, Any]:
+        """
+        Durable resumption:
+        1. Fetch the latest checkpoint for run_id from CheckpointRepository.
+        2. Reconstruct AgentState from checkpoint via AgentState.from_checkpoint_dict(data).
+        3. Re-queue any partial_crawl_tasks from state.discovery_state back into pending_crawl_tasks
+           so they can continue with their saved cursors.
+        4. Continue the decision loop without re-running initialization or duplicating work.
+        """
+        row = self.checkpoint_repo.get_latest_checkpoint(run_id)
+        if not row:
+            raise DataHuntError(f"No checkpoint found for run {run_id}", ErrorCode.NOT_FOUND)
+
+        state_data = row.get("state_data", row) if isinstance(row, dict) else row
+        state = AgentState.from_checkpoint_dict(state_data)
+        state.run_id = run_id
+        emit("status", {
+            "message": f"Resuming search run {run_id} from checkpoint (iteration {state.iteration})",
+            "phase": "RESUMING",
+        })
+
+        # Re-queue partial crawl tasks so they continue from saved cursors
+        if state.discovery_state and state.discovery_state.partial_crawl_tasks:
+            from datahunt.agent.discovery_models import CrawlTaskStatus
+            while state.discovery_state.partial_crawl_tasks:
+                t = state.discovery_state.partial_crawl_tasks.pop(0)
+                t.status = CrawlTaskStatus.PENDING
+                state.discovery_state.pending_crawl_tasks.append(t)
+            state.crawl_done = False
+
+        while True:
+            state.iteration += 1
+            action, reason = self.decision_engine.decide(state)
+
+            logger.info(f"[Resumed Decision #{state.iteration}] {action} — {reason}")
+            emit("decision", {"iteration": state.iteration, "action": action, "reason": reason})
+            state.record_action(f"iter{state.iteration}:{action}:{reason}")
+
+            if action == AgentAction.STOP:
+                state.completion_reason = reason
+                self.save_checkpoint(state)
+                break
+
+            elif action == AgentAction.CRAWL_DIRECT:
+                self._act_crawl_direct(state, emit)
+
+            elif action == AgentAction.SEARCH or action == AgentAction.EXPAND_SEARCH:
+                self._act_search(state, emit)
+
+            elif action == AgentAction.FETCH:
+                self._act_fetch(state, emit)
+
+            elif action == AgentAction.VERIFY:
+                self._act_verify(state, emit)
+
+            elif action == AgentAction.ANALYZE:
+                self._act_analyze(state, emit)
+
+            self.save_checkpoint(state)
 
         return self._finalize(state, emit)
 

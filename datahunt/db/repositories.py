@@ -50,7 +50,11 @@ class TaskRepository:
             row = conn.execute("SELECT * FROM research_tasks WHERE id = ?;", (task_id,)).fetchone()
             if not row:
                 return None
-            spec_data = json.loads(row["normalized_spec_json"])
+            spec_data = json.loads(row["normalized_spec_json"] or "{}")
+            if not isinstance(spec_data, dict):
+                spec_data = {}
+            if "topic" not in spec_data:
+                spec_data["topic"] = row["request_text"] or "General Research"
             return ResearchTask(
                 id=row["id"],
                 request_text=row["request_text"],
@@ -85,7 +89,11 @@ class TaskRepository:
             ).fetchall()
             results = []
             for row in rows:
-                spec_data = json.loads(row["normalized_spec_json"])
+                spec_data = json.loads(row["normalized_spec_json"] or "{}")
+                if not isinstance(spec_data, dict):
+                    spec_data = {}
+                if "topic" not in spec_data:
+                    spec_data["topic"] = row["request_text"] or "General Research"
                 results.append(
                     ResearchTask(
                         id=row["id"],
@@ -695,7 +703,7 @@ class JobTrackingRepository:
                     WHERE {base_filter} {garbage_filter} {run_filter}
                 ) sub
                 WHERE sub._rn = 1
-                ORDER BY sub.scraped_at DESC
+                ORDER BY sub.scraped_at DESC, sub.id ASC
                 LIMIT :limit OFFSET :offset;
             """
             params: Dict[str, Any] = {"limit": limit, "offset": offset}
@@ -1053,5 +1061,92 @@ class ToolEventRepository:
                 """,
                 (status.value, json.dumps(response_summary_json), duration_ms, error_code, event_id)
             )
+        finally:
+            conn.close()
+
+
+class CheckpointRepository:
+    def __init__(self, conn_factory=get_connection):
+        self.conn_factory = conn_factory
+
+    def save_checkpoint(self, run_id: str, state_data: Dict[str, Any], seq: Optional[int] = None) -> str:
+        """
+        Durable persistence of run checkpoint state (crawl tasks, cursors, source statuses, queues).
+        """
+        conn = self.conn_factory()
+        try:
+            with conn:
+                if seq is None:
+                    row = conn.execute(
+                        "SELECT MAX(checkpoint_seq) AS max_seq FROM run_checkpoints WHERE run_id = ?;",
+                        (run_id,)
+                    ).fetchone()
+                    seq = (row["max_seq"] + 1) if (row and row["max_seq"] is not None) else 1
+
+                ckpt_id = f"chk_{run_id}_{seq}"
+                now_str = datetime.now(timezone.utc).isoformat()
+                state_json = json.dumps(state_data)
+                conn.execute(
+                    """
+                    INSERT INTO run_checkpoints (id, run_id, checkpoint_seq, state_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(run_id, checkpoint_seq) DO UPDATE SET
+                        state_json = excluded.state_json,
+                        updated_at = excluded.updated_at;
+                    """,
+                    (ckpt_id, run_id, seq, state_json, now_str, now_str)
+                )
+                return ckpt_id
+        finally:
+            conn.close()
+
+    def get_latest_checkpoint(self, run_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve the latest checkpoint payload for a given run_id.
+        """
+        conn = self.conn_factory()
+        try:
+            row = conn.execute(
+                "SELECT state_json FROM run_checkpoints WHERE run_id = ? ORDER BY checkpoint_seq DESC LIMIT 1;",
+                (run_id,)
+            ).fetchone()
+            if not row or not row["state_json"]:
+                return None
+            return json.loads(row["state_json"])
+        finally:
+            conn.close()
+
+    def list_checkpoints(self, run_id: str) -> List[Dict[str, Any]]:
+        """
+        List all checkpoint metadata for a run.
+        """
+        conn = self.conn_factory()
+        try:
+            rows = conn.execute(
+                "SELECT id, run_id, checkpoint_seq, created_at, updated_at FROM run_checkpoints WHERE run_id = ? ORDER BY checkpoint_seq ASC;",
+                (run_id,)
+            ).fetchall()
+            return [
+                {
+                    "id": r["id"],
+                    "run_id": r["run_id"],
+                    "checkpoint_seq": r["checkpoint_seq"],
+                    "created_at": r["created_at"],
+                    "updated_at": r["updated_at"],
+                }
+                for r in rows
+            ]
+        finally:
+            conn.close()
+
+    def delete_checkpoints(self, run_id: str) -> int:
+        """
+        Delete all checkpoints for a run.
+        """
+        conn = self.conn_factory()
+        try:
+            with conn:
+                cur = conn.execute("DELETE FROM run_checkpoints WHERE run_id = ?;", (run_id,))
+                return cur.rowcount
         finally:
             conn.close()

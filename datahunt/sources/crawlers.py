@@ -273,6 +273,7 @@ def crawl_greenhouse_company(
     budget: CrawlBudget,
     rate_limiter: _DomainRateLimiter,
     emit: Callable[[CrawlEvent], None],
+    task: Optional[Any] = None,
 ) -> List[CrawledJob]:
     """
     Crawl a single Greenhouse company board via the public JSON API.
@@ -287,11 +288,16 @@ def crawl_greenhouse_company(
     emit(CrawlEvent(CrawlEventType.SOURCE_STARTED, source_id, url=endpoints[0],
                     message=f"Greenhouse API for {company_slug}"))
 
+    blocked_detected = False
+    success = False
+
     for api_url in endpoints:
         rate_limiter.wait("boards-api.greenhouse.io")
         resp = _safe_get(api_url, timeout=budget.request_timeout,
                          extra_headers={"Accept": "application/json"})
         if not resp or resp.status_code != 200:
+            if resp and resp.status_code in (401, 403, 429):
+                blocked_detected = True
             continue
         try:
             data = resp.json()
@@ -331,7 +337,19 @@ def crawl_greenhouse_company(
             jobs.append(crawled)
             emit(CrawlEvent(CrawlEventType.JOB_EXTRACTED, source_id, url=apply_url,
                             message=f"{title} @ {crawled.company}"))
+        success = True
         break  # success on first working endpoint
+
+    if task:
+        if success:
+            task.status = CrawlTaskStatus.COMPLETED
+        elif blocked_detected:
+            task.status = CrawlTaskStatus.BLOCKED
+        else:
+            task_meta = getattr(task, "metadata", {})
+            retries = task_meta.get("retries", 0) + 1
+            task_meta["retries"] = retries
+            task.status = CrawlTaskStatus.RETRY_PENDING if retries <= 3 else CrawlTaskStatus.FAILED
 
     emit(CrawlEvent(CrawlEventType.SOURCE_COMPLETED, source_id,
                     count=len(jobs), message=f"Greenhouse {company_slug}: {len(jobs)} jobs"))
@@ -344,21 +362,31 @@ def crawl_lever_company(
     budget: CrawlBudget,
     rate_limiter: _DomainRateLimiter,
     emit: Callable[[CrawlEvent], None],
+    task: Optional[Any] = None,
 ) -> List[CrawledJob]:
     """
-    Crawl Lever's public postings API for a company.
+    Crawl Lever's public postings API for a company with offset/limit pagination
+    and cursor resumption support.
     """
     source_id = f"lever:{company_slug}"
     jobs: List[CrawledJob] = []
-    skip = 0
-    limit = 100
-    seen_skips: Set[int] = set()
+    task_meta = getattr(task, "metadata", {}) if task else {}
+    skip = int(task_meta.get("skip", 0))
+    limit = int(task_meta.get("limit", 100))
+    seen_skips: Set[int] = set(task_meta.get("seen_skips", []))
+    pages_crawled = 0
+    max_pages = getattr(budget, "max_pages_per_source", 50)
+    exhausted = False
+    blocked = False
 
     emit(CrawlEvent(CrawlEventType.SOURCE_STARTED, source_id, url="",
-                    message=f"Lever API for {company_slug}"))
+                    message=f"Lever API for {company_slug} (starting at skip {skip})"))
 
     while len(jobs) < budget.max_total_jobs:
+        if pages_crawled >= max_pages:
+            break
         if skip in seen_skips:
+            exhausted = True
             break
         seen_skips.add(skip)
 
@@ -367,7 +395,11 @@ def crawl_lever_company(
         resp = _safe_get(api_url, timeout=budget.request_timeout,
                          extra_headers={"Accept": "application/json"})
         if not resp or resp.status_code != 200:
-            if skip == 0:
+            if resp and resp.status_code in (401, 403, 429):
+                blocked = True
+                emit(CrawlEvent(CrawlEventType.SOURCE_BLOCKED, source_id, url=api_url,
+                                message=f"Lever API blocked for {company_slug} (HTTP {resp.status_code})"))
+            elif skip == 0:
                 emit(CrawlEvent(CrawlEventType.SOURCE_BLOCKED, source_id, url=api_url,
                                 message=f"Lever API unavailable for {company_slug}"))
             break
@@ -381,8 +413,10 @@ def crawl_lever_company(
             raw_jobs = raw_jobs.get("postings", []) if isinstance(raw_jobs, dict) else []
 
         if not raw_jobs:
+            exhausted = True
             break
 
+        pages_crawled += 1
         emit(CrawlEvent(CrawlEventType.PAGE_FETCHED, source_id, url=api_url,
                         count=len(raw_jobs), message=f"Lever API: {len(raw_jobs)} postings (skip {skip})"))
 
@@ -415,10 +449,29 @@ def crawl_lever_company(
 
         skip += len(raw_jobs)
         if len(raw_jobs) < limit:
+            exhausted = True
             break
 
-    emit(CrawlEvent(CrawlEventType.SOURCE_COMPLETED, source_id,
-                    count=len(jobs), message=f"Lever {company_slug}: {len(jobs)} jobs"))
+    if task:
+        task_meta["skip"] = skip
+        task_meta["seen_skips"] = list(seen_skips)
+        if exhausted:
+            task.status = CrawlTaskStatus.COMPLETED
+        elif blocked:
+            task.status = CrawlTaskStatus.BLOCKED
+        elif pages_crawled >= max_pages or len(jobs) >= budget.max_total_jobs:
+            task.status = CrawlTaskStatus.PARTIAL
+        else:
+            retries = task_meta.get("retries", 0) + 1
+            task_meta["retries"] = retries
+            task.status = CrawlTaskStatus.RETRY_PENDING if retries <= 3 else CrawlTaskStatus.FAILED
+
+    if task and task.status == CrawlTaskStatus.PARTIAL:
+        emit(CrawlEvent(CrawlEventType.SOURCE_STARTED, source_id,
+                        count=len(jobs), message=f"Lever {company_slug} paused at skip {skip} ({len(jobs)} jobs collected)"))
+    else:
+        emit(CrawlEvent(CrawlEventType.SOURCE_COMPLETED, source_id,
+                        count=len(jobs), message=f"Lever {company_slug}: {len(jobs)} jobs"))
     return jobs
 
 
@@ -428,6 +481,7 @@ def crawl_ashby_company(
     budget: CrawlBudget,
     rate_limiter: _DomainRateLimiter,
     emit: Callable[[CrawlEvent], None],
+    task: Optional[Any] = None,
 ) -> List[CrawledJob]:
     """
     Crawl Ashby's public job board API for a company.
@@ -442,6 +496,14 @@ def crawl_ashby_company(
     resp = _safe_get(api_url, timeout=budget.request_timeout,
                      extra_headers={"Accept": "application/json"})
     if not resp or resp.status_code != 200:
+        if task:
+            if resp and resp.status_code in (401, 403, 429):
+                task.status = CrawlTaskStatus.BLOCKED
+            else:
+                task_meta = getattr(task, "metadata", {})
+                retries = task_meta.get("retries", 0) + 1
+                task_meta["retries"] = retries
+                task.status = CrawlTaskStatus.RETRY_PENDING if retries <= 3 else CrawlTaskStatus.FAILED
         emit(CrawlEvent(CrawlEventType.SOURCE_BLOCKED, source_id, url=api_url,
                         message=f"Ashby API unavailable for {company_slug}"))
         return jobs
@@ -449,6 +511,8 @@ def crawl_ashby_company(
     try:
         data = resp.json()
     except Exception:
+        if task:
+            task.status = CrawlTaskStatus.FAILED
         return jobs
 
     raw_jobs = data.get("jobs", []) if isinstance(data, dict) else []
@@ -481,6 +545,9 @@ def crawl_ashby_company(
         emit(CrawlEvent(CrawlEventType.JOB_EXTRACTED, source_id, url=apply_url,
                         message=f"{title} @ {crawled.company}"))
 
+    if task:
+        task.status = CrawlTaskStatus.COMPLETED
+
     emit(CrawlEvent(CrawlEventType.SOURCE_COMPLETED, source_id,
                     count=len(jobs), message=f"Ashby {company_slug}: {len(jobs)} jobs"))
     return jobs
@@ -492,21 +559,30 @@ def crawl_workable_company(
     budget: CrawlBudget,
     rate_limiter: _DomainRateLimiter,
     emit: Callable[[CrawlEvent], None],
+    task: Optional[Any] = None,
 ) -> List[CrawledJob]:
     """
     Crawl Workable's public job board for a company via their published JSON feed,
-    following nextPage pagination tokens.
+    following nextPage pagination tokens with cursor resumption support.
     """
     source_id = f"workable:{company_slug}"
     jobs: List[CrawledJob] = []
-    seen_tokens: Set[str] = set()
-    next_token: Optional[str] = None
+    task_meta = getattr(task, "metadata", {}) if task else {}
+    next_token = task_meta.get("next_token")
+    seen_tokens: Set[str] = set(task_meta.get("seen_tokens", []))
+    pages_crawled = 0
+    max_pages = getattr(budget, "max_pages_per_source", 50)
+    exhausted = False
+    blocked = False
 
     emit(CrawlEvent(CrawlEventType.SOURCE_STARTED, source_id, url="",
                     message=f"Workable API for {company_slug}"))
 
     while len(jobs) < budget.max_total_jobs:
+        if pages_crawled >= max_pages:
+            break
         if next_token and next_token in seen_tokens:
+            exhausted = True
             break
         if next_token:
             seen_tokens.add(next_token)
@@ -518,7 +594,11 @@ def crawl_workable_company(
         resp = _safe_get(api_url, timeout=budget.request_timeout,
                          extra_headers={"Accept": "application/json"})
         if not resp or resp.status_code != 200:
-            if not jobs and next_token is None:
+            if resp and resp.status_code in (401, 403, 429):
+                blocked = True
+                emit(CrawlEvent(CrawlEventType.SOURCE_BLOCKED, source_id, url=api_url,
+                                message=f"Workable API blocked for {company_slug} (HTTP {resp.status_code})"))
+            elif not jobs and next_token is None:
                 emit(CrawlEvent(CrawlEventType.SOURCE_BLOCKED, source_id, url=api_url,
                                 message=f"Workable API unavailable for {company_slug}"))
             break
@@ -530,8 +610,10 @@ def crawl_workable_company(
 
         raw_jobs = data.get("results", []) if isinstance(data, dict) else []
         if not raw_jobs:
+            exhausted = True
             break
 
+        pages_crawled += 1
         emit(CrawlEvent(CrawlEventType.PAGE_FETCHED, source_id, url=api_url,
                         count=len(raw_jobs), message=f"Workable API: {len(raw_jobs)} jobs"))
 
@@ -567,10 +649,29 @@ def crawl_workable_company(
 
         next_token = data.get("nextPage") if isinstance(data, dict) else None
         if not next_token:
+            exhausted = True
             break
 
-    emit(CrawlEvent(CrawlEventType.SOURCE_COMPLETED, source_id,
-                    count=len(jobs), message=f"Workable {company_slug}: {len(jobs)} jobs"))
+    if task:
+        task_meta["next_token"] = next_token
+        task_meta["seen_tokens"] = list(seen_tokens)
+        if exhausted:
+            task.status = CrawlTaskStatus.COMPLETED
+        elif blocked:
+            task.status = CrawlTaskStatus.BLOCKED
+        elif pages_crawled >= max_pages or len(jobs) >= budget.max_total_jobs:
+            task.status = CrawlTaskStatus.PARTIAL
+        else:
+            retries = task_meta.get("retries", 0) + 1
+            task_meta["retries"] = retries
+            task.status = CrawlTaskStatus.RETRY_PENDING if retries <= 3 else CrawlTaskStatus.FAILED
+
+    if task and task.status == CrawlTaskStatus.PARTIAL:
+        emit(CrawlEvent(CrawlEventType.SOURCE_STARTED, source_id,
+                        count=len(jobs), message=f"Workable {company_slug} paused ({len(jobs)} jobs collected)"))
+    else:
+        emit(CrawlEvent(CrawlEventType.SOURCE_COMPLETED, source_id,
+                        count=len(jobs), message=f"Workable {company_slug}: {len(jobs)} jobs"))
     return jobs
 
 
@@ -580,22 +681,32 @@ def crawl_smartrecruiters_company(
     budget: CrawlBudget,
     rate_limiter: _DomainRateLimiter,
     emit: Callable[[CrawlEvent], None],
+    task: Optional[Any] = None,
 ) -> List[CrawledJob]:
     """
-    Crawl SmartRecruiters public job search API for a company with offset/limit pagination.
+    Crawl SmartRecruiters public job search API for a company with offset/limit pagination
+    and cursor resumption support.
     """
     source_id = f"smartrecruiters:{company_slug}"
     jobs: List[CrawledJob] = []
     query = "+".join(role_keywords[:2]) if role_keywords else ""
-    offset = 0
-    limit = 100
-    seen_offsets: Set[int] = set()
+    task_meta = getattr(task, "metadata", {}) if task else {}
+    offset = int(task_meta.get("offset", 0))
+    limit = int(task_meta.get("limit", 100))
+    seen_offsets: Set[int] = set(task_meta.get("seen_offsets", []))
+    pages_crawled = 0
+    max_pages = getattr(budget, "max_pages_per_source", 50)
+    exhausted = False
+    blocked = False
 
     emit(CrawlEvent(CrawlEventType.SOURCE_STARTED, source_id, url="",
-                    message=f"SmartRecruiters API for {company_slug}"))
+                    message=f"SmartRecruiters API for {company_slug} (starting at offset {offset})"))
 
     while len(jobs) < budget.max_total_jobs:
+        if pages_crawled >= max_pages:
+            break
         if offset in seen_offsets:
+            exhausted = True
             break
         seen_offsets.add(offset)
 
@@ -608,7 +719,11 @@ def crawl_smartrecruiters_company(
         resp = _safe_get(api_url, timeout=budget.request_timeout,
                          extra_headers={"Accept": "application/json"})
         if not resp or resp.status_code != 200:
-            if offset == 0:
+            if resp and resp.status_code in (401, 403, 429):
+                blocked = True
+                emit(CrawlEvent(CrawlEventType.SOURCE_BLOCKED, source_id, url=api_url,
+                                message=f"SmartRecruiters API blocked for {company_slug} (HTTP {resp.status_code})"))
+            elif offset == 0:
                 emit(CrawlEvent(CrawlEventType.SOURCE_BLOCKED, source_id, url=api_url,
                                 message=f"SmartRecruiters API unavailable for {company_slug}"))
             break
@@ -620,8 +735,10 @@ def crawl_smartrecruiters_company(
 
         raw_jobs = data.get("content", []) if isinstance(data, dict) else []
         if not raw_jobs:
+            exhausted = True
             break
 
+        pages_crawled += 1
         emit(CrawlEvent(CrawlEventType.PAGE_FETCHED, source_id, url=api_url,
                         count=len(raw_jobs), message=f"SmartRecruiters: {len(raw_jobs)} jobs (offset {offset})"))
 
@@ -658,13 +775,34 @@ def crawl_smartrecruiters_company(
 
         total_found = data.get("totalFound") if isinstance(data, dict) else None
         offset += len(raw_jobs)
-        if total_found is not None and offset >= total_found:
-            break
-        if len(raw_jobs) < limit:
+        if total_found is not None:
+            if offset >= total_found:
+                exhausted = True
+                break
+        elif len(raw_jobs) < limit:
+            exhausted = True
             break
 
-    emit(CrawlEvent(CrawlEventType.SOURCE_COMPLETED, source_id,
-                    count=len(jobs), message=f"SmartRecruiters {company_slug}: {len(jobs)} jobs"))
+    if task:
+        task_meta["offset"] = offset
+        task_meta["seen_offsets"] = list(seen_offsets)
+        if exhausted:
+            task.status = CrawlTaskStatus.COMPLETED
+        elif blocked:
+            task.status = CrawlTaskStatus.BLOCKED
+        elif pages_crawled >= max_pages or len(jobs) >= budget.max_total_jobs:
+            task.status = CrawlTaskStatus.PARTIAL
+        else:
+            retries = task_meta.get("retries", 0) + 1
+            task_meta["retries"] = retries
+            task.status = CrawlTaskStatus.RETRY_PENDING if retries <= 3 else CrawlTaskStatus.FAILED
+
+    if task and task.status == CrawlTaskStatus.PARTIAL:
+        emit(CrawlEvent(CrawlEventType.SOURCE_STARTED, source_id,
+                        count=len(jobs), message=f"SmartRecruiters {company_slug} paused at offset {offset} ({len(jobs)} jobs collected)"))
+    else:
+        emit(CrawlEvent(CrawlEventType.SOURCE_COMPLETED, source_id,
+                        count=len(jobs), message=f"SmartRecruiters {company_slug}: {len(jobs)} jobs"))
     return jobs
 
 
@@ -732,42 +870,49 @@ def crawl_regional_board_html(
     rate_limiter: _DomainRateLimiter,
     emit: Callable[[CrawlEvent], None],
     extract_job_from_listing: Optional[Callable[[str, str], Optional[CrawledJob]]] = None,
+    task: Optional[Any] = None,
 ) -> List[CrawledJob]:
     """
-    Generic HTML-pagination crawler for regional job boards.
+    Generic HTML-pagination crawler for regional job boards with cursor resumption support.
 
     Strategy:
-    1. Fetch listing page
+    1. Fetch listing page (starting from saved cursor if resuming)
     2. Extract job links using board-specific URL patterns
     3. Optionally extract title/company/location from listing page HTML (lightweight)
     4. Follow pagination up to budget.max_pages_per_source
     5. Emit crawl events throughout
-
-    `extract_job_from_listing(row_html, url)` is an optional per-board parser.
-    If not provided, we just return discovered URLs for FetchTool to process.
     """
     source_id = board_id
     domain = _get_domain(listing_url)
     jobs: List[CrawledJob] = []
     discovered_urls: List[str] = []
 
-    emit(CrawlEvent(CrawlEventType.SOURCE_STARTED, source_id, url=listing_url,
-                    message=f"Crawling {board_name}"))
+    task_meta = getattr(task, "metadata", {}) if task else {}
+    current_url = task_meta.get("current_url") or listing_url
+    seen_page_urls: Set[str] = set(task_meta.get("seen_page_urls", []))
+    start_page = int(task_meta.get("page", 1))
+    pages_fetched = 0
+    max_pages = getattr(budget, "max_pages_per_source", 50)
+    exhausted = False
+    blocked = False
+
+    emit(CrawlEvent(CrawlEventType.SOURCE_STARTED, source_id, url=current_url,
+                    message=f"Crawling {board_name} (page {start_page})"))
 
     # Check SSRF before crawling
     try:
-        validate_url_ssrf(listing_url)
+        validate_url_ssrf(current_url)
     except Exception as e:
-        emit(CrawlEvent(CrawlEventType.SOURCE_BLOCKED, source_id, url=listing_url,
+        if task:
+            task.status = CrawlTaskStatus.BLOCKED
+        emit(CrawlEvent(CrawlEventType.SOURCE_BLOCKED, source_id, url=current_url,
                         message=f"SSRF block: {e}"))
         return jobs
 
-    current_url = listing_url
-    pages_fetched = 0
-    seen_page_urls: Set[str] = set()
-
-    for page_num in range(1, budget.max_pages_per_source + 1):
+    next_url = None
+    for page_num in range(start_page, start_page + max_pages):
         if not current_url or current_url in seen_page_urls:
+            exhausted = True
             break
         seen_page_urls.add(current_url)
         if len(jobs) >= budget.max_total_jobs:
@@ -780,6 +925,7 @@ def crawl_regional_board_html(
                             message=f"No response from {board_name} page {page_num}"))
             break
         if resp.status_code in (403, 429, 401):
+            blocked = True
             emit(CrawlEvent(CrawlEventType.SOURCE_BLOCKED, source_id, url=current_url,
                             message=f"HTTP {resp.status_code} from {board_name} — SOURCE_BLOCKED"))
             break
@@ -817,12 +963,33 @@ def crawl_regional_board_html(
         # Advance to next page
         next_url = _extract_next_page_url(html, current_url, page_num)
         if not next_url or next_url == current_url:
+            exhausted = True
             break
         current_url = next_url
 
-    emit(CrawlEvent(CrawlEventType.SOURCE_COMPLETED, source_id,
-                    count=len(discovered_urls),
-                    message=f"{board_name}: {len(discovered_urls)} links from {pages_fetched} pages"))
+    if task:
+        task_meta["current_url"] = current_url
+        task_meta["page"] = start_page + pages_fetched
+        task_meta["seen_page_urls"] = list(seen_page_urls)
+        if exhausted:
+            task.status = CrawlTaskStatus.COMPLETED
+        elif blocked:
+            task.status = CrawlTaskStatus.BLOCKED
+        elif pages_fetched >= max_pages or len(jobs) >= budget.max_total_jobs:
+            task.status = CrawlTaskStatus.PARTIAL
+        else:
+            retries = task_meta.get("retries", 0) + 1
+            task_meta["retries"] = retries
+            task.status = CrawlTaskStatus.RETRY_PENDING if retries <= 3 else CrawlTaskStatus.FAILED
+
+    if task and task.status == CrawlTaskStatus.PARTIAL:
+        emit(CrawlEvent(CrawlEventType.SOURCE_STARTED, source_id,
+                        count=len(discovered_urls),
+                        message=f"{board_name} paused at page {start_page + pages_fetched} ({len(discovered_urls)} links)"))
+    else:
+        emit(CrawlEvent(CrawlEventType.SOURCE_COMPLETED, source_id,
+                        count=len(discovered_urls),
+                        message=f"{board_name}: {len(discovered_urls)} links from {pages_fetched} pages"))
     # Return discovered_urls as CrawledJob stubs (url-only, will be fully fetched by FetchTool)
     for u in discovered_urls:
         if not any(j.url == u for j in jobs):
@@ -908,6 +1075,7 @@ def crawl_career_page(
     budget: CrawlBudget,
     rate_limiter: _DomainRateLimiter,
     emit: Callable[[CrawlEvent], None],
+    task: Optional[Any] = None,
 ) -> Tuple[List[str], Optional[Tuple[str, str]]]:
     """
     Crawl a company career page to:
@@ -924,31 +1092,43 @@ def crawl_career_page(
     job_urls: List[str] = []
     ats_redirect: Optional[Tuple[str, str]] = None
 
-    emit(CrawlEvent(CrawlEventType.SOURCE_STARTED, source_id, url=career_url,
-                    message=f"Career page: {company_name}"))
+    task_meta = getattr(task, "metadata", {}) if task else {}
+    current_url = task_meta.get("current_url") or career_url
+    seen_page_urls: Set[str] = set(task_meta.get("seen_page_urls", []))
+    start_page = int(task_meta.get("page", 1))
+    pages_fetched = 0
+    max_pages = getattr(budget, "max_pages_per_source", 50)
+    exhausted = False
+    blocked = False
+
+    emit(CrawlEvent(CrawlEventType.SOURCE_STARTED, source_id, url=current_url,
+                    message=f"Career page: {company_name} (page {start_page})"))
 
     try:
-        validate_url_ssrf(career_url)
+        validate_url_ssrf(current_url)
     except Exception as e:
-        emit(CrawlEvent(CrawlEventType.SOURCE_BLOCKED, source_id, url=career_url,
+        if task:
+            task.status = CrawlTaskStatus.BLOCKED
+        emit(CrawlEvent(CrawlEventType.SOURCE_BLOCKED, source_id, url=current_url,
                         message=f"SSRF block: {e}"))
         return job_urls, ats_redirect
 
-    current_url = career_url
-    seen_page_urls: Set[str] = set()
-
-    for page_num in range(1, budget.max_pages_per_source + 1):
+    next_url = None
+    for page_num in range(start_page, start_page + max_pages):
         if not current_url or current_url in seen_page_urls:
+            exhausted = True
             break
         seen_page_urls.add(current_url)
         rate_limiter.wait(domain)
         resp = _safe_get(current_url, timeout=budget.request_timeout)
         if not resp or resp.status_code >= 400:
             if resp and resp.status_code in (403, 429):
+                blocked = True
                 emit(CrawlEvent(CrawlEventType.SOURCE_BLOCKED, source_id, url=current_url,
                                 message=f"HTTP {resp.status_code} — SOURCE_BLOCKED"))
             break
 
+        pages_fetched += 1
         html = resp.text
         final_url = str(resp.url)
 
@@ -962,6 +1142,8 @@ def crawl_career_page(
                                 message=f"ATS redirect detected: {ats_name} / {slug}"))
                 emit(CrawlEvent(CrawlEventType.PAGE_FETCHED, source_id, url=current_url,
                                 count=0, message="Redirected to ATS — no direct job links needed"))
+                if task:
+                    task.status = CrawlTaskStatus.COMPLETED
                 return job_urls, ats_redirect
 
         # Also check the HTML for embedded ATS links
@@ -988,12 +1170,33 @@ def crawl_career_page(
 
         next_url = _extract_next_page_url(html, current_url, page_num)
         if not next_url or next_url == current_url:
+            exhausted = True
             break
         current_url = next_url
 
-    emit(CrawlEvent(CrawlEventType.SOURCE_COMPLETED, source_id,
-                    count=len(job_urls),
-                    message=f"{company_name}: {len(job_urls)} job links found"))
+    if task:
+        task_meta["current_url"] = current_url
+        task_meta["page"] = start_page + pages_fetched
+        task_meta["seen_page_urls"] = list(seen_page_urls)
+        if exhausted or ats_redirect:
+            task.status = CrawlTaskStatus.COMPLETED
+        elif blocked:
+            task.status = CrawlTaskStatus.BLOCKED
+        elif pages_fetched >= max_pages:
+            task.status = CrawlTaskStatus.PARTIAL
+        else:
+            retries = task_meta.get("retries", 0) + 1
+            task_meta["retries"] = retries
+            task.status = CrawlTaskStatus.RETRY_PENDING if retries <= 3 else CrawlTaskStatus.FAILED
+
+    if task and task.status == CrawlTaskStatus.PARTIAL:
+        emit(CrawlEvent(CrawlEventType.SOURCE_STARTED, source_id,
+                        count=len(job_urls),
+                        message=f"{company_name} paused at page {start_page + pages_fetched} ({len(job_urls)} links)"))
+    else:
+        emit(CrawlEvent(CrawlEventType.SOURCE_COMPLETED, source_id,
+                        count=len(job_urls),
+                        message=f"{company_name}: {len(job_urls)} job links found"))
     return job_urls, ats_redirect
 
 
@@ -1390,16 +1593,25 @@ class MultiSourceCrawler:
                                 break
                     if plat in ats_crawler_map and company:
                         fn = ats_crawler_map[plat]
-                        ats_jobs = fn(company, role_keywords, self.budget, self._rate_limiter, emit)
+                        ats_jobs = fn(company, role_keywords, self.budget, self._rate_limiter, emit, task=task)
                         if ats_jobs:
                             result.crawled_jobs.extend(ats_jobs)
                             result.jobs_extracted += len(ats_jobs)
                             result.sources_crawled += 1
-                            result.task_outcomes[task.id] = CrawlTaskStatus.COMPLETED
+                        status = getattr(task, "status", None)
+                        if status:
+                            result.task_outcomes[task.id] = status
+                            if status == CrawlTaskStatus.PARTIAL:
+                                result.task_reasons[task.id] = f"ATS API for {company} paused for resumption"
+                            elif status == CrawlTaskStatus.BLOCKED:
+                                result.sources_blocked += 1
+                                result.task_reasons[task.id] = f"ATS API for {company} blocked"
+                            elif status == CrawlTaskStatus.RETRY_PENDING:
+                                result.task_reasons[task.id] = f"ATS API for {company} retry scheduled"
+                            elif status == CrawlTaskStatus.FAILED:
+                                result.task_reasons[task.id] = f"ATS API for {company} failed"
                         else:
-                            result.sources_blocked += 1
-                            result.task_outcomes[task.id] = CrawlTaskStatus.BLOCKED
-                            result.task_reasons[task.id] = f"ATS API for {company} blocked or yielded 0 jobs"
+                            result.task_outcomes[task.id] = CrawlTaskStatus.COMPLETED if ats_jobs else CrawlTaskStatus.BLOCKED
                     else:
                         result.sources_blocked += 1
                         result.task_outcomes[task.id] = CrawlTaskStatus.BLOCKED
@@ -1414,6 +1626,7 @@ class MultiSourceCrawler:
                         budget=self.budget,
                         rate_limiter=self._rate_limiter,
                         emit=emit,
+                        task=task,
                     )
                     if ats_info:
                         result.ats_detected += 1
@@ -1451,11 +1664,17 @@ class MultiSourceCrawler:
                                 location=getattr(task, "location", "") or "",
                                 url=u, apply_url=u,
                             ))
-                        result.task_outcomes[task.id] = CrawlTaskStatus.COMPLETED
                     else:
                         result.sources_blocked += 1
-                        result.task_outcomes[task.id] = CrawlTaskStatus.BLOCKED
-                        result.task_reasons[task.id] = f"Career page {url} yielded 0 links or was blocked"
+                    status = getattr(task, "status", None)
+                    if status:
+                        result.task_outcomes[task.id] = status
+                        if status == CrawlTaskStatus.PARTIAL:
+                            result.task_reasons[task.id] = f"Career page {company} paused for resumption"
+                        elif status == CrawlTaskStatus.BLOCKED:
+                            result.task_reasons[task.id] = f"Career page {url} yielded 0 links or was blocked"
+                    else:
+                        result.task_outcomes[task.id] = CrawlTaskStatus.COMPLETED if (job_urls or ats_info) else CrawlTaskStatus.BLOCKED
 
                 # 3. Regional or Major Board Crawling
                 elif source_type in ("regional_board", "major_board", "board"):
@@ -1470,17 +1689,24 @@ class MultiSourceCrawler:
                         budget=self.budget,
                         rate_limiter=self._rate_limiter,
                         emit=emit,
+                        task=task,
                     )
                     if board_jobs:
                         result.crawled_jobs.extend(board_jobs)
                         result.sources_crawled += 1
                         result.job_links_discovered += sum(1 for j in board_jobs if not j.title)
                         result.jobs_extracted += sum(1 for j in board_jobs if j.title)
-                        result.task_outcomes[task.id] = CrawlTaskStatus.COMPLETED
                     else:
                         result.sources_blocked += 1
-                        result.task_outcomes[task.id] = CrawlTaskStatus.BLOCKED
-                        result.task_reasons[task.id] = f"Board {url} yielded 0 jobs or was blocked"
+                    status = getattr(task, "status", None)
+                    if status:
+                        result.task_outcomes[task.id] = status
+                        if status == CrawlTaskStatus.PARTIAL:
+                            result.task_reasons[task.id] = f"Board {url} paused for resumption"
+                        elif status == CrawlTaskStatus.BLOCKED:
+                            result.task_reasons[task.id] = f"Board {url} yielded 0 jobs or was blocked"
+                    else:
+                        result.task_outcomes[task.id] = CrawlTaskStatus.COMPLETED if board_jobs else CrawlTaskStatus.BLOCKED
 
                 else:
                     job_urls, _ = crawl_career_page(
@@ -1490,6 +1716,7 @@ class MultiSourceCrawler:
                         budget=self.budget,
                         rate_limiter=self._rate_limiter,
                         emit=emit,
+                        task=task,
                     )
                     if job_urls:
                         result.sources_crawled += 1
@@ -1502,11 +1729,13 @@ class MultiSourceCrawler:
                                 location=getattr(task, "location", "") or "",
                                 url=u, apply_url=u,
                             ))
-                        result.task_outcomes[task.id] = CrawlTaskStatus.COMPLETED
                     else:
                         result.sources_blocked += 1
-                        result.task_outcomes[task.id] = CrawlTaskStatus.BLOCKED
-                        result.task_reasons[task.id] = f"Source {url} yielded 0 links or was blocked"
+                    status = getattr(task, "status", None)
+                    if status:
+                        result.task_outcomes[task.id] = status
+                    else:
+                        result.task_outcomes[task.id] = CrawlTaskStatus.COMPLETED if job_urls else CrawlTaskStatus.BLOCKED
 
             except Exception as e:
                 logger.warning(f"Error executing crawl task [{task.id}]: {e}")
