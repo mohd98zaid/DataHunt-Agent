@@ -183,6 +183,25 @@
           </tbody>
         </table>
       </div>
+
+      <!-- Table Pagination Bar -->
+      <div class="table-pagination-bar" id="table-pagination-bar" style="display: none;">
+        <div class="pagination-info" id="pagination-info">Showing 1–50 of 0 jobs</div>
+        <div class="pagination-controls">
+          <button type="button" class="page-nav-btn" id="page-prev-btn" onclick="changePage(-1)" title="Previous Page">◀ PREV</button>
+          <span class="page-current-display" id="page-current-display">Page 1 of 1</span>
+          <button type="button" class="page-nav-btn" id="page-next-btn" onclick="changePage(1)" title="Next Page">NEXT ▶</button>
+        </div>
+        <div class="page-size-wrap">
+          <label for="page-size-select">PER PAGE:</label>
+          <select id="page-size-select" class="page-size-select" onchange="changePageSize(this.value)">
+            <option value="25">25</option>
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+            <option value="200">200</option>
+          </select>
+        </div>
+      </div>
     </main>
   </div>
 

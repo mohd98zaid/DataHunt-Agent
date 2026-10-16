@@ -5,6 +5,8 @@ let filteredJobs = [];
 let activeFilter = "all";
 let activeJobId = null;
 let selectedJobIds = new Set();
+let currentPage = 1;
+let pageSize = 50;
 
 // Multi-select filter state sets
 const selectedCompanies = new Set();
@@ -519,6 +521,15 @@ async function loadJobs(overrideRunId) {
       fetchedJobs.push(...batch);
       offset += batch.length;
 
+      // Progressive rendering: render first page as soon as first batch arrives
+      if (offset === batch.length) {
+        allJobs = [...fetchedJobs];
+        populateFilterDropdowns(allJobs);
+        updateStatPills(allJobs);
+        currentPage = 1;
+        applyFilters();
+      }
+
       if (totalExpected !== null && fetchedJobs.length >= totalExpected) {
         break;
       }
@@ -552,7 +563,9 @@ function populateFilterDropdowns(jobs) {
       }
     });
 
-    const sortedCompanies = Array.from(compCounts.keys()).sort((a, b) => a.localeCompare(b));
+    const sortedCompanies = Array.from(compCounts.keys())
+      .sort((a, b) => (compCounts.get(b) - compCounts.get(a)) || a.localeCompare(b))
+      .slice(0, 120);
     let compHtml = "";
     if (sortedCompanies.length === 0) {
       compHtml = `<div style="padding: 12px; color: var(--text-muted); font-size: 11px; text-align: center; font-family: 'Share Tech Mono', monospace;">No companies detected</div>`;
@@ -592,7 +605,9 @@ function populateFilterDropdowns(jobs) {
       }
     });
 
-    const sortedLocs = Array.from(locCounts.keys()).sort((a, b) => a.localeCompare(b));
+    const sortedLocs = Array.from(locCounts.keys())
+      .sort((a, b) => (locCounts.get(b) - locCounts.get(a)) || a.localeCompare(b))
+      .slice(0, 80);
 
     const isRemoteSelected = selectedLocations.has("__remote__");
     const isOnsiteSelected = selectedLocations.has("__onsite__");
@@ -683,7 +698,8 @@ function populateFilterDropdowns(jobs) {
   }
 }
 
-function applyFilters() {
+function applyFilters(resetPage = true) {
+  if (resetPage) currentPage = 1;
   const searchInput = document.getElementById("job-search-input");
   const query = (searchInput ? searchInput.value : "").toLowerCase().trim();
   const nowMs = Date.now();
@@ -861,9 +877,12 @@ function renderTable(jobs) {
   const tbody = document.getElementById("jobs-table-body");
   if (!tbody) return;
 
+  const paginationBar = document.getElementById("table-pagination-bar");
+
   try {
 
   if (!jobs || jobs.length === 0) {
+    if (paginationBar) paginationBar.style.display = "none";
     const searchInput = document.getElementById("job-search-input");
     const qVal = searchInput ? searchInput.value.trim() : "";
     const urlParams = new URLSearchParams(window.location.search);
@@ -915,8 +934,28 @@ function renderTable(jobs) {
     return;
   }
 
+  const totalPages = Math.max(1, Math.ceil(jobs.length / pageSize));
+  if (currentPage > totalPages) currentPage = totalPages;
+  if (currentPage < 1) currentPage = 1;
+
+  const startIdx = (currentPage - 1) * pageSize;
+  const endIdx = Math.min(startIdx + pageSize, jobs.length);
+  const pageJobs = jobs.slice(startIdx, endIdx);
+
+  if (paginationBar) {
+    paginationBar.style.display = "flex";
+    const paginationInfo = document.getElementById("pagination-info");
+    if (paginationInfo) paginationInfo.textContent = `Showing ${startIdx + 1}–${endIdx} of ${jobs.length} jobs`;
+    const pageDisplay = document.getElementById("page-current-display");
+    if (pageDisplay) pageDisplay.textContent = `Page ${currentPage} of ${totalPages}`;
+    const prevBtn = document.getElementById("page-prev-btn");
+    if (prevBtn) prevBtn.disabled = (currentPage <= 1);
+    const nextBtn = document.getElementById("page-next-btn");
+    if (nextBtn) nextBtn.disabled = (currentPage >= totalPages);
+  }
+
   let html = "";
-  jobs.forEach((job, idx) => {
+  pageJobs.forEach((job, idx) => {
     const f = job.fields || {};
     const title = f.title || f.name || "Open Position";
     const company = f.company || job.domain || "Direct Employer";
@@ -960,7 +999,7 @@ function renderTable(jobs) {
         <td style="text-align: center;" onclick="event.stopPropagation();">
           <input type="checkbox" class="cyber-checkbox job-select-checkbox" data-id="${job.id}" ${isSelected ? 'checked' : ''} onchange="toggleJobSelection('${job.id}', this.checked)" />
         </td>
-        <td style="font-family: 'Share Tech Mono', monospace; color: var(--text-muted);">${idx + 1}</td>
+        <td style="font-family: 'Share Tech Mono', monospace; color: var(--text-muted);">${startIdx + idx + 1}</td>
         <td>
           <div class="table-job-title">
             <span>${escapeHtml(title)}</span>
@@ -1026,6 +1065,30 @@ function renderTable(jobs) {
     tbody.innerHTML = `<tr><td colspan="9" class="empty-table-cell" style="color: var(--neon-magenta);">Error rendering jobs: ${escapeHtml(err.message)}</td></tr>`;
   }
 }
+
+function changePage(delta) {
+  const totalPages = Math.max(1, Math.ceil(filteredJobs.length / pageSize));
+  const newPage = currentPage + delta;
+  if (newPage >= 1 && newPage <= totalPages) {
+    currentPage = newPage;
+    renderTable(filteredJobs);
+    const tableContainer = document.querySelector(".table-responsive");
+    if (tableContainer) {
+      tableContainer.scrollTop = 0;
+    }
+  }
+}
+window.changePage = changePage;
+
+function changePageSize(newSize) {
+  const parsed = parseInt(newSize, 10);
+  if (!isNaN(parsed) && parsed > 0) {
+    pageSize = parsed;
+    currentPage = 1;
+    renderTable(filteredJobs);
+  }
+}
+window.changePageSize = changePageSize;
 
 window.deleteJob = async function(recordId, event) {
   if (event) event.stopPropagation();
