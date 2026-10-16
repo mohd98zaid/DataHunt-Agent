@@ -39,6 +39,21 @@ class ExpandedQuery(BaseModel):
 # Common Taxonomy Dictionary (Fast deterministic fallback)
 # ─────────────────────────────────────────────
 TAXONOMY = {
+    "genai": {
+        "titles": ["GenAI Engineer", "AI Engineer", "Generative AI Engineer", "LLM Engineer", "Machine Learning Engineer", "Applied AI Engineer"],
+        "skills": ["Python", "LangChain", "LlamaIndex", "PyTorch", "Hugging Face", "LLMs", "RAG", "Prompt Engineering"],
+        "negatives": ["Sales", "Recruiter", "Intern (unpaid)"]
+    },
+    "gen ai": {
+        "titles": ["GenAI Engineer", "AI Engineer", "Generative AI Engineer", "LLM Engineer", "Machine Learning Engineer", "Applied AI Engineer"],
+        "skills": ["Python", "LangChain", "LlamaIndex", "PyTorch", "Hugging Face", "LLMs", "RAG", "Prompt Engineering"],
+        "negatives": ["Sales", "Recruiter", "Intern (unpaid)"]
+    },
+    "generative ai": {
+        "titles": ["Generative AI Engineer", "GenAI Engineer", "AI Engineer", "LLM Engineer", "Machine Learning Engineer", "Applied AI Engineer"],
+        "skills": ["Python", "LangChain", "PyTorch", "LLMs", "RAG", "Transformers"],
+        "negatives": ["Sales", "Recruiter"]
+    },
     "genai engineer": {
         "titles": ["AI Engineer", "Generative AI Engineer", "LLM Engineer", "Machine Learning Engineer", "ML Engineer", "Applied AI Engineer"],
         "skills": ["Python", "LangChain", "LlamaIndex", "PyTorch", "Hugging Face", "LLMs", "RAG", "Prompt Engineering"],

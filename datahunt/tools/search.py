@@ -257,8 +257,8 @@ def is_valid_job_url(url: str) -> bool:
     hostname = parsed.hostname or ""
     path = parsed.path or ""
 
-    # Reject dummy / mock domains in production discovery
-    if "example.com" in hostname or "localhost" in hostname:
+    # Reject local/internal addresses in production discovery
+    if "localhost" in hostname or hostname in ("127.0.0.1", "0.0.0.0"):
         return False
 
     if hostname.startswith("people.") or hostname.startswith("talent.") or hostname.startswith("candidate.") or hostname.startswith("candidates."):

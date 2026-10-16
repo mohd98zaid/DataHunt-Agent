@@ -79,6 +79,8 @@ class JobSearchSpec(BaseModel):
     salary_currency_source: str = "unspecified"  # "explicit" | "inferred" | "unspecified"
 
     freshness_days: Optional[int] = 30
+    time_filter: Optional[str] = "30d"
+    is_all_time: bool = False
 
     excluded_titles: List[str] = Field(default_factory=list)
     excluded_companies: List[str] = Field(default_factory=list)
@@ -192,14 +194,27 @@ class JobSearchSpec(BaseModel):
                 self.location = sep.join(self.locations)
         elif self.location:
             loc_str = self.location.strip()
-            if " or " in loc_str.lower():
+            if "/" in loc_str or " or " in loc_str.lower():
                 self.location_operator = "OR"
-                parts = [p.strip() for p in re.split(r'\s+or\s+', loc_str, flags=re.IGNORECASE) if p.strip()]
-                self.locations = [normalize_geo_name(p) for p in parts]
+                parts = [p.strip() for p in re.split(r'\s*(?:/|\s+or\s+)\s*', loc_str, flags=re.IGNORECASE) if p.strip()]
+                self.locations = [normalize_geo_name(p) for p in parts if p.strip()]
             elif " and " in loc_str.lower():
                 self.location_operator = "AND"
                 parts = [p.strip() for p in re.split(r'\s+and\s+', loc_str, flags=re.IGNORECASE) if p.strip()]
-                self.locations = [normalize_geo_name(p) for p in parts]
+                self.locations = [normalize_geo_name(p) for p in parts if p.strip()]
+            elif "," in loc_str:
+                comma_parts = [p.strip() for p in loc_str.split(",") if p.strip()]
+                norm_parts = [normalize_geo_name(p) for p in comma_parts]
+                try:
+                    from datahunt.agents.query_understanding import detect_local_currency
+                    currs = {detect_local_currency(p, default=None) for p in norm_parts} - {None}
+                except ImportError:
+                    currs = set()
+                if len(currs) > 1:
+                    self.location_operator = "OR"
+                    self.locations = norm_parts
+                else:
+                    self.locations = [normalize_geo_name(loc_str)]
             else:
                 self.locations = [normalize_geo_name(loc_str)]
 
@@ -285,6 +300,22 @@ class JobSearchSpec(BaseModel):
             if not self.salary_currency:
                 self.salary_currency = None
                 self.salary_currency_source = "unspecified"
+
+        # 7. Experience bounds resolution
+        if self.experience_min is not None and self.experience_max is not None and self.experience_min > self.experience_max:
+            self.experience_min, self.experience_max = self.experience_max, self.experience_min
+
+        # 8. Time filter synchronization
+        q_low = (self.raw_query or "").lower()
+        if any(k in q_low for k in ("all time", "all-time", "any time", "anytime", "all open", "all active")):
+            self.is_all_time = True
+            self.freshness_days = 0
+            self.time_filter = "all_time"
+        elif any(k in q_low for k in ("24h", "24-hour", "24 hour", "24hr", "24 hrs", "today", "past 24", "last 24")):
+            self.freshness_days = 1
+            self.time_filter = "24h"
+        elif any(k in q_low for k in ("0sec", "0-sec", "0 sec", "live", "just now", "immediate")):
+            self.time_filter = "0sec"
 
 
     def to_search_hint(self) -> str:

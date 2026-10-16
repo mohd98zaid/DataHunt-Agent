@@ -645,10 +645,11 @@ function populateFilterDropdowns(jobs) {
   const dateOptionsContainer = document.getElementById("options-date");
   if (dateOptionsContainer) {
     const dateDefs = [
-      { key: "0sec", label: "⚡ 0-Sec / Last Hour" },
-      { key: "24h", label: "📅 Today (Last 24h)" },
+      { key: "0sec", label: "⚡ 0-Sec Live Refresh" },
+      { key: "24h", label: "📅 Rolling 24 Hours (UTC)" },
       { key: "7d", label: "🗓️ Past 7 Days" },
-      { key: "30d", label: "📆 Past 30 Days" }
+      { key: "30d", label: "📆 Past 30 Days" },
+      { key: "all_time", label: "🌐 All Time" }
     ];
     let dateHtml = "";
     dateDefs.forEach(d => {
@@ -773,6 +774,7 @@ function applyFilters(resetPage = true) {
         if (selDate === "24h" && effectiveSec <= 86400){ dateMatched = true; break; }
         if (selDate === "7d"  && effectiveSec <= 604800){ dateMatched = true; break; }
         if (selDate === "30d" && effectiveSec <= 2592000){ dateMatched = true; break; }
+        if (selDate === "all_time" || selDate === "all"){ dateMatched = true; break; }
       }
       if (!dateMatched) return false;
     }

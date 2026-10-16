@@ -442,6 +442,8 @@ class ResearchOrchestrator:
                     dedupe=self.dedupe_tool,
                     export=self.export_tool,
                 )
+                if hasattr(self.run_repo, "conn_factory") and self.run_repo.conn_factory:
+                    _runtime.checkpoint_repo.conn_factory = self.run_repo.conn_factory
                 _result = _runtime.run(agent_state, _runtime_emit)
 
                 # Bridge runtime results into synthesis variables

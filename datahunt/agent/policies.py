@@ -88,15 +88,20 @@ def match_location(requested: Optional[Any], actual: Optional[str], remote_ok: b
 
     # Collect requested locations as normalized list
     if isinstance(requested, list):
-        req_list = [str(r).lower().strip() for r in requested if r]
+        raw_items = [str(r).lower().strip() for r in requested if r]
     else:
-        req_str = str(requested).lower().strip()
-        if " or " in req_str:
-            req_list = [p.strip() for p in re.split(r'\s+or\s+', req_str, flags=re.IGNORECASE) if p.strip()]
-        elif " and " in req_str:
-            req_list = [p.strip() for p in re.split(r'\s+and\s+', req_str, flags=re.IGNORECASE) if p.strip()]
+        raw_items = [str(requested).lower().strip()]
+
+    req_list = []
+    for item in raw_items:
+        if re.search(r'[/,]|\s+or\s+', item, re.IGNORECASE):
+            parts = [p.strip() for p in re.split(r'\s*(?:/|,|\s+or\s+)\s*', item, flags=re.IGNORECASE) if p.strip()]
+            req_list.extend(parts)
+        elif " and " in item:
+            parts = [p.strip() for p in re.split(r'\s+and\s+', item, flags=re.IGNORECASE) if p.strip()]
+            req_list.extend(parts)
         else:
-            req_list = [req_str]
+            req_list.append(item)
 
     # Direct substring match
     for r in req_list:
@@ -386,7 +391,8 @@ def is_aggregator_or_count_title(title: Optional[str]) -> bool:
 def match_title_relevance(
     req_title: Optional[str],
     job_title: Optional[str],
-    alternative_titles: Optional[List[str]] = None
+    alternative_titles: Optional[List[str]] = None,
+    job_description: Optional[str] = None
 ) -> Tuple[MatchStatus, float, str]:
     """
     Evaluates whether job_title matches the user's requested role using semantic categories.
@@ -481,6 +487,14 @@ def match_title_relevance(
         if "data scientist" in job_t:
             return MatchStatus.UNKNOWN, 0.40, f"Data science title '{job_title}' may have partial GenAI overlap"
 
+        # Check job description for GenAI duties if title is a technical engineering role
+        if job_description:
+            desc_lower = str(job_description).lower()
+            if any(term in desc_lower for term in STRONG_GENAI_TERMS) or (
+                any(term in desc_lower for term in ("large language model", "llm", "generative ai", "langchain", "llamaindex", "prompt engineering", "rag", "transformers", "agentic ai", "genai"))
+            ):
+                return MatchStatus.MATCH, 0.85, f"Title '{job_title}' supported by GenAI responsibilities in job description"
+
         return MatchStatus.MISMATCH, 0.0, f"Title '{job_title}' does not match requested GenAI role"
 
     # 3. Check alternative titles
@@ -507,6 +521,11 @@ def match_title_relevance(
         matched = [w for w in all_words if w in job_t]
         if matched and len(matched) / len(all_words) >= 0.5:
             return MatchStatus.MATCH, 0.70, f"Title matches role terms: {', '.join(matched)}"
+
+    if job_description and any(k in req_t for k in ("genai", "generative ai", "ai engineer", "machine learning")):
+        desc_lower = str(job_description).lower()
+        if any(term in desc_lower for term in ("genai", "generative ai", "llm", "large language model", "rag", "transformers", "langchain", "llamaindex", "prompt engineering", "agentic")):
+            return MatchStatus.MATCH, 0.85, f"Title '{job_title}' supported by role responsibilities in job description"
 
     return MatchStatus.MISMATCH, 0.0, f"Title '{job_title}' does not match requested '{req_title}'"
 
@@ -546,9 +565,10 @@ class QualificationPolicy:
         self,
         req_title: Optional[str],
         job_title: Optional[str],
-        alt_titles: Optional[List[str]] = None
+        alt_titles: Optional[List[str]] = None,
+        job_description: Optional[str] = None
     ) -> Tuple[TitleCategory, MatchStatus, float, str]:
-        status, score, reason = match_title_relevance(req_title, job_title, alt_titles)
+        status, score, reason = match_title_relevance(req_title, job_title, alt_titles, job_description=job_description)
         if status == MatchStatus.MISMATCH:
             cat = TitleCategory.MISMATCH
         elif score >= 0.98:
@@ -650,6 +670,8 @@ class QualificationPolicy:
         remote_val = fields.get("remote") if "remote" in fields else getattr(job_record_or_dict, "remote", None)
         remote_status = fields.get("remote_status") or ("remote" if remote_val else getattr(job_record_or_dict, "remote_status", "onsite"))
         is_active = fields.get("is_active", True) if "is_active" in fields else getattr(job_record_or_dict, "is_active", True)
+        if fields.get("is_closed") is True or fields.get("closed") is True or str(fields.get("status") or "").lower() in ("closed", "expired", "inactive"):
+            is_active = False
 
         # Parse experience from fields
         exp_min = fields.get("experience_min") or fields.get("experience_min_years")
@@ -699,8 +721,9 @@ class QualificationPolicy:
         rejection_reasons: List[str] = []
 
         # 1. Title Policy
+        job_text = fields.get("description") or fields.get("job_description") or fields.get("content") or fields.get("snippet") or ""
         t_cat, t_status, t_score, t_reason = self.evaluate_title(
-            req_title, title, getattr(job_req, "alternative_titles", [])
+            req_title, title, getattr(job_req, "alternative_titles", []), job_description=job_text
         )
         reasons.append(t_reason)
         if t_status == MatchStatus.MISMATCH or t_cat == TitleCategory.MISMATCH:
@@ -795,19 +818,28 @@ class QualificationPolicy:
         raw_q_lower = raw_q.lower()
         req_freshness = getattr(job_req, "freshness_days", None)
 
-        is_all_time = (
-            getattr(job_req, "is_all_time", False)
-            or req_freshness in (0, -1, 99999)
-            or any(w in raw_q_lower for w in ("all time", "all-time", "any time", "anytime", "all open", "all active"))
+        is_live_mode = (
+            getattr(job_req, "time_filter", "") == "0sec"
+            or any(w in raw_q_lower for w in ("0sec", "0 sec", "0-sec", "live mode", "live-mode", "immediate"))
         )
 
-        is_live_mode = any(w in raw_q_lower for w in ("0sec", "0 sec", "0-sec", "live mode", "live-mode", "immediate"))
+        is_all_time = (
+            not is_live_mode
+            and (
+                getattr(job_req, "is_all_time", False)
+                or getattr(job_req, "time_filter", "") in ("all_time", "all")
+                or req_freshness in (0, -1, 99999)
+                or any(w in raw_q_lower for w in ("all time", "all-time", "any time", "anytime", "all open", "all active"))
+            )
+        )
 
         is_recent_24h = (
             not is_live_mode
+            and not is_all_time
             and (
-                req_freshness == 1
-                or any(w in raw_q_lower for w in ("24h", "24 hours", "past day", "today", "past 24"))
+                getattr(job_req, "time_filter", "") == "24h"
+                or req_freshness == 1
+                or any(w in raw_q_lower for w in ("24h", "24 hours", "past day", "today", "past 24", "last 24"))
             )
         )
 
@@ -819,7 +851,7 @@ class QualificationPolicy:
             # Preserves active postings and unverified dates.
             pass
         elif is_recent_24h:
-            # Scenario E: Strict Recent Search (24h)
+            # Scenario D: Strict Recent Search (24h)
             posted_age_s = fields.get("posted_age_seconds")
             cand_posted = str(fields.get("posted_at") or "").lower().strip()
             if posted_age_s is not None:
@@ -829,8 +861,12 @@ class QualificationPolicy:
                     )
             elif cand_posted and any(r in cand_posted for r in ("just now", "0 sec", "0sec", "hour", "hours", "minute", "minutes", "today")):
                 pass
+            elif cand_posted and any(stale in cand_posted for stale in ("year ago", "years ago", "mo ago", "months ago", "week ago", "weeks ago")):
+                rejection_reasons.append(
+                    f"stale_job:Posting age '{cand_posted}' exceeds 24h threshold"
+                )
             else:
-                rejection_reasons.append("stale_job:Posting date unknown or older than 24h in strict recent search")
+                rejection_reasons.append("unverified_date:Posting timestamp not disclosed in listing; preserved in unverified recency category")
         else:
             max_freshness_days = req_freshness or 60
             posted_age_s = fields.get("posted_age_seconds")

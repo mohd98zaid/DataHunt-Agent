@@ -166,7 +166,9 @@ Rules:
 - Currency MUST be local: Set salary_currency to the regional local currency code of the target location (e.g. SAR for Saudi Arabia, AED for UAE/Dubai, INR for India, GBP for UK, EUR for Europe, CAD for Canada, SGD for Singapore, QAR for Qatar) unless the user explicitly requested a specific foreign currency (like USD).
 - For Indian salary context: "15 LPA" = 1500000 INR annual, "15 lakhs" = 1500000.
 - For "2-5 years experience": experience_min=2, experience_max=5.
-- For "3+ years": experience_min=3, experience_max=null.
+- For "up to 6 years" / "max 6 years" / "at most 6 years": experience_min=0, experience_max=6.
+- For "3+ years" / "at least 3 years": experience_min=3, experience_max=null.
+- For multi-location with slash or comma (e.g. "UAE/Saudi Arabia" or "UAE, Saudi Arabia"): locations=["UAE", "Saudi Arabia"], location_operator="OR".
 - Be liberal with alternative_titles: if role is "AI Engineer", include "ML Engineer", "Machine Learning Engineer", "Applied Scientist", etc.
 - Only ask one clarification question. Prefer to proceed with reasonable defaults.
 """
@@ -201,19 +203,30 @@ def _deterministic_parse(query: str) -> Dict[str, Any]:
     location = None
     locations = []
     location_operator = "OR"
-    loc_match = re.search(r'\b(?:in|at|for)\s+([A-Za-z\s,]+?)(?:\s+(?:with|having|paying|salary|\d+\+?\s*years?|\d+\s*[-–to]+)\b|\s*$)', query, re.IGNORECASE)
+    loc_match = re.search(r'\b(?:in|at|for)\s+([A-Za-z\s,/]+?)(?:\s+(?:with|having|paying|salary|\d+\+?\s*years?|\d+\s*[-–to]+|up\s+to|at\s+most|maximum|max|no\s+more\s+than)\b|\s*$)', query, re.IGNORECASE)
     if loc_match:
         raw_loc = loc_match.group(1).strip().rstrip(",")
-        if " or " in raw_loc.lower():
+        if "/" in raw_loc or " or " in raw_loc.lower():
             location_operator = "OR"
-            parts = [p.strip() for p in re.split(r'\s+or\s+', raw_loc, flags=re.IGNORECASE) if p.strip()]
-            locations = [_canonical_geo_name(p) for p in parts]
+            parts = [p.strip() for p in re.split(r'\s*(?:/|\s+or\s+)\s*', raw_loc, flags=re.IGNORECASE) if p.strip()]
+            locations = [_canonical_geo_name(p) for p in parts if p.strip()]
             location = " or ".join(locations)
         elif " and " in raw_loc.lower():
             location_operator = "AND"
             parts = [p.strip() for p in re.split(r'\s+and\s+', raw_loc, flags=re.IGNORECASE) if p.strip()]
-            locations = [_canonical_geo_name(p) for p in parts]
+            locations = [_canonical_geo_name(p) for p in parts if p.strip()]
             location = " and ".join(locations)
+        elif "," in raw_loc:
+            comma_parts = [p.strip() for p in raw_loc.split(",") if p.strip()]
+            norm_parts = [_canonical_geo_name(p) for p in comma_parts]
+            currs = {detect_local_currency(p, default=None) for p in norm_parts} - {None}
+            if len(currs) > 1:
+                location_operator = "OR"
+                locations = norm_parts
+                location = " or ".join(locations)
+            else:
+                locations = [_canonical_geo_name(raw_loc)]
+                location = locations[0]
         else:
             locations = [_canonical_geo_name(raw_loc)]
             location = locations[0]
@@ -224,18 +237,32 @@ def _deterministic_parse(query: str) -> Dict[str, Any]:
             if re.search(rf'\b{re.escape(key)}\b', q_lower):
                 found_keys.append(_canonical_geo_name(key))
         if found_keys:
-            locations = found_keys
-            location = " or ".join(found_keys)
+            locations = list(dict.fromkeys(found_keys))
+            location = " or ".join(locations)
 
     # Experience
-    exp_match = re.search(r'(\d+)\s*[-–to]+\s*(\d+)\s*(?:years?|yrs?)', q_lower)
     exp_min, exp_max = None, None
-    if exp_match:
-        exp_min, exp_max = int(exp_match.group(1)), int(exp_match.group(2))
+    range_match = re.search(r'(?:between\s+)?(\d+)\s*(?:[-–to]+|\band\b)\s*(\d+)\s*(?:years?|yrs?)', q_lower)
+    max_match = re.search(r'(?:up\s+to|max(?:imum)?|at\s+most|no\s+more\s+than|<=\s*|<\s*)\s*(\d+)\s*(?:years?|yrs?)', q_lower)
+    min_match = re.search(r'(?:at\s+least|min(?:imum)?|>=?\s*)\s*(\d+)\s*(?:years?|yrs?)', q_lower)
+    plus_match = re.search(r'(\d+)\+\s*(?:years?|yrs?)', q_lower)
+    fresher_match = re.search(r'\b(?:fresher|entry[\s-]level|intern(?:ship)?)\b', q_lower)
+
+    if range_match:
+        exp_min, exp_max = int(range_match.group(1)), int(range_match.group(2))
+    elif max_match:
+        exp_max = int(max_match.group(1))
+        exp_min = 0
+    elif min_match:
+        exp_min = int(min_match.group(1))
+    elif plus_match:
+        exp_min = int(plus_match.group(1))
+    elif fresher_match:
+        exp_min, exp_max = 0, 1
     else:
-        exp_match2 = re.search(r'(\d+)\+?\s*(?:years?|yrs?)\s*(?:of\s+)?(?:experience|exp)', q_lower)
-        if exp_match2:
-            exp_min = int(exp_match2.group(1))
+        general_match = re.search(r'(\d+)\s*(?:years?|yrs?)\s*(?:of\s+)?(?:experience|exp)', q_lower)
+        if general_match:
+            exp_min = int(general_match.group(1))
 
     # Salary & Regional Currency
     salary_min = None
@@ -328,9 +355,24 @@ def _deterministic_parse(query: str) -> Dict[str, Any]:
     filler = re.sub(r'\b(preferably|mostly|mainly)?\s*fresh\b.*', '', filler, flags=re.IGNORECASE)
     title = re.sub(r'\s+', ' ', filler).strip()[:60] or query[:60]
     title = re.sub(r'^\s*\d+\s+', '', title).strip()
+    if title.lower() in ("genai", "gen ai", "generative ai"):
+        title = "GenAI Engineer"
+
+    fresh_days = 30
+    is_all_time = False
+    time_filter = "30d"
+    if any(k in q_lower for k in ("0sec", "0-sec", "0 sec", "live", "just now", "immediate")):
+        fresh_days = 30
+        time_filter = "0sec"
+    elif any(k in q_lower for k in ("24h", "24-hour", "24 hour", "24hr", "24 hrs", "today", "past 24", "last 24")):
+        fresh_days = 1
+        time_filter = "24h"
+    elif any(k in q_lower for k in ("all time", "all-time", "any time", "anytime", "all open", "all active")):
+        fresh_days = 0
+        is_all_time = True
+        time_filter = "all_time"
 
     return {
-
         "raw_query": query,
         "job_title": title,
         "alternative_titles": [],
@@ -352,7 +394,9 @@ def _deterministic_parse(query: str) -> Dict[str, Any]:
         "employment_types": [emp_type],
         "industry": None,
         "company_prefs": [],
-        "freshness_days": 30,
+        "freshness_days": fresh_days,
+        "time_filter": time_filter,
+        "is_all_time": is_all_time,
         "missing_fields": [],
         "clarification_needed": False,
         "clarification_question": None,

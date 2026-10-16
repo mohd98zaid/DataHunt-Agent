@@ -237,7 +237,8 @@ def is_broadly_relevant_job_title(title: str, role_keywords: List[str]) -> bool:
             "machine learning", "deep learning", "nlp", "neural", "rag",
             "foundation model", "computer vision", "artificial intelligence",
             "ai engineer", "ai developer", "ai architect", "ai specialist", "ai/ml",
-            "applied ai", "ai solutions", "ml engineer", "ml developer", "ai research"
+            "applied ai", "ai solutions", "ml engineer", "ml developer", "ai research",
+            "agentic"
         )
         if any(term in t_low for term in ai_terms):
             return True
@@ -388,7 +389,6 @@ def crawl_lever_company(
         if skip in seen_skips:
             exhausted = True
             break
-        seen_skips.add(skip)
 
         api_url = f"https://api.lever.co/v0/postings/{company_slug}?mode=json&limit={limit}&skip={skip}"
         rate_limiter.wait("api.lever.co")
@@ -415,6 +415,8 @@ def crawl_lever_company(
         if not raw_jobs:
             exhausted = True
             break
+
+        seen_skips.add(skip)
 
         pages_crawled += 1
         emit(CrawlEvent(CrawlEventType.PAGE_FETCHED, source_id, url=api_url,
@@ -585,7 +587,6 @@ def crawl_workable_company(
             exhausted = True
             break
         if next_token:
-            seen_tokens.add(next_token)
             api_url = f"https://apply.workable.com/api/v3/accounts/{company_slug}/jobs?token={next_token}"
         else:
             api_url = f"https://apply.workable.com/api/v3/accounts/{company_slug}/jobs"
@@ -612,6 +613,9 @@ def crawl_workable_company(
         if not raw_jobs:
             exhausted = True
             break
+
+        if next_token:
+            seen_tokens.add(next_token)
 
         pages_crawled += 1
         emit(CrawlEvent(CrawlEventType.PAGE_FETCHED, source_id, url=api_url,
@@ -708,7 +712,6 @@ def crawl_smartrecruiters_company(
         if offset in seen_offsets:
             exhausted = True
             break
-        seen_offsets.add(offset)
 
         api_url = (
             f"https://api.smartrecruiters.com/v1/companies/{company_slug}/postings"
@@ -737,6 +740,8 @@ def crawl_smartrecruiters_company(
         if not raw_jobs:
             exhausted = True
             break
+
+        seen_offsets.add(offset)
 
         pages_crawled += 1
         emit(CrawlEvent(CrawlEventType.PAGE_FETCHED, source_id, url=api_url,
@@ -914,7 +919,6 @@ def crawl_regional_board_html(
         if not current_url or current_url in seen_page_urls:
             exhausted = True
             break
-        seen_page_urls.add(current_url)
         if len(jobs) >= budget.max_total_jobs:
             break
 
@@ -934,6 +938,7 @@ def crawl_regional_board_html(
                             message=f"HTTP {resp.status_code} on page {page_num}"))
             break
 
+        seen_page_urls.add(current_url)
         pages_fetched += 1
         html = resp.text
         page_links = _extract_job_links_from_html(html, current_url, job_url_patterns)

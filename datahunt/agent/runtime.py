@@ -568,16 +568,28 @@ class AgentRuntime:
                 if any(jsp in comb_text for jsp in JOB_SEEKER_PHRASES):
                     return False
 
-            # Drop candidates whose title or snippet explicitly indicates they are stale (e.g. 1 year ago, 6+ months ago, or past years)
-            STALE_SNIPPET_PATTERNS = [
-                r"\b(?:[1-9]|\d{2})\s+years?\s+ago\b",
-                r"\b(?:over\s+|more\s+than\s+)?1\s+year\s+ago\b",
-                r"\b(?:[3-9]|1[0-2])\s+months?\s+ago\b",
-                r"\b(?:1[0-9]{2}|[2-9][0-9]{2})\s+days?\s+ago\b",  # 100+ days ago
-                r"\bposted[:\s]+(?:\w+\s+\d{1,2},\s+)?(2020|2021|2022|2023|2024)\b",
-            ]
-            if any(re.search(pat, snippet) or re.search(pat, title) for pat in STALE_SNIPPET_PATTERNS):
-                return False
+            # Drop candidates whose title or snippet explicitly indicates they are stale,
+            # UNLESS searching in "All time" mode or thorough collection where full evaluation is required.
+            is_all_time = (
+                getattr(state, "is_all_time", False)
+                or getattr(state, "collection_mode", "") == "thorough"
+                or getattr(state, "freshness_days", None) in (0, -1, 99999)
+                or (state.canonical_job_request and (
+                    getattr(state.canonical_job_request, "is_all_time", False)
+                    or getattr(state.canonical_job_request, "freshness_days", None) in (0, -1, 99999)
+                ))
+                or any(w in (state.request or "").lower() for w in ("all time", "all-time", "any time", "anytime", "all open", "all active"))
+            )
+            if not is_all_time:
+                STALE_SNIPPET_PATTERNS = [
+                    r"\b(?:[1-9]|\d{2})\s+years?\s+ago\b",
+                    r"\b(?:over\s+|more\s+than\s+)?1\s+year\s+ago\b",
+                    r"\b(?:[3-9]|1[0-2])\s+months?\s+ago\b",
+                    r"\b(?:1[0-9]{2}|[2-9][0-9]{2})\s+days?\s+ago\b",  # 100+ days ago
+                    r"\bposted[:\s]+(?:\w+\s+\d{1,2},\s+)?(2020|2021|2022|2023|2024)\b",
+                ]
+                if any(re.search(pat, snippet) or re.search(pat, title) for pat in STALE_SNIPPET_PATTERNS):
+                    return False
 
         return True
 
