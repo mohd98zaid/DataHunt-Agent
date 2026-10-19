@@ -117,6 +117,22 @@ class AgentState:
     max_llm_calls: int = 100
     target_results: int = 50
     deadline: float = 0.0  # unix timestamp
+    search_deadline: float = 0.0  # search phase cutoff (unix timestamp)
+    hard_deadline: float = 0.0  # hard safety deadline for drain phase (unix timestamp)
+    drain_budget_seconds: float = 600.0  # maximum grace seconds allowed to drain in-flight candidates
+
+    @property
+    def effective_search_deadline(self) -> float:
+        return self.search_deadline if self.search_deadline > 0.0 else self.deadline
+
+    @property
+    def effective_hard_deadline(self) -> float:
+        if self.hard_deadline > 0.0:
+            return self.hard_deadline
+        sd = self.effective_search_deadline
+        if sd > 0.0:
+            return sd + getattr(self, "drain_budget_seconds", 600.0)
+        return 0.0
     
     status: AgentStatus = AgentStatus.INITIALIZING
     completion_reason: Optional[str] = None
@@ -203,6 +219,9 @@ class AgentState:
             "max_llm_calls": self.max_llm_calls,
             "target_results": self.target_results,
             "deadline": self.deadline,
+            "search_deadline": self.search_deadline,
+            "hard_deadline": self.hard_deadline,
+            "drain_budget_seconds": self.drain_budget_seconds,
             "status": self.status.value if hasattr(self.status, "value") else str(self.status),
             "completion_reason": self.completion_reason,
             "actions_taken": list(self.actions_taken),
@@ -280,6 +299,9 @@ class AgentState:
             max_llm_calls=d.get("max_llm_calls", 100),
             target_results=d.get("target_results", 50),
             deadline=d.get("deadline", 0.0),
+            search_deadline=d.get("search_deadline", 0.0),
+            hard_deadline=d.get("hard_deadline", 0.0),
+            drain_budget_seconds=d.get("drain_budget_seconds", 600.0),
             status=status_enum,
             completion_reason=d.get("completion_reason"),
             actions_taken=list(d.get("actions_taken", [])),

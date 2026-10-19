@@ -187,6 +187,7 @@ class ResearchOrchestrator:
 
         start_time = time.time()
         deadline = start_time + run.budget.deadline_seconds
+        hard_deadline = deadline + getattr(settings, "DRAIN_TIMEOUT_SECONDS", 600)
         step_count = 0
         warnings = []
         counters = run.counters
@@ -280,7 +281,11 @@ class ResearchOrchestrator:
             if is_job_search:
                 from datahunt.agents import QueryUnderstandingAgent, QueryExpansionAgent, JobSearchRequest
                 qu_agent = QueryUnderstandingAgent(gemini_client=self.client)
-                qe_agent = QueryExpansionAgent(gemini_client=self.client)
+                # DiscoveryEngine builds the actual job-search plan. Query
+                # expansion is only telemetry here, so keep it deterministic;
+                # an optional LLM call must not consume several minutes before
+                # a live job search even starts.
+                qe_agent = QueryExpansionAgent()
 
                 job_req = qu_agent.understand(task.request_text)
                 if isinstance(job_req, JobSearchRequest):
@@ -372,7 +377,9 @@ class ResearchOrchestrator:
                     }
 
                 from datahunt.agent.discovery_models import DiscoveryBudget
-                search_cap = max(run.budget.max_search_queries, getattr(settings, "MAX_SEARCH_QUERIES", 150), 120)
+                # A run's persisted budget is authoritative; do not silently expand it
+                # with process-wide defaults after the run has been created.
+                search_cap = max(1, int(run.budget.max_search_queries))
                 discovery_budget = DiscoveryBudget(
                     max_runtime_seconds=settings.MAX_RUN_SECONDS,
                     max_search_requests=search_cap,
@@ -389,6 +396,9 @@ class ResearchOrchestrator:
                     max_search_calls=search_cap,
                     max_fetch_calls=run.budget.max_pages,
                     deadline=deadline,
+                    search_deadline=deadline,
+                    hard_deadline=hard_deadline,
+                    drain_budget_seconds=getattr(settings, "DRAIN_TIMEOUT_SECONDS", 600),
                     max_iterations=getattr(settings, "MAX_ITERATIONS", 200),
                     discovery_budget=discovery_budget,
                     **canonical_kwargs,
@@ -961,8 +971,8 @@ class ResearchOrchestrator:
                 with ThreadPoolExecutor(max_workers=8) as executor:
                     future_map = {executor.submit(_do_fetch, hit): hit for hit in pages_to_fetch}
                     for future in as_completed(future_map):
-                        if time.time() > deadline:
-                            warnings.append("Fetching stopped early: deadline reached.")
+                        if time.time() > hard_deadline:
+                            warnings.append("Fetching stopped early: hard deadline reached.")
                             for f in future_map:
                                 f.cancel()
                             break
@@ -1013,8 +1023,8 @@ class ResearchOrchestrator:
                 target_harvest_count = max(run.budget.max_output_records * 2, 20)
 
                 for doc in fetched_docs:
-                    if time.time() > deadline:
-                        warnings.append("Extraction stopped early: deadline reached.")
+                    if time.time() > hard_deadline:
+                        warnings.append("Extraction stopped early: hard deadline reached.")
                         break
                     if len(raw_records) >= target_harvest_count:
                         logger.info(f"Target record harvest reached ({len(raw_records)} records), proceeding to verification.")
@@ -1053,8 +1063,8 @@ class ResearchOrchestrator:
                 })
 
                 for rec in raw_records:
-                    if time.time() > deadline:
-                        warnings.append("Verification stopped early: time budget exceeded.")
+                    if time.time() > hard_deadline:
+                        warnings.append("Verification stopped early: hard deadline reached.")
                         break
                     step_count += 1
                     evt = self.tool_repo.record_start(run.id, step_count, "verify_record", {"record_id": rec.id})

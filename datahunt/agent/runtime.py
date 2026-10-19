@@ -365,7 +365,7 @@ class AgentRuntime:
         batch_size = 8
         if state.discovery_state and state.discovery_state.pending_crawl_tasks:
             while state.discovery_state.pending_crawl_tasks:
-                if state.deadline > 0 and time.time() >= state.deadline:
+                if state.effective_search_deadline > 0 and time.time() >= state.effective_search_deadline:
                     break
 
                 batch = []
@@ -386,7 +386,7 @@ class AgentRuntime:
                     crawl_res = crawler.crawl_tasks(
                         tasks=batch,
                         role_keywords=role_keywords,
-                        deadline=state.deadline,
+                        deadline=state.effective_search_deadline,
                         external_emit=emit,
                         discovery_state=state.discovery_state,
                     )
@@ -447,7 +447,7 @@ class AgentRuntime:
                     discovered_ats=discovered_ats,
                     discovered_companies=discovered_companies,
                     is_gulf=is_gulf,
-                    deadline=state.deadline,
+                    deadline=state.effective_search_deadline,
                     external_emit=emit,
                 )
             except Exception as e:
@@ -466,6 +466,8 @@ class AgentRuntime:
                 if state.mode in ("jobs", "job") and not is_valid_job_url(url):
                     if not hit.get("crawled"):
                         continue
+                if state.mode in ("jobs", "job") and not self._is_promising_candidate(hit, state):
+                    continue
 
                 state.seen_canonical_urls.add(canon)
                 state.seen_urls.add(url)
@@ -533,6 +535,20 @@ class AgentRuntime:
             req_geos = [loc.lower() for loc in (state.locations or ([state.explicit_location] if state.explicit_location else []))]
             is_gulf = any(any(k in g for k in ("saudi", "uae", "dubai", "riyadh", "jeddah", "dammam", "gulf", "gcc", "qatar", "kuwait", "bahrain", "oman")) for g in req_geos)
             if is_gulf:
+                candidate_location = hit.get("location")
+                if isinstance(candidate_location, dict):
+                    candidate_location = ", ".join(
+                        str(value) for value in candidate_location.values() if value
+                    )
+                if candidate_location:
+                    location_status, _ = match_location(
+                        state.locations or state.explicit_location,
+                        str(candidate_location),
+                        remote_ok=state.remote_allowed is not False,
+                    )
+                    if location_status == MatchStatus.MISMATCH:
+                        return False
+
                 FOREIGN_DOMAINS = [
                     "eg.linkedin.com", "wuzzuf.net", "forasna.com",  # Egypt
                     "in.linkedin.com", "naukri.com", "foundit.in",   # India
@@ -549,6 +565,9 @@ class AgentRuntime:
                     "pune, india", "mumbai, india", "hyderabad, india", "delhi, india",
                     "karachi, pakistan", "lahore, pakistan", "islamabad, pakistan",
                     "denver, co", "san francisco, ca", "new york, ny",
+                    "india", "united states", "usa", "germany", "france", "paris", "europe",
+                    "united kingdom", "london", "sweden", "norway", "denmark", "canada",
+                    "australia", "singapore", "japan", "tokyo", "south korea",
                 ]
                 if any(fa in text for fa in FOREIGN_ANCHORS) and not any(rg in text for rg in ("saudi", "uae", "dubai", "riyadh", "doha", "qatar", "kuwait", "bahrain", "oman", "worldwide", "global remote")):
                     return False
@@ -593,6 +612,50 @@ class AgentRuntime:
 
         return True
 
+    def _recover_candidate_location(self, record: Any, state: AgentState) -> None:
+        """Recover a target-region location lost by board/LinkedIn extraction."""
+        fields = getattr(record, "fields", {}) or {}
+        current = str(fields.get("location") or "").strip().casefold()
+        unknown_location = not current or current in {
+            "remote", "remote / unspecified", "remote/unspecified", "unspecified", "not specified", "n/a"
+        }
+        if not unknown_location:
+            return
+
+        doc_text = ""
+        doc_id = getattr(record, "source_document_id", None)
+        if doc_id:
+            for doc in getattr(state, "fetched_docs", []) or []:
+                if getattr(doc, "id", None) == doc_id:
+                    doc_text = getattr(doc, "extracted_text", "") or ""
+                    break
+
+        haystack = " ".join(
+            str(fields.get(key) or "")
+            for key in ("title", "description", "snippet", "job_url", "apply_url", "source_url")
+        ) + " " + doc_text
+        haystack = haystack.casefold()
+
+        locations = (
+            (("abu dhabi", "uae"), "Abu Dhabi, UAE"),
+            (("abu dhabi", "united arab emirates"), "Abu Dhabi, UAE"),
+            (("dubai", "uae"), "Dubai, UAE"),
+            (("dubai", "united arab emirates"), "Dubai, UAE"),
+            (("sharjah", "uae"), "Sharjah, UAE"),
+            (("united arab emirates",), "UAE"),
+            (("riyadh", "saudi"), "Riyadh, Saudi Arabia"),
+            (("jeddah", "saudi"), "Jeddah, Saudi Arabia"),
+            (("dammam", "saudi"), "Dammam, Saudi Arabia"),
+            (("khobar", "saudi"), "Khobar, Saudi Arabia"),
+            (("saudi arabia",), "Saudi Arabia"),
+            (("ksa",), "Saudi Arabia"),
+        )
+        for terms, normalized in locations:
+            if all(re.search(r"(?<!\w)" + re.escape(term) + r"(?!\w)", haystack) for term in terms):
+                fields["location"] = normalized
+                fields["location_recovered"] = True
+                return
+
     def _act_search(self, state: AgentState, emit):
         """Execute the next batch of searches with canonical URL deduplication and dynamic discovery."""
         state.status = AgentStatus.SEARCHING
@@ -620,7 +683,7 @@ class AgentRuntime:
                 for task in batch_tasks:
                     if state.search_calls >= state.max_search_calls:
                         break
-                    if state.deadline > 0 and time.time() >= state.deadline:
+                    if state.effective_search_deadline > 0 and time.time() >= state.effective_search_deadline:
                         break
 
                     t_start = time.time()
@@ -647,6 +710,8 @@ class AgentRuntime:
                                     dup_candidates += 1
                                     continue
                                 if state.mode in ("jobs", "job") and not is_valid_job_url(url):
+                                    continue
+                                if state.mode in ("jobs", "job") and not self._is_promising_candidate(hit, state):
                                     continue
 
                                 detected_source = self.source_registry.identify_source_for_url(url)
@@ -767,7 +832,7 @@ class AgentRuntime:
         for q_obj in queries_batch:
             if state.search_calls >= state.max_search_calls:
                 break
-            if state.deadline > 0 and time.time() >= state.deadline:
+            if state.effective_search_deadline > 0 and time.time() >= state.effective_search_deadline:
                 break
 
             query = q_obj["query"]
@@ -852,9 +917,18 @@ class AgentRuntime:
                 0 if any(t in f"{h.get('url','')} {h.get('title','')} {h.get('snippet','')}".lower() for t in loc_tokens) else 1
             ))
 
-        batch = promising[:25]
+        remaining_fetches = max(0, state.max_fetch_calls - state.fetch_calls)
+        if remaining_fetches == 0:
+            if promising:
+                state.add_warning(
+                    f"Fetch budget exhausted; dropped {len(promising)} unprocessed candidates"
+                )
+            state.candidate_urls = []
+            return
+
+        batch = promising[:min(25, remaining_fetches)]
         # Retain remaining candidates
-        state.candidate_urls = promising[25:]
+        state.candidate_urls = promising[len(batch):]
 
         if not batch:
             self._act_extract(state, emit)
@@ -866,7 +940,7 @@ class AgentRuntime:
         with ThreadPoolExecutor(max_workers=10) as executor:
             futures = {executor.submit(self.fetch.execute, url=h.get("url"), run_id=state.run_id): h for h in batch}
             for future in as_completed(futures):
-                if state.deadline > 0 and time.time() >= state.deadline:
+                if state.effective_hard_deadline > 0 and time.time() >= state.effective_hard_deadline:
                     for f in futures:
                         f.cancel()
                     break
@@ -905,7 +979,7 @@ class AgentRuntime:
 
         for doc in unprocessed:
             state.extracted_doc_ids.add(doc.id)
-            if state.deadline > 0 and time.time() >= state.deadline:
+            if state.effective_hard_deadline > 0 and time.time() >= state.effective_hard_deadline:
                 break
             try:
                 res = self.extract.execute(doc, spec, state.run_id)
@@ -969,12 +1043,14 @@ class AgentRuntime:
 
         for rec in unverified:
             state.processed_record_ids.add(rec.id)
-            if state.deadline > 0 and time.time() >= state.deadline:
-                state.add_warning("Verification stopped: deadline reached")
+            if state.effective_hard_deadline > 0 and time.time() >= state.effective_hard_deadline:
+                state.add_warning("Verification stopped: hard deadline reached")
                 break
 
             rec_src = rec.fields.get("source") or "web"
             try:
+                if state.mode in ("jobs", "job"):
+                    self._recover_candidate_location(rec, state)
                 v_res = self.verify.execute(
                     record=rec,
                     required_fields=["title", "company"] if state.mode in ("jobs", "job") else ["name"],

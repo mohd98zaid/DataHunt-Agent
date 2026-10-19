@@ -63,6 +63,20 @@ IGNORED_COMPANIES = {
     "opportunity", "opportunities", "middle east", "middleeast", "united arab emirates", "saudi arabia"
 }
 
+# Keep the regional seed plan broad enough to cover each source lane, but small
+# enough that verification/fetch work remains ahead of another search wave.
+# shortcut: 72 seed tasks, raise only when the search budget and verifier throughput grow.
+REGIONAL_INITIAL_TASK_LIMIT = 72
+# shortcut: 8 hit-driven tasks per search batch, raise only with queue backpressure.
+REGIONAL_DYNAMIC_TASK_LIMIT = 8
+CORE_PUBLIC_ATS = (
+    ("boards.greenhouse.io", "Greenhouse"),
+    ("jobs.lever.co", "Lever"),
+    ("jobs.ashbyhq.com", "Ashby"),
+    ("apply.workable.com", "Workable"),
+    ("jobs.smartrecruiters.com", "SmartRecruiters"),
+)
+
 
 class DiscoveryEngine:
     """
@@ -75,11 +89,335 @@ class DiscoveryEngine:
     def __init__(self, budget: Optional[DiscoveryBudget] = None):
         self.budget = budget or DiscoveryBudget()
 
+    @staticmethod
+    def _clean_role(role: str) -> str:
+        return re.sub(
+            r"\b(with|requiring)?\s*\d+[-–\sto]+\d*\s*(?:years?|yrs?)(?:\s*exp(?:erience)?)?\b",
+            "",
+            role,
+            flags=re.IGNORECASE,
+        ).strip() or role
+
+    @staticmethod
+    def _requested_regions(state: Any) -> List[str]:
+        """Return the user's regions verbatim, without adding city/global targets."""
+        raw_regions = list(getattr(state, "locations", None) or [])
+        if not raw_regions:
+            explicit = getattr(state, "explicit_location", None)
+            if explicit:
+                raw_regions = [explicit]
+
+        regions: List[str] = []
+        for raw in raw_regions:
+            for part in re.split(r"\s+(?:or|and)\s+|[,/;]", str(raw), flags=re.IGNORECASE):
+                region = part.strip()
+                if not region or region.lower() in {"remote", "anywhere", "worldwide", "global", "any"}:
+                    continue
+                if region.casefold() not in {r.casefold() for r in regions}:
+                    regions.append(region)
+        return regions
+
+    @staticmethod
+    def _explicit_remote_requested(state: Any) -> bool:
+        request = (getattr(state, "request", "") or "").lower()
+        if re.search(r"\b(?:remote|anywhere|worldwide|wfh|telecommute)\b", request):
+            return True
+        canonical = getattr(state, "canonical_job_request", None)
+        return getattr(canonical, "remote_status", "") in ("remote", "hybrid")
+
+    @staticmethod
+    def _region_hubs(region: str) -> List[str]:
+        """Use known hubs only as query terms; the requested region stays primary."""
+        low = region.casefold()
+        if any(k in low for k in ("uae", "united arab emirates", "emirates")):
+            return ["Dubai", "Abu Dhabi", "Sharjah"]
+        if any(k in low for k in ("gulf", "gcc", "mena", "middle east")):
+            return ["Dubai", "Riyadh", "Doha"]
+        if any(k in low for k in ("saudi", "ksa")):
+            return ["Riyadh", "Jeddah", "Dammam", "Khobar", "NEOM"]
+        if "qatar" in low:
+            return ["Doha"]
+        if "india" in low:
+            return ["Bengaluru", "Hyderabad", "Pune", "Gurgaon", "Noida", "Mumbai"]
+        if any(k in low for k in ("dubai", "abu dhabi", "sharjah", "ajman")):
+            return [region]
+        if any(k in low for k in ("riyadh", "jeddah", "dammam", "khobar", "neom")):
+            return [region]
+        return [region]
+
+    @staticmethod
+    def _regional_portals(region: str) -> List[Tuple[str, str]]:
+        low = region.casefold()
+        if any(k in low for k in (
+            "uae", "united arab emirates", "emirates", "dubai", "abu dhabi", "sharjah",
+            "saudi", "ksa", "riyadh", "jeddah", "dammam", "khobar", "neom", "qatar", "doha",
+            "gulf", "gcc", "mena", "middle east",
+        )):
+            return [("naukrigulf.com", "NaukriGulf"), ("bayt.com", "Bayt"), ("gulftalent.com", "GulfTalent")]
+        if any(k in low for k in ("india", "bengaluru", "bangalore", "hyderabad", "pune", "gurgaon", "gurugram", "noida", "mumbai", "delhi", "chennai")):
+            return [("naukri.com", "Naukri"), ("instahyre.com", "Instahyre"), ("foundit.in", "Foundit")]
+        if any(k in low for k in ("uk", "united kingdom", "london")):
+            return [("reed.co.uk", "Reed"), ("totaljobs.com", "Totaljobs")]
+        # A generic regional index query keeps unknown regions in the regional lane.
+        return [("regional_portals", "Regional portals")]
+
+    @staticmethod
+    def _query_scope(role: str, region: str, hub: Optional[str] = None) -> str:
+        terms = [f'"{role}"', f'"{region}"']
+        if hub and hub.casefold() != region.casefold():
+            terms.append(f'"{hub}"')
+        return " ".join(terms)
+
+    @staticmethod
+    def _query_regions(role: str, regions: List[str]) -> str:
+        if len(regions) <= 1:
+            return DiscoveryEngine._query_scope(role, regions[0]) if regions else f'"{role}"'
+        region_terms = " OR ".join(f'"{region}"' for region in regions)
+        return f'"{role}" ({region_terms})'
+
+    @staticmethod
+    def _task_location(region: str, hub: Optional[str] = None) -> str:
+        # Keep the exact requested region visible while retaining city-level
+        # compatibility for the existing geographic drilling consumers.
+        return region if not hub or hub.casefold() == region.casefold() else f"{region} — {hub}"
+
+    def _generate_regional_initial_tasks(self, state: Any, role: str, alt_role: Optional[str]) -> List[SearchTask]:
+        regions = self._requested_regions(state)
+        tasks: List[SearchTask] = []
+        lane_tasks: Dict[str, List[SearchTask]] = {
+            "regional_portals": [],
+            "major_boards": [],
+            "public_ats_careers": [],
+            "linkedin_hiring_posts": [],
+            "general_web": [],
+        }
+
+        def add(
+            lane: str,
+            prefix: str,
+            task_type: SearchTaskType,
+            query: str,
+            source: str,
+            source_type: DiscoveredSourceType,
+            region: str,
+            priority: int,
+            reason: str,
+            hub: Optional[str] = None,
+            **extra: Any,
+        ) -> None:
+            metadata = {"lane": lane, "requested_region": region}
+            if hub:
+                metadata["city"] = hub
+            metadata.update(extra.pop("metadata", {}))
+            lane_tasks[lane].append(SearchTask(
+                id=f"r1_{prefix}_{sum(len(v) for v in lane_tasks.values())}",
+                task_type=task_type,
+                query=query.strip(),
+                source=source,
+                source_type=source_type,
+                priority=priority,
+                depth=0,
+                round=1,
+                reason=reason,
+                location=self._task_location(region, hub),
+                metadata=metadata,
+                **extra,
+            ))
+
+        for region in regions:
+            hubs = self._region_hubs(region)
+            portal_hubs = hubs[:3]
+            ats_hubs = hubs[:2] + [region]
+            scope = self._query_scope(role, region)
+
+            # 1. Regional portals
+            for portal, portal_name in self._regional_portals(region):
+                for hub in portal_hubs:
+                    scoped = self._query_scope(role, region, hub)
+                    query = (
+                        f"site:{portal} {scoped} jobs"
+                        if portal != "regional_portals"
+                        else f"{scoped} jobs \"regional job board\""
+                    )
+                    add(
+                        "regional_portals", "reg", SearchTaskType.REGIONAL_BOARD_SEARCH,
+                        query, portal, DiscoveredSourceType.REGIONAL_BOARD, region, 1,
+                        f"Regional portal sweep on {portal_name}", hub=hub,
+                    )
+
+            # 2. Major job boards (LinkedIn jobs is distinct from public posts below)
+            for source in ("indeed.com", "glassdoor.com", "linkedin.com/jobs"):
+                add(
+                    "major_boards", "major", SearchTaskType.BOARD_SEARCH,
+                    f"site:{source} {scope} jobs",
+                    source, DiscoveredSourceType.MAJOR_BOARD, region, 2,
+                    f"Major job board sweep on {source}",
+                )
+
+            # 3. Public ATS and employer career pages
+            for domain, platform in CORE_PUBLIC_ATS:
+                for hub in ats_hubs:
+                    add(
+                        "public_ats_careers", "ats", SearchTaskType.ATS_SEARCH,
+                        f"site:{domain} {self._query_scope(role, region, hub)}",
+                        domain, DiscoveredSourceType.ATS_PORTAL, region, 2,
+                        f"Public ATS search on {platform}", hub=hub, ats_platform=platform.lower(),
+                    )
+            add(
+                "public_ats_careers", "careers", SearchTaskType.CAREER_PAGE_SEARCH,
+                f"{scope} (careers OR \"open positions\" OR \"we are hiring\")",
+                "company_career_page", DiscoveredSourceType.COMPANY_CAREER_PAGE, region, 2,
+                "Public employer career-page discovery",
+            )
+
+            # 4. Public LinkedIn hiring posts; no profiles or authenticated feeds.
+            for hub in [region] + hubs[:2]:
+                add(
+                    "linkedin_hiring_posts", "lipost", SearchTaskType.BOARD_SEARCH,
+                    f'site:linkedin.com/posts "hiring" {self._query_scope(role, region, hub)}',
+                    "linkedin.com", DiscoveredSourceType.COMMUNITY_FORUM, region, 2,
+                    "Public LinkedIn recruiter/founder hiring-post discovery", hub=hub,
+                )
+
+            # 5. General web-indexed job postings.  The alternate title is kept
+            # in this lane rather than creating another source lane.
+            for search_role in [role] + ([alt_role] if alt_role else []):
+                add(
+                    "general_web", "direct", SearchTaskType.BOARD_SEARCH,
+                    f'{self._query_scope(search_role, region, hubs[0] if hubs else None)} jobs (careers OR apply OR hiring)',
+                    "direct_search", DiscoveredSourceType.MAJOR_BOARD, region, 2,
+                    f"General web-indexed job search for {search_role}",
+                )
+
+        # Interleave lanes so a bounded plan cannot spend the whole budget on
+        # portal pagination before ATS, LinkedIn, or web coverage is attempted.
+        lane_order = (
+            "regional_portals", "major_boards", "public_ats_careers",
+            "linkedin_hiring_posts", "general_web",
+        )
+        positions = {lane: 0 for lane in lane_order}
+        while len(tasks) < REGIONAL_INITIAL_TASK_LIMIT:
+            added = False
+            for lane in lane_order:
+                pos = positions[lane]
+                bucket = lane_tasks[lane]
+                if pos < len(bucket):
+                    tasks.append(bucket[pos])
+                    positions[lane] = pos + 1
+                    added = True
+                    if len(tasks) >= REGIONAL_INITIAL_TASK_LIMIT:
+                        break
+            if not added:
+                break
+        return tasks
+
+    @staticmethod
+    def _hit_matches_role(url: str, title: str, snippet: str, role: str) -> bool:
+        text = f"{url} {title} {snippet}".casefold()
+        role_tokens = [t for t in re.findall(r"[a-z0-9]+", role.casefold()) if len(t) > 2]
+        ai_role = any(term in role.casefold() for term in ("genai", "generative ai", "llm", "ai engineer", "machine learning"))
+        if ai_role:
+            ai_terms = ("genai", "generative ai", "llm", "large language model", "machine learning", "deep learning", "ai engineer", "artificial intelligence")
+            if any(term in text for term in ai_terms):
+                return True
+            return bool(
+                re.search(r"\bai\b", text)
+                and re.search(r"\b(engineer|developer|researcher|scientist|architect)\b", text)
+            )
+        return any(token in text for token in role_tokens)
+
+    @staticmethod
+    def _hit_matches_requested_region(url: str, title: str, snippet: str, regions: List[str]) -> bool:
+        """Reject explicit foreign-region hits before they spawn more work."""
+        if not regions:
+            return True
+
+        text = f"{url} {title} {snippet}".casefold()
+        target_terms = {
+            "saudi arabia": ("saudi", "saudi arabia", "ksa", "riyadh", "jeddah", "dammam", "khobar", "neom"),
+            "uae": ("uae", "united arab emirates", "dubai", "abu dhabi", "sharjah", "ajman"),
+            "qatar": ("qatar", "doha"),
+            "kuwait": ("kuwait",),
+            "bahrain": ("bahrain", "manama"),
+            "oman": ("oman", "muscat"),
+        }
+        requested_terms = []
+        for region in regions:
+            low = region.casefold()
+            requested_terms.extend(target_terms.get(low, (low,)))
+
+        foreign_terms = (
+            "india", "bangalore", "bengaluru", "hyderabad", "pune", "mumbai", "delhi",
+            "united states", "usa", "new york", "denver", "chicago", "california",
+            "united kingdom", "london", "europe", "germany", "france", "paris",
+            "sweden", "norway", "denmark", "finland", "canada", "toronto", "australia",
+            "singapore", "japan", "tokyo", "south korea", "egypt", "cairo",
+        )
+        has_target = any(re.search(r"(?<!\w)" + re.escape(term) + r"(?!\w)", text) for term in requested_terms)
+        has_foreign = any(re.search(r"(?<!\w)" + re.escape(term) + r"(?!\w)", text) for term in foreign_terms)
+        return not has_foreign or has_target
+
+    @staticmethod
+    def _task_scope_location(task: SearchTask, regions: List[str]) -> str:
+        if task.location:
+            return task.location
+        if len(regions) == 1:
+            return regions[0]
+        return " OR ".join(regions) if regions else "general"
+
+    @staticmethod
+    def _task_requested_region(task: SearchTask, regions: List[str]) -> Optional[str]:
+        requested = (task.metadata or {}).get("requested_region") if getattr(task, "metadata", None) else None
+        if requested:
+            return requested
+        if (task.metadata or {}).get("requested_regions"):
+            return None
+        location = (task.location or "").casefold()
+        for region in regions:
+            if region.casefold() in location:
+                return region
+        return None
+
     def generate_initial_tasks(self, spec: Any, state: Any) -> List[SearchTask]:
         """
         Formulate Round 1 broad discovery tasks across ATS platforms, regional boards,
         major boards, and niche tech/remote portals based on user requirements.
         """
+        requested_regions = self._requested_regions(state)
+        if requested_regions:
+            role = getattr(state, "explicit_titles", None) or []
+            role_clean = self._clean_role(role[0] if role else "GenAI Engineer")
+            alt_role = (
+                "Generative AI Engineer"
+                if "genai" in role_clean.lower()
+                else ("AI Engineer" if "generative" in role_clean.lower() else None)
+            )
+            tasks = self._generate_regional_initial_tasks(state, role_clean, alt_role)
+            remote_tasks: List[SearchTask] = []
+            if self._explicit_remote_requested(state):
+                # Remote is an opt-in lane. Keep the regional scope on the task
+                # so a regional + remote request cannot silently become global.
+                for region in requested_regions:
+                    remote_tasks.append(SearchTask(
+                        id=f"r1_remote_{len(tasks) + len(remote_tasks)}",
+                        task_type=SearchTaskType.BOARD_SEARCH,
+                        query=f'site:remoteok.com "{role_clean}" "{region}" remote',
+                        source="remoteok.com",
+                        source_type=DiscoveredSourceType.REMOTE_BOARD,
+                        priority=3,
+                        depth=0,
+                        round=1,
+                        reason=f"Opt-in remote job search scoped to {region}",
+                        location=f"{region} — Remote",
+                        metadata={"lane": "remote_opt_in", "requested_region": region},
+                    ))
+            if remote_tasks:
+                # Reserve space for explicitly requested remote work instead of
+                # silently slicing that lane out of the bounded regional plan.
+                tasks = tasks[:max(0, REGIONAL_INITIAL_TASK_LIMIT - len(remote_tasks))]
+                tasks.extend(remote_tasks)
+            return tasks[:REGIONAL_INITIAL_TASK_LIMIT]
+
         tasks: List[SearchTask] = []
         loc_str = " ".join(state.locations) if state.locations else (state.explicit_location or "")
         loc_lower = loc_str.lower()
@@ -436,7 +774,35 @@ class DiscoveryEngine:
         new_tasks: List[SearchTask] = []
         loc_str = " ".join(state.locations) if state.locations else (state.explicit_location or "")
         role = state.explicit_titles[0] if state.explicit_titles else "GenAI Engineer"
-        role_clean = re.sub(r"\b(with|requiring)?\s*\d+[-–\sto]+\d*\s*(?:years?|yrs?)(?:\s*exp(?:erience)?)?\b", "", role, flags=re.IGNORECASE).strip() or role
+        role_clean = self._clean_role(role)
+        requested_regions = self._requested_regions(state)
+        regional_scope = bool(requested_regions)
+        scheduled_queries = set(discovery_state.executed_queries)
+        task_region = self._task_requested_region(task, requested_regions)
+        task_scope_query = self._query_regions(
+            role_clean,
+            [task_region] if task_region else requested_regions,
+        )
+        dynamic_crawls = 0
+
+        def add_followup(task: SearchTask) -> bool:
+            """Bound and deduplicate hit-driven work so verification gets time."""
+            if len(new_tasks) >= REGIONAL_DYNAMIC_TASK_LIMIT:
+                return False
+            if task.query in scheduled_queries:
+                return False
+            scheduled_queries.add(task.query)
+            new_tasks.append(task)
+            return True
+
+        def enqueue_crawl(task: CrawlTask) -> bool:
+            nonlocal dynamic_crawls
+            if dynamic_crawls >= REGIONAL_DYNAMIC_TASK_LIMIT:
+                return False
+            enqueued = discovery_state.enqueue_crawl_task(task)
+            if enqueued:
+                dynamic_crawls += 1
+            return enqueued
 
         for hit in hits:
             url = (hit.get("url") or "").strip()
@@ -444,6 +810,13 @@ class DiscoveryEngine:
             snippet = (hit.get("snippet") or "").strip()
             domain = hit.get("source_domain") or (urlparse(url).netloc.lower() if url else "")
             if not url:
+                continue
+
+            # Search indexes routinely return adjacent roles and foreign jobs.
+            # Only relevant public hits may expand the regional search graph.
+            if not self._hit_matches_role(url, title, snippet, role_clean):
+                continue
+            if regional_scope and not self._hit_matches_requested_region(url, title, snippet, requested_regions):
                 continue
 
             # ----------------------------------------------------
@@ -478,11 +851,13 @@ class DiscoveryEngine:
                                 # Queue targeted ATS search for this company
                                 ats_domain = ats_info["domain"]
                                 q = f'site:{ats_domain}/{company_slug} ("{role_clean}" OR engineer OR AI)'
-                                if q not in discovery_state.executed_queries:
-                                    new_tasks.append(SearchTask(
+                                add_followup(SearchTask(
                                         id=f"ats_dyn_{company_slug}_{len(new_tasks)}",
                                         task_type=SearchTaskType.ATS_SEARCH,
-                                        query=q,
+                                        query=(
+                                            f"{q} {task_scope_query}"
+                                            if regional_scope else q
+                                        ),
                                         source=ats_domain,
                                         source_type=DiscoveredSourceType.ATS_PORTAL,
                                         priority=1,
@@ -491,11 +866,16 @@ class DiscoveryEngine:
                                         company=company_slug,
                                         ats_platform=ats_key,
                                         reason=f"Direct harvest on discovered {ats_key} portal for '{company_slug}'",
-                                        location=task.location,
+                                        location=self._task_scope_location(task, requested_regions),
+                                        metadata={
+                                            "lane": "public_ats_careers",
+                                            **({"requested_region": task_region} if task_region else {}),
+                                            **({"requested_regions": requested_regions} if regional_scope and not task_region else {}),
+                                        },
                                     ))
 
                                 # Enqueue direct crawl task for this ATS company
-                                discovery_state.enqueue_crawl_task(CrawlTask(
+                                enqueue_crawl(CrawlTask(
                                     id=f"crawl_ats_{ats_key}_{company_slug}_{len(discovery_state.pending_crawl_tasks)}",
                                     source=ats_domain,
                                     source_type="ats",
@@ -533,11 +913,13 @@ class DiscoveryEngine:
 
                 # Formulate company career portal search
                 q_comp = f'"{company_extracted}" (careers OR jobs) ("{role_clean}" OR AI OR engineer)'
-                if q_comp not in discovery_state.executed_queries:
-                    new_tasks.append(SearchTask(
+                add_followup(SearchTask(
                         id=f"comp_dyn_{len(new_tasks)}",
                         task_type=SearchTaskType.COMPANY_SEARCH,
-                        query=q_comp,
+                        query=(
+                            f"{q_comp} {task_scope_query}"
+                            if regional_scope else q_comp
+                        ),
                         source="company_career_page",
                         source_type=DiscoveredSourceType.COMPANY_CAREER_PAGE,
                         priority=2,
@@ -545,13 +927,18 @@ class DiscoveryEngine:
                         round=discovery_state.current_round + 1,
                         company=company_extracted,
                         reason=f"Discovered employer '{company_extracted}' career page search",
-                        location=task.location,
+                        location=self._task_scope_location(task, requested_regions),
+                        metadata={
+                            "lane": "public_ats_careers",
+                            **({"requested_region": task_region} if task_region else {}),
+                            **({"requested_regions": requested_regions} if regional_scope and not task_region else {}),
+                        },
                     ))
 
                 # Enqueue direct career page crawl task if URL is from employer domain or career path
                 career_cand_url = url
                 if not any(b in (urlparse(career_cand_url).netloc.lower()) for b in ("linkedin", "indeed", "glassdoor", "bayt", "naukrigulf", "gulftalent")):
-                    discovery_state.enqueue_crawl_task(CrawlTask(
+                    enqueue_crawl(CrawlTask(
                         id=f"crawl_comp_{company_extracted.lower().replace(' ', '_')}_{len(discovery_state.pending_crawl_tasks)}",
                         source=urlparse(career_cand_url).netloc.lower() or company_extracted,
                         source_type="company_career_page",
@@ -601,22 +988,29 @@ class DiscoveryEngine:
                     discovery_state.discovered_boards.add(clean_netloc)
                     logger.info(f"Discovered potential job board domain: {clean_netloc}")
                     q_board = f'site:{clean_netloc} "{role_clean}"'
-                    if q_board not in discovery_state.executed_queries:
-                        new_tasks.append(SearchTask(
+                    add_followup(SearchTask(
                             id=f"board_dyn_{clean_netloc}_{len(new_tasks)}",
                             task_type=SearchTaskType.BOARD_SEARCH,
-                            query=q_board,
+                            query=(
+                                f"{q_board} {task_scope_query}"
+                                if regional_scope else q_board
+                            ),
                             source=clean_netloc,
                             source_type=DiscoveredSourceType.MAJOR_BOARD,
                             priority=3,
                             depth=task.depth + 1,
                             round=discovery_state.current_round + 1,
                             reason=f"Discovered job board domain {clean_netloc}",
-                            location=task.location,
+                            location=self._task_scope_location(task, requested_regions),
+                            metadata={
+                                "lane": "regional_portals" if regional_scope else "major_boards",
+                                **({"requested_region": task_region} if task_region else {}),
+                                **({"requested_regions": requested_regions} if regional_scope and not task_region else {}),
+                            },
                         ))
 
                     # Also enqueue direct board crawl task
-                    discovery_state.enqueue_crawl_task(CrawlTask(
+                    enqueue_crawl(CrawlTask(
                         id=f"crawl_board_{clean_netloc}_{len(discovery_state.pending_crawl_tasks)}",
                         source=clean_netloc,
                         source_type="regional_board" if any(k in clean_netloc for k in ("gulf", "bayt", "naukri", "middleeast", "dubai", "saudi")) else "major_board",
@@ -686,7 +1080,9 @@ class DiscoveryEngine:
         round_num = discovery_state.current_round
         loc_str = " ".join(state.locations) if state.locations else (state.explicit_location or "")
         role = state.explicit_titles[0] if state.explicit_titles else "GenAI Engineer"
-        role_clean = re.sub(r"\b(with|requiring)?\s*\d+[-–\sto]+\d*\s*(?:years?|yrs?)(?:\s*exp(?:erience)?)?\b", "", role, flags=re.IGNORECASE).strip() or role
+        role_clean = self._clean_role(role)
+        requested_regions = self._requested_regions(state)
+        regional_scope = bool(requested_regions)
 
         while round_num <= self.budget.max_expansion_rounds:
             tasks: List[SearchTask] = []
@@ -722,23 +1118,28 @@ class DiscoveryEngine:
 
             # Round 3: Company & ATS Deep Dive
             elif round_num == 3:
+                regions = requested_regions or [loc_str or "general"]
                 for comp_slug, comp_info in list(discovery_state.discovered_ats.items())[:6]:
                     ats_domain = comp_info.get("domain", "boards.greenhouse.io")
-                    q = f'site:{ats_domain}/{comp_slug} ("{role_clean}" OR engineer OR AI OR LLM)'
-                    if q not in discovery_state.executed_queries:
-                        tasks.append(SearchTask(
-                            id=f"r3_ats_{comp_slug}",
-                            task_type=SearchTaskType.ATS_SEARCH,
-                            query=q,
-                            source=ats_domain,
-                            source_type=DiscoveredSourceType.ATS_PORTAL,
-                            priority=1,
-                            depth=2,
-                            round=3,
-                            company=comp_slug,
-                            reason=f"Deep dive ATS search for company {comp_slug}",
-                            location=loc_str,
-                        ))
+                    for region in regions:
+                        q = f'site:{ats_domain}/{comp_slug} ("{role_clean}" OR engineer OR AI OR LLM)'
+                        if regional_scope:
+                            q = f"{q} {self._query_scope(role_clean, region)}"
+                        if q not in discovery_state.executed_queries:
+                            tasks.append(SearchTask(
+                                id=f"r3_ats_{comp_slug}_{len(tasks)}",
+                                task_type=SearchTaskType.ATS_SEARCH,
+                                query=q,
+                                source=ats_domain,
+                                source_type=DiscoveredSourceType.ATS_PORTAL,
+                                priority=1,
+                                depth=2,
+                                round=3,
+                                company=comp_slug,
+                                reason=f"Deep dive ATS search for company {comp_slug}",
+                                location=region,
+                                metadata={"lane": "public_ats_careers", "requested_region": region},
+                            ))
 
             # Round 4: Geographic Expansion / Specific City Drilling
             elif round_num == 4:
@@ -750,59 +1151,85 @@ class DiscoveryEngine:
                 if not cities and loc_str:
                     cities.append(loc_str)
 
-                for city in cities[:4]:
-                    q_city = f'"{role_clean}" "{city}" hiring apply careers'
-                    if q_city not in discovery_state.executed_queries:
-                        tasks.append(SearchTask(
-                            id=f"r4_geo_{city.lower().replace(' ', '_')}",
-                            task_type=SearchTaskType.GENERAL_SEARCH,
-                            query=q_city,
-                            source="regional_hub",
-                            source_type=DiscoveredSourceType.REGIONAL_BOARD,
-                            priority=2,
-                            depth=2,
-                            round=4,
-                            reason=f"Targeted city-level search for {city}",
-                            location=city,
-                        ))
+                if regional_scope:
+                    city_groups = [(region, self._region_hubs(region)) for region in requested_regions]
+                else:
+                    city_groups = [(loc_str, cities)]
+                for region, region_cities in city_groups:
+                    for city in region_cities[:5]:
+                        q_city = (
+                            f'{self._query_scope(role_clean, region, city)} hiring apply careers'
+                            if regional_scope else f'"{role_clean}" "{city}" hiring apply careers'
+                        )
+                        if q_city not in discovery_state.executed_queries:
+                            tasks.append(SearchTask(
+                                id=f"r4_geo_{city.lower().replace(' ', '_')}_{len(tasks)}",
+                                task_type=SearchTaskType.GENERAL_SEARCH,
+                                query=q_city,
+                                source="regional_hub",
+                                source_type=DiscoveredSourceType.REGIONAL_BOARD,
+                                priority=2,
+                                depth=2,
+                                round=4,
+                                reason=f"Targeted city-level search for {city}",
+                                location=city,
+                                metadata=(
+                                    {"lane": "general_web", "requested_region": region}
+                                    if regional_scope else {}
+                                ),
+                            ))
 
             # Round 5: Title & Skill Variations
             elif round_num == 5:
                 synonyms = ["Generative AI Engineer", "LLM Engineer", "AI Engineer", "Foundation Model Engineer", "Machine Learning Engineer"]
                 for syn in synonyms[:3]:
                     if syn.lower() != role_clean.lower():
-                        q_syn = f'"{syn}" {loc_str} (careers OR apply)'
-                        if q_syn not in discovery_state.executed_queries:
-                            tasks.append(SearchTask(
-                                id=f"r5_syn_{len(tasks)}",
-                                task_type=SearchTaskType.GENERAL_SEARCH,
-                                query=q_syn,
-                                source="title_synonym",
-                                source_type=DiscoveredSourceType.MAJOR_BOARD,
-                                priority=2,
-                                depth=3,
-                                round=5,
-                                reason=f"Role synonym expansion: '{syn}'",
-                                location=loc_str,
-                            ))
+                        regions = requested_regions or [loc_str]
+                        for region in regions:
+                            q_syn = (
+                                f'"{syn}" "{region}" (careers OR apply)'
+                                if regional_scope else f'"{syn}" {loc_str} (careers OR apply)'
+                            )
+                            if q_syn not in discovery_state.executed_queries:
+                                tasks.append(SearchTask(
+                                    id=f"r5_syn_{len(tasks)}",
+                                    task_type=SearchTaskType.GENERAL_SEARCH,
+                                    query=q_syn,
+                                    source="title_synonym",
+                                    source_type=DiscoveredSourceType.MAJOR_BOARD,
+                                    priority=2,
+                                    depth=3,
+                                    round=5,
+                                    reason=f"Role synonym expansion: '{syn}'",
+                                    location=region,
+                                    metadata=(
+                                        {"lane": "general_web", "requested_region": region}
+                                        if regional_scope else {}
+                                    ),
+                                ))
 
             # Round 6: Freshness & Residual Depth
             elif round_num == 6:
-                q_fresh = f'"{role_clean}" {loc_str} careers apply 2026'
-                if q_fresh not in discovery_state.executed_queries:
-                    tasks.append(SearchTask(
-                        id="r6_freshness",
-                        task_type=SearchTaskType.GENERAL_SEARCH,
-                        query=q_fresh,
-                        source="freshness_sweep",
-                        source_type=DiscoveredSourceType.MAJOR_BOARD,
-                        priority=2,
-                        depth=3,
-                        round=6,
-                        metadata={"freshness_days": 30},
-                        reason="Freshness residual search for recent openings",
-                        location=loc_str,
-                    ))
+                regions = requested_regions or [loc_str]
+                for region in regions:
+                    q_fresh = f'"{role_clean}" "{region}" careers apply 2026'
+                    if q_fresh not in discovery_state.executed_queries:
+                        tasks.append(SearchTask(
+                            id=f"r6_freshness_{len(tasks)}",
+                            task_type=SearchTaskType.GENERAL_SEARCH,
+                            query=q_fresh,
+                            source="freshness_sweep",
+                            source_type=DiscoveredSourceType.MAJOR_BOARD,
+                            priority=2,
+                            depth=3,
+                            round=6,
+                            metadata={
+                                "freshness_days": 30,
+                                **({"lane": "general_web", "requested_region": region} if regional_scope else {}),
+                            },
+                            reason="Freshness residual search for recent openings",
+                            location=region,
+                        ))
 
             if tasks:
                 discovery_state.current_round = round_num
@@ -836,8 +1263,12 @@ class DiscoveryEngine:
         4. Discovery queue exhausted
         """
         now = time.time()
-        if state.deadline > 0 and now >= state.deadline:
-            return True, StopReason.DEADLINE_EXCEEDED, "Time budget deadline reached"
+        search_deadline = getattr(state, "effective_search_deadline", 0.0) or getattr(state, "search_deadline", 0.0) or getattr(state, "deadline", 0.0)
+        hard_deadline = getattr(state, "effective_hard_deadline", 0.0) or getattr(state, "hard_deadline", 0.0) or (
+            (search_deadline + getattr(state, "drain_budget_seconds", 600.0)) if search_deadline > 0 else 0.0
+        )
+        if hard_deadline > 0 and now >= hard_deadline:
+            return True, StopReason.DEADLINE_EXCEEDED, "Hard time budget deadline reached"
 
         # Check if pending crawl tasks, candidate URLs, or unverified records remain in flight
         from datahunt.agent.state import get_unprocessed_records
@@ -847,6 +1278,11 @@ class DiscoveryEngine:
             or (getattr(discovery_state, "pending_crawl_tasks", None))
             or (unproc and state.raw_record_generation > getattr(state, "last_verified_generation", -1))
         )
+
+        if search_deadline > 0 and now >= search_deadline:
+            if has_pending_work:
+                return False, StopReason.DEADLINE_EXCEEDED, ""
+            return True, StopReason.DEADLINE_EXCEEDED, "Search deadline reached; all discovered candidates processed"
 
         if state.search_calls >= self.budget.max_search_requests:
             if has_pending_work:

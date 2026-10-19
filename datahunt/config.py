@@ -33,6 +33,7 @@ class Settings:
     
     # Run Limits & Budgets
     MAX_RUN_SECONDS: int = int(os.getenv("MAX_RUN_SECONDS", "1800"))
+    DRAIN_TIMEOUT_SECONDS: int = int(os.getenv("DRAIN_TIMEOUT_SECONDS", "600"))
     MAX_SEARCH_QUERIES: int = int(os.getenv("MAX_SEARCH_QUERIES", "150"))
     MAX_PAGES_FETCHED: int = int(os.getenv("MAX_PAGES_FETCHED", "300"))
     MAX_BROWSER_PAGES: int = int(os.getenv("MAX_BROWSER_PAGES", "12"))
