@@ -5,10 +5,11 @@ from datahunt.db.repositories import (
     RecordRepository, ExportRepository, ToolEventRepository,
     JobTrackingRepository, CheckpointRepository
 )
+from datahunt.db.settings_repository import SettingsRepository
 
 __all__ = [
     "get_connection", "db_transaction", "run_migrations",
     "TaskRepository", "RunRepository", "DocumentRepository",
     "RecordRepository", "ExportRepository", "ToolEventRepository",
-    "JobTrackingRepository", "CheckpointRepository"
+    "JobTrackingRepository", "CheckpointRepository", "SettingsRepository"
 ]

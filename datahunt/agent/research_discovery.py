@@ -22,6 +22,7 @@ from datahunt.models.evidence import Evidence
 from datahunt.models.intent import ResearchIntent, ResearchIntentSpec, ResearchOutputType
 from datahunt.models.record import ExtractedRecord, RecordEvidence, VerificationStatus
 from datahunt.tools.search import canonicalize_url, is_ad_or_tracking_url
+from datahunt.agent.research_report import synthesize_report
 
 
 class ResearchSourceTier(str, Enum):
@@ -285,7 +286,7 @@ class ResearchDiscoveryEngine:
         )
 
         # Convert evidence into research records for database persistence and table rendering
-        research_records = self._build_research_records(collected_evidence, run_id=run_id)
+        research_records = self._build_research_records(collected_evidence, fetched_documents, run_id=run_id)
 
         _emit("phase.change", {
             "phase": "COMPLETED",
@@ -569,323 +570,49 @@ class ResearchDiscoveryEngine:
         queries: List[str],
     ) -> str:
         """Generates an evidence-backed authoritative Markdown technical dossier."""
-        # Use live LLM synthesis if available
-        if self.client and getattr(self.client, "is_live", False):
-            try:
-                source_texts = ""
-                for doc in documents[:8]:
-                    snippet = (getattr(doc, "extracted_text", "") or "").strip()
-                    u = getattr(doc, "requested_url", "") or getattr(doc, "canonical_url", "")
-                    if snippet:
-                        source_texts += f"Source URL: {u}\n{snippet[:2500]}\n\n---\n\n"
-                records_data = [{"topic": query, "claim": e.claim, "source_url": e.source_url} for e in evidence[:10]]
-                llm_report = self.client.summarize_run(
-                    run_metadata={"topic": query, "pages_fetched": len(documents), "records_verified": len(evidence)},
-                    verified_records=records_data,
-                    source_texts=source_texts,
-                    query_text=query,
-                    agent_mode="research"
-                )
-                if llm_report and len(llm_report.strip()) > 100:
-                    return llm_report
-            except Exception as e:
-                logger.warning(f"Live LLM research synthesis failed ({e}), using deterministic report")
-
-        # Group evidence by primary and counter
-        primary_evidence = [e for e in evidence if not e.is_counter_evidence]
-        counter_evidence = [e for e in evidence if e.is_counter_evidence]
-
-        # Bibliography
-        seen_bib_urls = set()
-        bib_lines = []
-        for idx, doc in enumerate(documents, start=1):
-            u = getattr(doc, "requested_url", "")
-            t = getattr(doc, "title", "") or u
-            tier, _ = classify_research_source(u, t)
-            if u not in seen_bib_urls:
-                seen_bib_urls.add(u)
-                bib_lines.append(f"[{len(bib_lines) + 1}] **{t}** — `{tier.value}`\n   <{u}>")
-
-        sources_section = "\n\n".join(bib_lines) if bib_lines else "_No external sources recorded._"
-
-        is_comparison = intent_spec.intent == ResearchIntent.COMPARISON or "compare" in query.lower() or " vs " in query.lower()
-
-        if is_comparison:
-            return self._synthesize_comparison_report(
-                query=query,
-                primary_evidence=primary_evidence,
-                counter_evidence=counter_evidence,
-                sources_section=sources_section,
-                queries_count=len(queries),
-                docs_count=len(documents),
-            )
-        else:
-            return self._synthesize_general_research_report(
-                query=query,
-                intent_spec=intent_spec,
-                primary_evidence=primary_evidence,
-                counter_evidence=counter_evidence,
-                sources_section=sources_section,
-                queries_count=len(queries),
-                docs_count=len(documents),
-            )
-
-    def _synthesize_comparison_report(
-        self,
-        query: str,
-        primary_evidence: List[Evidence],
-        counter_evidence: List[Evidence],
-        sources_section: str,
-        queries_count: int,
-        docs_count: int,
-    ) -> str:
-        # Detect entities
-        parts = re.split(r"\b(?:vs\.?|versus|compare|and)\b", query, flags=re.IGNORECASE)
-        clean_parts = [p.strip(" .?!\"'") for p in parts if p.strip(" .?!\"'") and len(p.strip(" .?!\"'")) > 1]
-        e1 = clean_parts[0] if len(clean_parts) > 0 else "Framework A"
-        e2 = clean_parts[1] if len(clean_parts) > 1 else "Framework B"
-
-        ev_highlights = ""
-        for i, ev in enumerate(primary_evidence[:5], 1):
-            ev_highlights += f"- **[{ev.source_type}]** {ev.claim} ([Source]({ev.source_url}))\n"
-        if not ev_highlights:
-            ev_highlights = f"- Evaluated architectural design patterns, state machines, and concurrency for {e1} and {e2}.\n"
-
-        counter_highlights = ""
-        for i, ev in enumerate(counter_evidence[:4], 1):
-            counter_highlights += f"- ⚠️ **{ev.claim}** ([Reference]({ev.source_url}))\n"
-        if not counter_highlights:
-            counter_highlights = f"- Trade-offs involve orchestration complexity vs. abstraction overhead.\n"
-
-        return f"""# ⚖️ Technical Architecture Comparison: {e1} vs {e2}
-
-**Research Objective:** {query}  
-**Synthesis Pipeline:** Multi-Wave Technical Discovery ({queries_count} targeted search queries across {docs_count} verified sources)  
-**Timestamp:** {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}
-
----
-
-## 1. Executive Summary & Verdict
-
-When evaluating **{e1}** versus **{e2}** for production multi-agent systems, the architectural choice depends on whether the system requires **fine-grained cyclic state machine control** or **role-based hierarchical task delegation**:
-
-- **{e1}** excels in deterministic, stateful graph orchestration where execution requires cyclic loops, human-in-the-loop checkpoints, conditional branching, and strict state persistence.
-- **{e2}** provides higher-level abstractions centered around persona-driven agents, sequential/hierarchical pipelines, and rapid task delegation with minimal boilerplate.
-
-**Production Recommendation:**
-- Choose **{e1}** if building complex, mission-critical autonomous agents requiring granular state rollback, streaming, and explicit flow control.
-- Choose **{e2}** if building collaborative team simulations or structured content/research generation workflows where fast time-to-market and intuitive role descriptions are paramount.
-
----
-
-## 2. Head-to-Head Architectural Matrix
-
-| Evaluation Dimension | {e1} | {e2} | Architectural Trade-Off |
-| :--- | :--- | :--- | :--- |
-| **Orchestration Paradigm** | Directed Graphs (Cyclic / DAG) | Hierarchical / Sequential Crews | Graph flexibility vs. pipeline simplicity |
-| **State Management** | Centralized Schema with Checkpointers | Shared Memory & Agent Context | Fine-grained state diffs vs. conversational memory |
-| **Control Flow** | Explicit Conditional Edges | Autonomous Task Delegation | Deterministic routing vs. LLM-driven dispatch |
-| **Human-in-the-Loop** | Native Interrupt & Resume | Iterative Review Callbacks | Native state pausing vs. callback triggers |
-| **Error Recovery** | State rollback & retry nodes | Task retry loops | Graph-level recovery vs. task-level retry |
-| **Learning Curve** | Moderate–High (Graph mechanics) | Low–Moderate (Agent roles & tasks) | Architectural rigor vs. developer velocity |
-| **Production Maturity** | High (LangSmith observability) | High (Active enterprise ecosystem) | Deep tracing vs. rapid prototyping |
-
----
-
-## 3. Core Architectural Analysis
-
-### A. State Persistence & Checkpointing
-In production systems, resilience during long-running tasks requires durable execution. Graph-based orchestration maintains immutable snapshots at each step, enabling hot-reloading and time-travel debugging. Conversely, crew-based orchestration manages context through shared inter-agent communication logs.
-
-### B. Scalability & Concurrency
-Parallel execution in graph systems allows concurrent node evaluations across asynchronous event loops. In role-based frameworks, concurrency is handled via manager agents orchestrating sub-crews.
-
----
-
-## 4. Key Evidence & Verified Findings
-{ev_highlights}
-
----
-
-## 5. Production Limitations, Nuances & Caveats
-{counter_highlights}
-
----
-
-## 6. Authoritative Primary Sources & Citations
-{sources_section}
-"""
-
-    def _synthesize_general_research_report(
-        self,
-        query: str,
-        intent_spec: ResearchIntentSpec,
-        primary_evidence: List[Evidence],
-        counter_evidence: List[Evidence],
-        sources_section: str,
-        queries_count: int,
-        docs_count: int,
-    ) -> str:
-        ev_highlights = ""
-        for i, ev in enumerate(primary_evidence[:6], 1):
-            ev_highlights += f"- **[{ev.source_type}]** {ev.claim} ([Source]({ev.source_url}))\n"
-        if not ev_highlights:
-            ev_highlights = f"- Factual synthesis compiled across official technical resources and verified publications.\n"
-
-        counter_highlights = ""
-        for i, ev in enumerate(counter_evidence[:4], 1):
-            counter_highlights += f"- ⚠️ **{ev.claim}** ([Reference]({ev.source_url}))\n"
-        if not counter_highlights:
-            counter_highlights = "- Standard operational prerequisites and domain constraints apply.\n"
-
-        overview_text = ""
-        topic_lower = (intent_spec.topic or "").strip().lower()
-        for ev in primary_evidence:
-            cl = ev.claim.strip()
-            if topic_lower and any(cl.lower().startswith(f"{topic_lower} {v}") for v in ("is", "provides", "enables", "was", "stands")):
-                overview_text = cl
-                break
-        if not overview_text and primary_evidence:
-            overview_text = primary_evidence[0].claim
-        if not overview_text:
-            overview_text = intent_spec.reason or f"Comprehensive technical breakdown addressing: '{query}'"
-
-        topic_name = intent_spec.topic or query
-
-        comp_rows = []
-        for i, ev in enumerate(primary_evidence[:8], 1):
-            claim_short = ev.claim[:90] + "..." if len(ev.claim) > 90 else ev.claim
-            domain = urlparse(ev.source_url).netloc or "Official Source"
-            comp_rows.append(f"| **Subsystem {i}** | `{ev.source_type}` | {claim_short} | [{domain}]({ev.source_url}) |")
-        comp_table = "\n".join(comp_rows) if comp_rows else "| **Core Engine** | `official_docs` | Deterministic pipeline execution and state management | [Docs](#) |"
-
-        return f"""# 📄 Comprehensive Technical Research Paper: {query}
-
-> **Document Type:** Peer-Reviewed Style Systems Architecture & Technical Survey Paper  
-> **Topic:** {topic_name} • **Classification:** `{intent_spec.intent.value.upper()}` • **Discovery Waves:** 3 ({queries_count} queries across {docs_count} verified endpoints) • **Generated:** {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}
-
-### Abstract & Executive Summary
-This technical research paper provides a comprehensive systems analysis and architectural evaluation of **{topic_name}**. Through multi-wave empirical discovery across {docs_count} verified primary documentation sources and {len(primary_evidence) + len(counter_evidence)} verified knowledge anchors, we examine the theoretical motivations, internal execution paradigms, subsystem primitives, benchmark characteristics, and operational trade-offs governing production deployments.
-
-**Keywords:** {topic_name}, Systems Architecture, State Management, Concurrency, Production Engineering, Benchmarks
-
----
-
-## 1. Executive Answer & Technical Overview
-
-{overview_text}
-
----
-
-## 2. Core Principles & Architecture
-
-{ev_highlights}
-
-```
-  ┌─────────────────────────────────────────────────────────────┐
-  │                 Client Ingestion & API Layer                │
-  │      Task Specifications, Ingestion Schemas, Event Inputs   │
-  └──────────────────────────────┬──────────────────────────────┘
-                                 │ (Typed Dispatch & Routing)
-                                 ▼
-  ┌─────────────────────────────────────────────────────────────┐
-  │             Core Execution & State Machine Layer            │
-  │   • Deterministic Graph Execution & Dynamic Edge Routing    │
-  │   • Checkpointing, State Diffs & Durable Memory             │
-  │   • Non-Blocking Event Streaming & Real-Time Observer Bus   │
-  └──────────────────────────────┬──────────────────────────────┘
-                                 │ (Model & Tool Bindings)
-                                 ▼
-  ┌─────────────────────────────────────────────────────────────┐
-  │              Provider & Storage Integration Layer           │
-  │   • Inference Providers (Local & Cloud Foundation Models)   │
-  │   • Vector Stores, Relational Repositories & Search Engines │
-  │   • Distributed Tracing & Observability Instrumentation     │
-  └─────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 3. Subsystem Taxonomy & Detailed Capability Matrix
-
-The table below itemizes verified architectural components and capability primitives extracted from primary documentation:
-
-| Subsystem / Primitive | Tier / Classification | Verified Technical Capability | Primary Citation |
-| :--- | :--- | :--- | :--- |
-{comp_table}
-
----
-
-## 4. Practical Implementation & Production Engineering Patterns
-
-Canonical production integration demonstrates declarative initialization, execution resilience, and state boundary management:
-
-```python
-from typing import Dict, Any, Optional
-
-class ProductionArchitectureHarness:
-    \"\"\"Canonical production deployment pattern with error boundaries and telemetry.\"\"\"
-    def __init__(self, endpoint_url: str, timeout_seconds: float = 30.0):
-        self.endpoint_url = endpoint_url
-        self.timeout = timeout_seconds
-        self.state_registry: Dict[str, Any] = {{}}
-
-    def execute_workflow(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        # 1. State validation and boundary enforcement
-        if not payload:
-            raise ValueError("Input payload cannot be empty")
-        
-        # 2. Execution dispatch with durable checkpoints
-        checkpoint_id = f"ckpt_{{hash(str(payload))}}"
-        self.state_registry[checkpoint_id] = payload
-        
-        # 3. Resilient output emission
-        return {{"status": "success", "checkpoint": checkpoint_id, "topic": "{topic_name}"}}
-```
-
----
-
-## 5. Comparative Trade-offs & Production Dimensions
-
-| Evaluation Dimension | Dedicated Framework Architecture | Generic Ad-Hoc Implementation | Architectural Rationale & Trade-off |
-| :--- | :--- | :--- | :--- |
-| **State Management** | Centralized Schema with Checkpointers | Unstructured Volatile Memory | Eliminates state divergence at the cost of checkpoint serialization |
-| **Concurrency & Latency** | Async Event Loops & Streaming Primitives | Blocking Synchronous Calls | Maximizes throughput and reduces TTFT under high concurrency |
-| **Fault Recovery** | Node-Level Retry & Transaction Rollback | Full Pipeline Abort | Prevents cascading failures in multi-stage workflows |
-| **Observability** | Distributed Tracing & Step-Level Logs | Monolithic Log Output | Provides fine-grained debugging across distributed nodes |
-
----
-
-## 6. Nuances, Constraints & Edge Cases
-
-{counter_highlights}
-
----
-
-## 7. Concluding Verdict & Research Horizons
-
-Adopting **{topic_name}** in production environments offers substantial structural advantages for deterministic orchestration, observability, and robust state persistence. Future engineering directions should focus on minimizing serialization overhead during multi-step checkpoints and expanding multi-tenant isolation boundaries.
-
----
-
-## 8. Verified Sources & Primary Documentation
-
-{sources_section}
-"""
+        return synthesize_report(
+            query=query,
+            intent_spec=intent_spec,
+            evidence=evidence,
+            documents=documents,
+            queries=queries,
+            client=self.client,
+            classify_source=classify_research_source,
+        )
 
     def _build_research_records(
         self,
         evidence_list: List[Evidence],
+        documents: List[Any],
         run_id: str
     ) -> List[ExtractedRecord]:
         """Maps collected Evidence into ExtractedRecord models."""
         import uuid
+        document_ids = {}
+        for document in documents:
+            document_id = getattr(document, "id", None)
+            if not document_id:
+                continue
+            for url in (getattr(document, "requested_url", None), getattr(document, "canonical_url", None)):
+                if url:
+                    document_ids[canonicalize_url(url)] = document_id
         records = []
         for ev in evidence_list:
             rec_id = f"rec_ev_{uuid.uuid4().hex[:12]}"
+            source_document_id = document_ids.get(canonicalize_url(ev.source_url))
+            record_evidence = []
+            if source_document_id:
+                record_evidence.append(RecordEvidence(
+                    record_id=rec_id,
+                    source_document_id=source_document_id,
+                    field_name="claim",
+                    evidence_text=ev.claim,
+                    locator={"source_url": ev.source_url, "source_title": ev.source_title},
+                ))
             rec = ExtractedRecord(
                 id=rec_id,
                 run_id=run_id,
+                source_document_id=source_document_id,
                 record_type="research_evidence",
                 canonical_url=ev.source_url,
                 fields={
@@ -899,17 +626,7 @@ Adopting **{topic_name}** in production environments offers substantial structur
                 },
                 confidence=ev.confidence,
                 verification_status=VerificationStatus.VERIFIED,
-                evidence=[
-                    RecordEvidence(
-                        record_id=rec_id,
-                        field_name="claim",
-                        source_document_id="doc_res",
-                        source_url=ev.source_url,
-                        extracted_at=ev.retrieved_at,
-                        quote=ev.claim,
-                        context=ev.source_title,
-                    )
-                ]
+                evidence=record_evidence,
             )
             records.append(rec)
         return records

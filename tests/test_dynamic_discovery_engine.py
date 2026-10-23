@@ -346,6 +346,117 @@ def test_discovery_engine_query_spacing_and_geo_specialization():
     assert any("riyadh" in q.lower() for q in queries_multi)
 
 
+def test_regional_plan_covers_all_public_source_lanes_for_each_region():
+    engine = DiscoveryEngine()
+    state = AgentState(
+        request="Find GenAI Engineer jobs in Saudi or UAE",
+        run_id="run_lanes",
+        task_id="task_lanes",
+        mode="jobs",
+        explicit_titles=["GenAI Engineer"],
+        locations=["Saudi Arabia", "UAE"],
+    )
+
+    tasks = engine.generate_initial_tasks(None, state)
+    lanes = {task.metadata.get("lane") for task in tasks}
+
+    assert {"regional_portals", "major_boards", "public_ats_careers", "linkedin_hiring_posts", "general_web"} <= lanes
+    assert {task.metadata.get("requested_region") for task in tasks} == {"Saudi Arabia", "UAE"}
+    assert any("site:linkedin.com/posts" in task.query for task in tasks)
+    assert any("site:linkedin.com/jobs" in task.query for task in tasks)
+    assert not any(task.source == "remoteok.com" for task in tasks)
+    assert len(tasks) <= 72
+
+
+def test_regional_plan_keeps_explicit_remote_as_a_scoped_lane():
+    engine = DiscoveryEngine()
+    state = AgentState(
+        request="Find GenAI Engineer jobs in UAE, including remote",
+        run_id="run_remote_lane",
+        task_id="task_remote_lane",
+        mode="jobs",
+        explicit_titles=["GenAI Engineer"],
+        locations=["UAE"],
+    )
+
+    tasks = engine.generate_initial_tasks(None, state)
+    remote_tasks = [task for task in tasks if task.metadata.get("lane") == "remote_opt_in"]
+
+    assert remote_tasks
+    assert all(task.metadata["requested_region"] == "UAE" for task in remote_tasks)
+    assert all("UAE" in task.query for task in remote_tasks)
+
+
+def test_dynamic_expansion_ignores_irrelevant_roles_for_ai_search():
+    engine = DiscoveryEngine()
+    state = AgentState(
+        request="Find GenAI Engineer jobs in UAE",
+        run_id="run_role_gate",
+        task_id="task_role_gate",
+        mode="jobs",
+        explicit_titles=["GenAI Engineer"],
+        locations=["UAE"],
+    )
+    discovery_state = DiscoveryState()
+    parent = SearchTask(
+        id="parent",
+        task_type=SearchTaskType.GENERAL_SEARCH,
+        query="GenAI Engineer UAE",
+        source="web",
+        source_type=DiscoveredSourceType.MAJOR_BOARD,
+        location="UAE",
+    )
+
+    tasks = engine.process_search_hits(
+        [{
+            "url": "https://example.test/careers/security-engineer",
+            "title": "Security Engineer at Example",
+            "snippet": "Hiring in Dubai",
+        }],
+        parent,
+        state,
+        discovery_state,
+    )
+
+    assert tasks == []
+    assert discovery_state.pending_crawl_tasks == []
+
+
+def test_dynamic_expansion_ignores_explicit_foreign_region_hits():
+    engine = DiscoveryEngine()
+    state = AgentState(
+        request="Find GenAI Engineer jobs in UAE",
+        run_id="run_foreign_region_gate",
+        task_id="task_foreign_region_gate",
+        mode="jobs",
+        explicit_titles=["GenAI Engineer"],
+        locations=["UAE"],
+    )
+    discovery_state = DiscoveryState()
+    parent = SearchTask(
+        id="parent_foreign",
+        task_type=SearchTaskType.GENERAL_SEARCH,
+        query="GenAI Engineer UAE",
+        source="web",
+        source_type=DiscoveredSourceType.MAJOR_BOARD,
+        location="UAE",
+    )
+
+    tasks = engine.process_search_hits(
+        [{
+            "url": "https://jobs.example.test/genai-india",
+            "title": "GenAI Engineer at Example India",
+            "snippet": "Bengaluru, India position",
+        }],
+        parent,
+        state,
+        discovery_state,
+    )
+
+    assert tasks == []
+    assert discovery_state.pending_crawl_tasks == []
+
+
 def test_should_stop_preserves_pending_work():
     engine = DiscoveryEngine()
     disc_state = DiscoveryState()
@@ -460,5 +571,3 @@ def test_generic_company_linkedin_post_dedupe_isolation():
     # Both records must remain distinct because their URLs and document IDs are separate
     assert len(res.data["unique_records"]) == 2
     assert res.data["duplicates_count"] == 0
-
-

@@ -54,7 +54,8 @@ async def verify_api_key_middleware(request: Request, call_next):
             path.startswith("/js") or
             path.startswith("/docs") or
             path.startswith("/openapi.json") or
-            path in ("/", "/favicon.ico", "/api/info", "/api/health")
+            path in ("/", "/favicon.ico", "/health", "/api/info", "/api/health") or
+            path.startswith("/api/settings")
         ):
             key = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
             auth_header = request.headers.get("authorization", "")
@@ -84,7 +85,7 @@ class CreateTaskRequest(BaseModel):
     blocked_domains: List[str] = Field(default_factory=list)
     run_in_background: bool = Field(False, description="Whether to execute asynchronously")
     model: Optional[str] = Field("auto", description="AI model engine: auto, openai/gpt-oss-20b, or nvidia/nemotron-3.5-lightning-30b-a3b")
-    agent_mode: Optional[str] = Field("auto", description="Agent mode: auto, jobs, research, or market")
+    agent_mode: Optional[str] = Field("auto", description="Agent mode: auto, jobs, research, market, or people")
 
 def run_task_background(run_id: str, model: Optional[str] = None):
     orch = ResearchOrchestrator(model=model)
@@ -97,6 +98,138 @@ def api_info():
         "version": __version__,
         "status": "online",
         "docs_url": "/docs"
+    }
+
+@app.get("/api/settings")
+def get_settings_endpoint():
+    """Retrieve all current system and agent settings with schema for UI modification."""
+    safe_settings = settings.to_safe_dict()
+    fields = [
+        {
+            "key": "max_run_seconds",
+            "label": "Search Timeout (seconds)",
+            "type": "number",
+            "value": settings.MAX_RUN_SECONDS,
+            "category": "Execution Limits",
+            "help": "Search phase stops starting new queries after this duration (e.g. 1800s = 30min). Discovered candidates will then be drained."
+        },
+        {
+            "key": "drain_timeout_seconds",
+            "label": "Drain Timeout (seconds)",
+            "type": "number",
+            "value": settings.DRAIN_TIMEOUT_SECONDS,
+            "category": "Execution Limits",
+            "help": "Grace period to process, verify, and complete all pending candidates into final results after search phase ends."
+        },
+        {
+            "key": "max_records",
+            "label": "Target Records Limit",
+            "type": "number",
+            "value": settings.MAX_RECORDS,
+            "category": "Execution Limits",
+            "help": "Maximum qualified job records to harvest."
+        },
+        {
+            "key": "max_search_queries",
+            "label": "Max Search Queries",
+            "type": "number",
+            "value": settings.MAX_SEARCH_QUERIES,
+            "category": "Execution Limits",
+            "help": "Ceiling on distinct search engine query calls per run."
+        },
+        {
+            "key": "max_pages_fetched",
+            "label": "Max Pages Fetched",
+            "type": "number",
+            "value": settings.MAX_PAGES_FETCHED,
+            "category": "Execution Limits",
+            "help": "Ceiling on full HTML job pages fetched."
+        },
+        {
+            "key": "llm_provider",
+            "label": "LLM Provider",
+            "type": "select",
+            "options": ["nvidia", "gemini"],
+            "value": settings.LLM_PROVIDER,
+            "category": "AI Models & Inference",
+            "help": "Primary LLM inference provider."
+        },
+        {
+            "key": "nvidia_primary_model",
+            "label": "NVIDIA Primary Model",
+            "type": "text",
+            "value": settings.NVIDIA_PRIMARY_MODEL,
+            "category": "AI Models & Inference",
+            "help": "Primary model for NVIDIA NIM (e.g. openai/gpt-oss-20b)."
+        },
+        {
+            "key": "nvidia_fallback_model",
+            "label": "NVIDIA Fallback Model",
+            "type": "text",
+            "value": settings.NVIDIA_FALLBACK_MODEL,
+            "category": "AI Models & Inference",
+            "help": "Fallback model if primary encounters rate limit."
+        },
+        {
+            "key": "gemini_model",
+            "label": "Gemini Model",
+            "type": "text",
+            "value": settings.GEMINI_MODEL,
+            "category": "AI Models & Inference",
+            "help": "Model name when using Google Gemini."
+        },
+        {
+            "key": "default_freshness",
+            "label": "Default Time Filter",
+            "type": "select",
+            "options": ["0sec", "24h", "30d", "all_time"],
+            "value": settings.DEFAULT_FRESHNESS,
+            "category": "Job Search Defaults",
+            "help": "Default freshness window for new searches."
+        },
+        {
+            "key": "default_collection_mode",
+            "label": "Default Collection Mode",
+            "type": "select",
+            "options": ["thorough", "fast"],
+            "value": settings.DEFAULT_COLLECTION_MODE,
+            "category": "Job Search Defaults",
+            "help": "Thorough exhausts all source pagination; fast returns quicker preliminary results."
+        }
+    ]
+    return {
+        "status": "success",
+        "settings": safe_settings,
+        "fields": fields
+    }
+
+@app.post("/api/settings")
+async def update_settings_endpoint(request: Request):
+    """Update settings and persist to database and .env across restarts and closures."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+    updates = body.get("settings") if isinstance(body.get("settings"), dict) else body
+    if not isinstance(updates, dict):
+        raise HTTPException(status_code=400, detail="Settings payload must be a JSON object")
+
+    new_safe_dict = settings.update_and_persist(updates)
+    return {
+        "status": "success",
+        "message": "Settings updated and persisted across shutdowns.",
+        "settings": new_safe_dict
+    }
+
+@app.post("/api/settings/reset")
+def reset_settings_endpoint():
+    """Reset persistent settings back to system defaults."""
+    new_safe_dict = settings.reset_to_defaults()
+    return {
+        "status": "success",
+        "message": "Settings restored to factory defaults.",
+        "settings": new_safe_dict
     }
 
 @app.get("/")
@@ -308,7 +441,9 @@ def list_jobs(
 ):
     """List tracked jobs with their application status, interview status, and scraped metadata."""
     jobs = job_repo.list_jobs(run_id=run_id, limit=limit, offset=offset)
-    total_count = job_repo.count_jobs(run_id=run_id)
+    # A short page proves there are no more rows, so avoid repeating the expensive
+    # JSON/window-function count query for the common initial-load case.
+    total_count = offset + len(jobs) if len(jobs) < limit else job_repo.count_jobs(run_id=run_id)
     response.headers["X-Total-Count"] = str(total_count)
     return jobs
 

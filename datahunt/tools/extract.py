@@ -26,7 +26,7 @@ def parse_job_timestamp(
     """
     now = base_time or datetime.now(timezone.utc)
     if not text:
-        return None, None, "RECENT"
+        return None, None, "UNKNOWN"
 
     clean_text = str(text).strip()
 
@@ -381,8 +381,8 @@ def extract_jsonld_job_posting(doc_text: str, doc_metadata: Dict[str, Any]) -> L
                     "company": company or doc_metadata.get("domain", "Unknown Company"),
                     "location": location or "Remote / Unspecified",
                     "salary": salary,
-                    "posted_at": iso_time or date_posted or "Recent",
-                    "posted_age_seconds": age_sec if age_sec is not None else 3600,
+                    "posted_at": iso_time or date_posted or None,
+                    "posted_age_seconds": age_sec,
                     "freshness_badge": badge,
                     "application_url": app_url,
                     "employment_type": item.get("employmentType"),
@@ -393,7 +393,7 @@ def extract_jsonld_job_posting(doc_text: str, doc_metadata: Dict[str, Any]) -> L
                 field_evidence = [
                     {"field_name": "title", "evidence_text": title, "locator": {"type": "jsonld_title"}},
                     {"field_name": "company", "evidence_text": company or "Schema.org", "locator": {"type": "jsonld_company"}},
-                    {"field_name": "posted_at", "evidence_text": str(date_posted or "Recent"), "locator": {"type": "jsonld_datePosted"}}
+                    {"field_name": "posted_at", "evidence_text": str(date_posted or "Unknown"), "locator": {"type": "jsonld_datePosted"}}
                 ]
 
                 records.append({
@@ -493,8 +493,8 @@ def extract_job_records_from_document(
                 "location": j_loc,
                 "salary": None,
                 "application_url": j_url,
-                "posted_at": iso_time or "",
-                "posted_age_seconds": age_sec if age_sec is not None else 86400,
+                "posted_at": iso_time,
+                "posted_age_seconds": age_sec,
                 "freshness_badge": badge,
                 "employment_type": "Full-time",
                 "field_evidence": [
@@ -582,7 +582,7 @@ def extract_job_records_from_document(
 
         # Extract role/title
         m_role_direct = re.search(
-            r"\b(GenAI\s+Engineer|Generative\s+AI\s+Engineer|AI\s+Engineer|LLM\s+Engineer|Machine\s+Learning\s+Engineer|ML\s+Engineer|AI\s+Architect|Data\s+Scientist|AI\s+Researcher|Applied\s+AI\s+Engineer)\b",
+            r"\b(GenAI\s+Engineer|Generative\s+AI\s+Engineer|GenAI\s+Developer|Generative\s+AI\s+Developer|AI\s+Engineer|LLM\s+Engineer|LLM\s+Developer|Machine\s+Learning\s+Engineer|ML\s+Engineer|AI\s+Architect|Data\s+Scientist|AI\s+Researcher|Applied\s+AI\s+Engineer|AI\s+Specialist)\b",
             post_statement + " " + doc_text[:1000],
             re.I
         )
@@ -630,6 +630,11 @@ def extract_job_records_from_document(
                 location = m_loc.group(1).strip()
                 break
 
+        if not location:
+            cand_loc = doc_metadata.get("location") or geography
+            if cand_loc and str(cand_loc).lower() not in ("remote", "remote / unspecified", "unspecified", "not specified"):
+                location = str(cand_loc).strip()
+
         # Check for external apply link in post_text
         ext_link_m = re.search(r'https?://(?:jobs\.lever\.co|boards\.greenhouse\.io|jobs\.ashbyhq\.com|apply\.workable\.com|forms\.gle|[a-zA-Z0-9.-]+\.com/(?:careers|jobs|apply)[^\s<>"\'\)]*)', doc_text)
         apply_url = ext_link_m.group(0) if ext_link_m else url
@@ -641,8 +646,8 @@ def extract_job_records_from_document(
             "location": location or "Remote / Unspecified",
             "salary": None,
             "application_url": apply_url,
-            "posted_at": iso_time or "",
-            "posted_age_seconds": age_sec if age_sec is not None else 86400,
+            "posted_at": iso_time,
+            "posted_age_seconds": age_sec,
             "freshness_badge": "💼 LINKEDIN POST",
             "employment_type": "Full-time",
             "field_evidence": [
@@ -893,8 +898,8 @@ def extract_job_records_from_document(
                     "company": company or "Direct Employer",
                     "location": sub_loc or "Remote / Unspecified",
                     "salary": sub_sal,
-                    "posted_at": iso_time or "Recent",
-                    "posted_age_seconds": age_sec if age_sec is not None else 86400,
+                    "posted_at": iso_time,
+                    "posted_age_seconds": age_sec,
                     "freshness_badge": badge,
                     "application_url": final_url,
                     "employment_type": emp_type,
@@ -938,8 +943,8 @@ def extract_job_records_from_document(
         "company": company or "Direct Employer",
         "location": location,
         "salary": salary,
-        "posted_at": iso_time or "Recent",
-        "posted_age_seconds": age_sec if age_sec is not None else 86400,
+        "posted_at": iso_time,
+        "posted_age_seconds": age_sec,
         "freshness_badge": badge,
         "application_url": final_url,
         "employment_type": emp_type,
@@ -1742,7 +1747,7 @@ class ExtractTool:
                 iso_time, age_sec, badge = parse_job_timestamp(raw_posted)
                 if iso_time:
                     fields["posted_at"] = iso_time
-                fields["posted_age_seconds"] = age_sec if age_sec is not None else 86400
+                fields["posted_age_seconds"] = age_sec
                 fields["freshness_badge"] = badge
 
                 if not fields.get("application_url") and not fields.get("documentation_url"):
@@ -1758,7 +1763,7 @@ class ExtractTool:
                     "title": norm_title,
                     "location": norm_location,
                     "posted_at": fields.get("posted_at") or "",
-                    "posted_age_seconds": fields.get("posted_age_seconds", 86400),
+                    "posted_age_seconds": fields.get("posted_age_seconds"),
                     "freshness_badge": badge,
                     "application_url": fields.get("application_url") or fields.get("website_url") or fields.get("documentation_url") or "",
                 }

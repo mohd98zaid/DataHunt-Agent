@@ -35,6 +35,13 @@ def test_migration_idempotency_and_wal(temp_db):
     applied2 = run_migrations(db_path=temp_db)
     assert len(applied2) == 0
 
+def test_connection_uses_python_310_compatible_autocommit(temp_db):
+    conn = get_connection(db_path=temp_db)
+    try:
+        assert conn.isolation_level is None
+    finally:
+        conn.close()
+
 def test_repositories_crud(temp_db):
     run_migrations(db_path=temp_db)
     conn_factory = lambda: get_connection(temp_db)

@@ -519,8 +519,8 @@
 }
 
 .table-scroll-area {
-  overflow-x: auto;
-  max-height: calc(100vh - 250px);
+  overflow: auto;
+  max-height: calc(100vh - 310px);
   contain: content;     /* isolate table reflows from the rest of the page */
 }
 
@@ -1055,8 +1055,9 @@
   align-items: center;
   justify-content: space-between;
   padding: 12px 18px;
-  background: rgba(9, 14, 28, 0.7);
-  border-top: 1px solid rgba(0, 240, 255, 0.2);
+  background: rgba(9, 14, 28, 0.95);
+  backdrop-filter: blur(12px);
+  border-top: 1px solid rgba(0, 240, 255, 0.25);
   border-bottom-left-radius: 12px;
   border-bottom-right-radius: 12px;
   font-family: 'Share Tech Mono', monospace;
@@ -1064,6 +1065,10 @@
   color: var(--text-muted);
   flex-wrap: wrap;
   gap: 12px;
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.6);
 }
 
 .pagination-info {
@@ -1075,7 +1080,55 @@
 .pagination-controls {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
+}
+
+.page-numbers-wrap {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.page-num-btn {
+  background: rgba(0, 240, 255, 0.08);
+  border: 1px solid rgba(0, 240, 255, 0.3);
+  color: var(--text-main);
+  padding: 4px 10px;
+  min-width: 32px;
+  border-radius: 5px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.page-num-btn:hover:not(:disabled) {
+  background: rgba(0, 240, 255, 0.25);
+  border-color: var(--neon-cyan);
+  color: #fff;
+  box-shadow: 0 0 10px rgba(0, 240, 255, 0.3);
+}
+
+.page-num-btn.active {
+  background: var(--neon-cyan);
+  border-color: var(--neon-cyan);
+  color: #050811;
+  font-weight: 700;
+  box-shadow: 0 0 12px rgba(0, 240, 255, 0.5);
+  cursor: default;
+}
+
+.page-num-ellipsis {
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 0 2px;
+}
+
+.page-nav-sm {
+  padding: 4px 10px;
+  font-size: 11px;
+  min-width: 28px;
 }
 
 .page-nav-btn {

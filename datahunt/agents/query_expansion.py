@@ -40,32 +40,57 @@ class ExpandedQuery(BaseModel):
 # ─────────────────────────────────────────────
 TAXONOMY = {
     "genai": {
-        "titles": ["GenAI Engineer", "AI Engineer", "Generative AI Engineer", "LLM Engineer", "Machine Learning Engineer", "Applied AI Engineer"],
-        "skills": ["Python", "LangChain", "LlamaIndex", "PyTorch", "Hugging Face", "LLMs", "RAG", "Prompt Engineering"],
+        "titles": [
+            "GenAI Engineer", "AI Engineer", "Generative AI Solution Architect", "AI Solution Architect",
+            "Enterprise AI Architect", "LLM Engineer", "Agentic AI Engineer", "RAG Engineer",
+            "AI Platform Engineer", "GenAI Developer", "AI Full-Stack Developer", "AI Technical Lead",
+            "Generative AI Engineer", "Machine Learning Engineer", "Applied AI Engineer"
+        ],
+        "skills": ["Python", "LangChain", "LlamaIndex", "PyTorch", "Hugging Face", "LLMs", "RAG", "Prompt Engineering", "Vector Databases"],
         "negatives": ["Sales", "Recruiter", "Intern (unpaid)"]
     },
     "gen ai": {
-        "titles": ["GenAI Engineer", "AI Engineer", "Generative AI Engineer", "LLM Engineer", "Machine Learning Engineer", "Applied AI Engineer"],
-        "skills": ["Python", "LangChain", "LlamaIndex", "PyTorch", "Hugging Face", "LLMs", "RAG", "Prompt Engineering"],
+        "titles": [
+            "GenAI Engineer", "AI Engineer", "Generative AI Solution Architect", "AI Solution Architect",
+            "Enterprise AI Architect", "LLM Engineer", "Agentic AI Engineer", "RAG Engineer",
+            "AI Platform Engineer", "GenAI Developer", "AI Full-Stack Developer", "AI Technical Lead",
+            "Generative AI Engineer", "Machine Learning Engineer", "Applied AI Engineer"
+        ],
+        "skills": ["Python", "LangChain", "LlamaIndex", "PyTorch", "Hugging Face", "LLMs", "RAG", "Prompt Engineering", "Vector Databases"],
         "negatives": ["Sales", "Recruiter", "Intern (unpaid)"]
     },
     "generative ai": {
-        "titles": ["Generative AI Engineer", "GenAI Engineer", "AI Engineer", "LLM Engineer", "Machine Learning Engineer", "Applied AI Engineer"],
-        "skills": ["Python", "LangChain", "PyTorch", "LLMs", "RAG", "Transformers"],
+        "titles": [
+            "Generative AI Engineer", "Generative AI Solution Architect", "AI Solution Architect",
+            "GenAI Engineer", "Enterprise AI Architect", "AI Engineer", "LLM Engineer",
+            "Agentic AI Engineer", "RAG Engineer", "Machine Learning Engineer", "Applied AI Engineer"
+        ],
+        "skills": ["Python", "LangChain", "PyTorch", "LLMs", "RAG", "Transformers", "Prompt Engineering", "Vector Databases"],
         "negatives": ["Sales", "Recruiter"]
     },
     "genai engineer": {
-        "titles": ["AI Engineer", "Generative AI Engineer", "LLM Engineer", "Machine Learning Engineer", "ML Engineer", "Applied AI Engineer"],
+        "titles": [
+            "AI Engineer", "Generative AI Engineer", "Generative AI Solution Architect", "AI Solution Architect",
+            "LLM Engineer", "Agentic AI Engineer", "RAG Engineer", "Machine Learning Engineer",
+            "ML Engineer", "Applied AI Engineer", "GenAI Developer"
+        ],
         "skills": ["Python", "LangChain", "LlamaIndex", "PyTorch", "Hugging Face", "LLMs", "RAG", "Prompt Engineering"],
         "negatives": ["Sales", "Recruiter", "Intern (unpaid)"]
     },
     "generative ai engineer": {
-        "titles": ["GenAI Engineer", "AI Engineer", "LLM Engineer", "Machine Learning Engineer", "Applied AI Engineer"],
-        "skills": ["Python", "LangChain", "PyTorch", "LLMs", "RAG", "Transformers"],
+        "titles": [
+            "GenAI Engineer", "AI Engineer", "Generative AI Solution Architect", "AI Solution Architect",
+            "LLM Engineer", "Agentic AI Engineer", "RAG Engineer", "Machine Learning Engineer", "Applied AI Engineer"
+        ],
+        "skills": ["Python", "LangChain", "PyTorch", "LLMs", "RAG", "Transformers", "Prompt Engineering"],
         "negatives": ["Sales", "Recruiter"]
     },
     "ai engineer": {
-        "titles": ["GenAI Engineer", "Generative AI Engineer", "Machine Learning Engineer", "ML Engineer", "Applied AI Engineer", "Deep Learning Engineer", "MLOps Engineer", "LLM Engineer"],
+        "titles": [
+            "GenAI Engineer", "Generative AI Engineer", "AI Solution Architect", "Enterprise AI Architect",
+            "Machine Learning Engineer", "ML Engineer", "Applied AI Engineer", "Deep Learning Engineer",
+            "MLOps Engineer", "LLM Engineer", "Agentic AI Engineer"
+        ],
         "skills": ["Python", "PyTorch", "TensorFlow", "Transformers", "LangChain", "LLMs", "Docker", "FastAPI"],
         "negatives": ["Sales", "Recruiter", "Intern (unpaid)"]
     },
@@ -95,9 +120,82 @@ TAXONOMY = {
         "negatives": ["DevOps", "Database Administrator"]
     },
     "devops engineer": {
-        "titles": ["Site Reliability Engineer", "SRE", "Cloud Engineer", "Infrastructure Engineer", "Platform Engineer"],
+        "titles": ["Site Reliability Engineer", "SRE", "Cloud Engineer", "Infrastructure Engineer", "Platform Engineer", "DevSecOps Engineer"],
         "skills": ["AWS", "Kubernetes", "Docker", "Terraform", "CI/CD", "Linux", "Ansible", "Prometheus"],
         "negatives": ["Frontend Developer"]
+    },
+    "cloud engineer": {
+        "titles": [
+            "Cloud Solutions Architect", "AWS Solutions Architect", "Azure Solutions Architect",
+            "Cloud Architect", "Cloud Infrastructure Engineer", "Cloud Platform Engineer",
+            "DevOps Engineer", "Site Reliability Engineer"
+        ],
+        "skills": ["AWS", "Azure", "GCP", "Terraform", "Kubernetes", "Docker", "CloudFormation", "Networking"],
+        "negatives": ["Help Desk", "Desktop Support"]
+    },
+    "cloud architect": {
+        "titles": [
+            "Cloud Solutions Architect", "AWS Solutions Architect", "Azure Cloud Architect",
+            "Enterprise Cloud Architect", "Principal Cloud Architect", "Cloud Infrastructure Architect"
+        ],
+        "skills": ["AWS", "Azure", "GCP", "Enterprise Architecture", "Terraform", "Kubernetes", "Security", "Networking"],
+        "negatives": ["Support Technician"]
+    },
+    "data engineer": {
+        "titles": [
+            "Big Data Engineer", "Data Platform Engineer", "Analytics Engineer",
+            "ETL Developer", "Data Warehouse Architect", "Data Pipeline Developer", "BI Engineer"
+        ],
+        "skills": ["Python", "SQL", "Spark", "Kafka", "Airflow", "Snowflake", "dbt", "Databricks", "PostgreSQL"],
+        "negatives": ["Data Entry", "Manual QA"]
+    },
+    "cybersecurity engineer": {
+        "titles": [
+            "Information Security Engineer", "Infosec Engineer", "Security Architect",
+            "SOC Analyst", "Penetration Tester", "AppSec Engineer", "Cloud Security Architect"
+        ],
+        "skills": ["Network Security", "Penetration Testing", "SIEM", "SOC", "Firewalls", "Cloud Security", "Vulnerability Management"],
+        "negatives": ["IT Help Desk", "Recruiter"]
+    },
+    "full stack engineer": {
+        "titles": [
+            "Full Stack Developer", "Full-Stack Software Engineer", "Software Engineer - Full Stack",
+            "AI Full-Stack Developer", "Lead Full Stack Engineer"
+        ],
+        "skills": ["JavaScript", "TypeScript", "React", "Node.js", "Python", "SQL", "Git", "REST APIs"],
+        "negatives": ["Technical Recruiter", "Graphic Designer"]
+    },
+    "mobile developer": {
+        "titles": [
+            "Mobile Engineer", "iOS Developer", "Android Developer",
+            "Flutter Developer", "React Native Developer", "Swift Developer", "Kotlin Developer"
+        ],
+        "skills": ["Swift", "Kotlin", "React Native", "Flutter", "iOS", "Android", "Mobile Architecture"],
+        "negatives": ["DevOps", "Database Administrator"]
+    },
+    "qa engineer": {
+        "titles": [
+            "SDET", "Software Development Engineer in Test", "Test Automation Engineer",
+            "Quality Assurance Engineer", "Quality Engineer", "Automation Test Specialist"
+        ],
+        "skills": ["Selenium", "Playwright", "Cypress", "Python", "Java", "Test Automation", "CI/CD", "API Testing"],
+        "negatives": ["Manual Data Entry", "Recruiter"]
+    },
+    "solutions architect": {
+        "titles": [
+            "Solution Architect", "Enterprise Architect", "Technical Architect",
+            "Systems Architect", "Cloud Solutions Architect", "Software Architect"
+        ],
+        "skills": ["System Design", "Cloud Architecture", "Microservices", "Enterprise Architecture", "Integration Patterns"],
+        "negatives": ["Junior Developer", "Intern"]
+    },
+    "product manager": {
+        "titles": [
+            "Technical Product Manager", "Product Owner", "Group Product Manager",
+            "Principal Product Manager", "AI Product Manager", "Director of Product Management"
+        ],
+        "skills": ["Product Strategy", "Roadmapping", "Agile", "User Research", "Data Analytics", "Cross-Functional Leadership"],
+        "negatives": ["Software Engineer", "Accountant"]
     }
 }
 

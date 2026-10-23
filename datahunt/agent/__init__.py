@@ -28,6 +28,7 @@ from agent import (
     JobHuntAgent,
     DeepResearchAgent,
     MarketIntelAgent,
+    PeopleScoutAgent,
     get_agent,
     list_agents,
 )
@@ -38,6 +39,7 @@ __all__ = [
     "JobHuntAgent",
     "DeepResearchAgent",
     "MarketIntelAgent",
+    "PeopleScoutAgent",
     "get_agent",
     "list_agents",
     "AgentState", "AgentStatus", "SearchIterationStats",

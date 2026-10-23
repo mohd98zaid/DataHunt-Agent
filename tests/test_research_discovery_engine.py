@@ -297,3 +297,29 @@ def test_comprehensive_research_paper_structure():
     assert "## 8. Verified Sources & Primary Documentation" in markdown
 
 
+def test_research_record_provenance_uses_fetched_document_fields():
+    """Research records keep valid shared evidence fields and the real document id."""
+    engine = ResearchDiscoveryEngine(search_tool=MagicMock(), fetch_tool=MagicMock(), gemini_client=None)
+    doc = SourceDocument(
+        id="doc_provenance",
+        run_id="run_provenance",
+        requested_url="https://example.com/research",
+        canonical_url="https://example.com/research",
+        title="Research Source",
+        domain="example.com",
+        extracted_text="A source-backed claim.",
+    )
+    evidence = Evidence(
+        claim="A source-backed claim.",
+        source_url="https://example.com/research",
+        source_title="Research Source",
+        metadata={"query": "test"},
+    )
+
+    record = engine._build_research_records([evidence], [doc], run_id="run_provenance")[0]
+
+    assert record.source_document_id == "doc_provenance"
+    assert record.evidence[0].source_document_id == "doc_provenance"
+    assert record.evidence[0].evidence_text == "A source-backed claim."
+    assert record.evidence[0].locator["source_url"] == "https://example.com/research"
+

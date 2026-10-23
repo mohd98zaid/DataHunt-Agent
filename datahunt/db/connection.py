@@ -13,7 +13,7 @@ def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
     conn = sqlite3.connect(
         str(path),
         timeout=10.0,
-        autocommit=True
+        isolation_level=None
     )
     conn.row_factory = sqlite3.Row
     

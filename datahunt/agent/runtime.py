@@ -6,6 +6,9 @@ an explicit observe→decide→act loop.
 """
 import re
 import time
+import threading
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
@@ -24,12 +27,51 @@ from .decision import AgentAction, DecisionEngine
 from .policies import (
     GoalEvaluator,
     MatchStatus,
+    GEO_ALIAS_GROUPS,
     match_location,
     match_experience,
     match_title_relevance,
     qualify_job,
     QualificationResult,
 )
+
+
+class _SearchRateLimiter:
+    """Rolling-window rate limiter: at most `rpm` calls per 60-second window.
+
+    Thread-safe. _act_search acquires one slot per parallel worker before
+    dispatching a search call to stay within the NVIDIA_RPM quota.
+    """
+    def __init__(self, rpm: int = 40):
+        self.rpm = rpm
+        from collections import deque
+        self._window: deque = deque()
+        self._lock = threading.Lock()
+
+    def reconfigure(self, rpm: int) -> None:
+        with self._lock:
+            self.rpm = rpm
+
+    def acquire(self) -> None:
+        """Block until a call slot is available in the current 60 s window."""
+        while True:
+            with self._lock:
+                now = time.time()
+                while self._window and now - self._window[0] >= 60.0:
+                    self._window.popleft()
+                if len(self._window) < self.rpm:
+                    self._window.append(now)
+                    return
+                wait = 60.0 - (now - self._window[0])
+            time.sleep(max(0.05, wait))
+
+
+# Module-level limiter; reconfigured to NVIDIA_RPM when AgentRuntime is constructed.
+_search_rate_limiter = _SearchRateLimiter(rpm=40)
+
+# Task-type → track membership (for telemetry / interleaving labels)
+_PORTAL_TASK_TYPES: frozenset = frozenset(("BOARD_SEARCH", "REGIONAL_BOARD_SEARCH", "GENERAL_SEARCH"))
+_CAREER_TASK_TYPES: frozenset = frozenset(("ATS_SEARCH", "CAREER_PAGE_SEARCH", "COMPANY_SEARCH"))
 
 
 def _classify_job_source_category(url: str, source_str: str = "") -> str:
@@ -74,6 +116,8 @@ class AgentRuntime:
         self.discovery_engine = DiscoveryEngine()
         from datahunt.db import CheckpointRepository
         self.checkpoint_repo = CheckpointRepository()
+        # Sync rate limiter to current settings (allows live override via settings UI)
+        _search_rate_limiter.reconfigure(rpm=getattr(settings, "NVIDIA_RPM", 40))
 
     def _init_state(self, state: AgentState, emit: Callable[[str, Dict], None]):
         """Initialize state, canonical job request, discovery state, and search plan."""
@@ -89,8 +133,10 @@ class AgentRuntime:
             q_low = (state.request or "").lower()
             if "--fast" in q_low or "mode:fast" in q_low or "fast_mode" in q_low or state.collection_mode == "fast":
                 state.collection_mode = "fast"
-            else:
+            elif "--thorough" in q_low or "mode:thorough" in q_low or state.collection_mode == "thorough":
                 state.collection_mode = "thorough"
+            else:
+                state.collection_mode = getattr(settings, "DEFAULT_COLLECTION_MODE", "thorough")
             emit("status", {"message": "Intent: JOB_SEARCH", "phase": "PLANNING"})
             if not state.canonical_job_request:
                 if not state.request or not state.request.strip():
@@ -507,7 +553,13 @@ class AgentRuntime:
         url = (hit.get("url") or "").lower()
         title = (hit.get("title") or "").lower()
         snippet = (hit.get("snippet") or "").lower()
-        text = f"{url} {title} {snippet}"
+        candidate_location = hit.get("location")
+        if isinstance(candidate_location, dict):
+            candidate_location = ", ".join(
+                str(value) for value in candidate_location.values() if value
+            )
+        cand_loc_str = str(candidate_location or "").lower()
+        text = f"{url} {title} {snippet} {cand_loc_str}"
 
         # 1. Non-job URL patterns
         JUNK_URL_PATTERNS = ["/jobs/search", "/browse/", "/tag/", "/category/", "/login", "/signup", "/people/", "/candidate/"]
@@ -528,18 +580,13 @@ class AgentRuntime:
                     "full stack", "fullstack", "front end", "frontend", "ui developer",
                     "accountant", "bookkeeper", "sales manager", "recruiter", "talent acquisition"
                 ]
-                if any(dr in title for dr in DISQUALIFYING_ROLES) and not any(ai in title for ai in ("genai", "generative ai", "llm", "ai engineer")):
+                if any(dr in title for dr in DISQUALIFYING_ROLES) and not any(ai in title for ai in ("genai", "generative ai", "llm", "ai engineer", "ai full", "ai-full", "ai/ml")):
                     return False
 
             # If user requested specific regions, e.g. GCC/Gulf/Saudi/UAE, reject explicit foreign anchors and foreign domain subdomains
             req_geos = [loc.lower() for loc in (state.locations or ([state.explicit_location] if state.explicit_location else []))]
             is_gulf = any(any(k in g for k in ("saudi", "uae", "dubai", "riyadh", "jeddah", "dammam", "gulf", "gcc", "qatar", "kuwait", "bahrain", "oman")) for g in req_geos)
             if is_gulf:
-                candidate_location = hit.get("location")
-                if isinstance(candidate_location, dict):
-                    candidate_location = ", ".join(
-                        str(value) for value in candidate_location.values() if value
-                    )
                 if candidate_location:
                     location_status, _ = match_location(
                         state.locations or state.explicit_location,
@@ -642,19 +689,50 @@ class AgentRuntime:
             (("dubai", "uae"), "Dubai, UAE"),
             (("dubai", "united arab emirates"), "Dubai, UAE"),
             (("sharjah", "uae"), "Sharjah, UAE"),
-            (("united arab emirates",), "UAE"),
             (("riyadh", "saudi"), "Riyadh, Saudi Arabia"),
             (("jeddah", "saudi"), "Jeddah, Saudi Arabia"),
             (("dammam", "saudi"), "Dammam, Saudi Arabia"),
             (("khobar", "saudi"), "Khobar, Saudi Arabia"),
+            (("united arab emirates",), "UAE"),
             (("saudi arabia",), "Saudi Arabia"),
             (("ksa",), "Saudi Arabia"),
+            (("dubai",), "Dubai, UAE"),
+            (("abu dhabi",), "Abu Dhabi, UAE"),
+            (("sharjah",), "Sharjah, UAE"),
+            (("riyadh",), "Riyadh, Saudi Arabia"),
+            (("jeddah",), "Jeddah, Saudi Arabia"),
+            (("dammam",), "Dammam, Saudi Arabia"),
+            (("khobar",), "Khobar, Saudi Arabia"),
+            (("doha",), "Doha, Qatar"),
+            (("qatar",), "Qatar"),
+            (("kuwait",), "Kuwait"),
+            (("bahrain",), "Bahrain"),
+            (("manama",), "Manama, Bahrain"),
+            (("muscat",), "Muscat, Oman"),
+            (("oman",), "Oman"),
         )
         for terms, normalized in locations:
             if all(re.search(r"(?<!\w)" + re.escape(term) + r"(?!\w)", haystack) for term in terms):
                 fields["location"] = normalized
                 fields["location_recovered"] = True
                 return
+
+        app_url = str(fields.get("application_url") or fields.get("job_url") or "")
+        cand_hit = None
+        for c in getattr(state, "candidate_urls", []) or []:
+            if c.get("url") == app_url:
+                cand_hit = c
+                break
+        if cand_hit and cand_hit.get("location"):
+            cand_loc = str(cand_hit["location"]).strip()
+            if cand_loc.lower() not in ("remote", "remote / unspecified", "unspecified", "not specified"):
+                fields["location"] = cand_loc
+                fields["location_recovered"] = True
+                return
+        if state.explicit_location and (fields.get("source") == "linkedin" or "linkedin.com" in app_url):
+            fields["location"] = state.explicit_location
+            fields["location_recovered"] = True
+            return
 
     def _act_search(self, state: AgentState, emit):
         """Execute the next batch of searches with canonical URL deduplication and dynamic discovery."""
@@ -675,127 +753,189 @@ class AgentRuntime:
                         break
 
             if state.discovery_state.task_queue:
-                from .discovery_models import DiscoveryRoundTelemetry
+                from .discovery_models import DiscoveryRoundTelemetry, SearchTaskType
+                from datahunt.sources.models import SourceStatus
+
+                # Determine batch size from settings (default 20, capped by remaining budget)
+                cfg_batch = getattr(settings, "SEARCH_BATCH_SIZE", 20)
+                remaining_budget = state.max_search_calls - state.search_calls
+                batch_size = max(1, min(cfg_batch, remaining_budget, len(state.discovery_state.task_queue)))
+
                 batch_tasks = []
-                while state.discovery_state.task_queue and len(batch_tasks) < 4:
+                while state.discovery_state.task_queue and len(batch_tasks) < batch_size:
                     batch_tasks.append(state.discovery_state.task_queue.pop(0))
 
-                for task in batch_tasks:
-                    if state.search_calls >= state.max_search_calls:
-                        break
-                    if state.effective_search_deadline > 0 and time.time() >= state.effective_search_deadline:
-                        break
+                # Tag each task with its track (portal vs career-site) for telemetry
+                for t in batch_tasks:
+                    t.metadata["track"] = (
+                        "career_site" if t.task_type.value in _CAREER_TASK_TYPES else "job_portal"
+                    )
 
+                portal_count = sum(1 for t in batch_tasks if t.metadata.get("track") == "job_portal")
+                career_count = len(batch_tasks) - portal_count
+                emit("status", {
+                    "message": (
+                        f"Parallel search: {len(batch_tasks)} tasks "
+                        f"[{portal_count} portal + {career_count} career-site]"
+                    ),
+                    "phase": "SEARCHING",
+                })
+
+                # --- Parallel execution ------------------------------------------------
+                def _execute_task(task) -> Dict:
+                    """Worker: rate-limited search for one task; returns result dict."""
+                    _search_rate_limiter.acquire()
                     t_start = time.time()
                     query = task.query
                     page = getattr(task, "page", 1)
-                    emit("status", {"message": f"Searching [R{task.round}]: {query[:60]} (page {page})", "phase": "SEARCHING"})
-
                     try:
                         res = self.search.execute(query=query, limit=15, page=page)
-                        state.search_calls += 1
-                        new_candidates = 0
-                        dup_candidates = 0
-                        initial_companies = len(state.discovery_state.discovered_companies)
-                        initial_ats = len(state.discovery_state.discovered_ats)
+                    except Exception as ex:
+                        return {"task": task, "res": None, "error": str(ex), "t_start": t_start}
+                    return {"task": task, "res": res, "error": None, "t_start": t_start}
 
-                        if res.success and res.data:
-                            from datahunt.sources.models import SourceStatus
-                            for hit in res.data:
-                                url = hit.get("url")
-                                if not url:
-                                    continue
-                                canon = canonicalize_url(url)
-                                if not canon or canon in state.seen_canonical_urls:
-                                    dup_candidates += 1
-                                    continue
-                                if state.mode in ("jobs", "job") and not is_valid_job_url(url):
-                                    continue
-                                if state.mode in ("jobs", "job") and not self._is_promising_candidate(hit, state):
-                                    continue
+                max_workers = min(len(batch_tasks), getattr(settings, "NVIDIA_RPM", 40))
+                futures = []
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    for task in batch_tasks:
+                        if state.search_calls >= state.max_search_calls:
+                            break
+                        if state.effective_search_deadline > 0 and time.time() >= state.effective_search_deadline:
+                            break
+                        futures.append(executor.submit(_execute_task, task))
 
-                                detected_source = self.source_registry.identify_source_for_url(url)
-                                hit_source_id = detected_source.id if detected_source else task.source
-                                hit_source_name = detected_source.name if detected_source else "Public Web"
-                                hit["source_id"] = hit_source_id
-                                hit["source"] = hit_source_name
+                # --- Merge results in the main thread (state mutations are not thread-safe) ---
+                for future in as_completed(futures):
+                    try:
+                        result = future.result()
+                    except Exception as ex:
+                        logger.warning(f"Search worker exception: {ex}")
+                        continue
 
-                                state.seen_canonical_urls.add(canon)
-                                state.seen_urls.add(url)
-                                state.candidate_urls.append(hit)
-                                new_candidates += 1
+                    task = result["task"]
+                    res = result["res"]
+                    t_start = result["t_start"]
+                    query = task.query
 
-                                src_cat = _classify_job_source_category(url, hit_source_name)
-                                state.source_distribution[src_cat] = state.source_distribution.get(src_cat, 0) + 1
+                    state.search_calls += 1
 
-                                if hit_source_id in state.source_run_results:
-                                    s_rec = state.source_run_results[hit_source_id]
-                                    s_rec.records_found += 1
-                                    s_rec.status = SourceStatus.SUCCESS
-
-                            # Dynamic discovery: analyze hits to discover new companies, ATS platforms, and boards
-                            new_followup_tasks = self.discovery_engine.process_search_hits(
-                                res.data, task, state, state.discovery_state
-                            )
-                            if new_followup_tasks:
-                                state.discovery_state.task_queue.extend(new_followup_tasks)
-                                logger.info(f"Discovered {len(new_followup_tasks)} follow-up search tasks from search hits")
-
-                        task.metadata["results_count"] = len(res.data) if res.success else 0
-                        task.metadata["new_candidates"] = new_candidates
-                        state.discovery_state.completed_tasks.append(task)
-                        state.discovery_state.executed_queries.add(query)
-
-                        cur_round = task.round
-                        state.discovery_state.round_novel_candidates[cur_round] = (
-                            state.discovery_state.round_novel_candidates.get(cur_round, 0) + new_candidates
-                        )
-
-                        duration_ms = (time.time() - t_start) * 1000
-                        new_sources_discovered = (
-                            (len(state.discovery_state.discovered_companies) - initial_companies)
-                            + (len(state.discovery_state.discovered_ats) - initial_ats)
-                        )
-
-                        # LangSmith and telemetry logging
-                        telemetry = DiscoveryRoundTelemetry(
-                            run_id=state.run_id,
-                            round=task.round,
-                            task_type=task.task_type.value,
-                            source=task.source,
-                            query=query,
-                            depth=task.depth,
-                            results_count=len(res.data) if res.success else 0,
-                            new_jobs_count=new_candidates,
-                            new_qualified_count=len(state.qualified_records),
-                            new_sources_count=new_sources_discovered,
-                            duration_ms=round(duration_ms, 2),
-                        )
-                        state.discovery_state.telemetry_logs.append(telemetry)
-                        emit("telemetry", telemetry.__dict__)
-
-                        # Update adaptive search productivity metrics (Sections 13 & 14)
-                        if hasattr(state.discovery_state, "record_task_productivity"):
-                            state.discovery_state.record_task_productivity(
-                                source=task.source,
-                                raw_hits=len(res.data) if res.success else 0,
-                                candidate_jobs=new_candidates,
-                                unique_jobs=new_candidates,
-                                duplicate_jobs=dup_candidates,
-                            )
-
-                        self.decision_engine.record_search_iteration(
-                            state, query, len(res.data) if res.success else 0, new_candidates
-                        )
-                        state.add_observation(
-                            f"Search [R{task.round}] '{query[:35]}': {new_candidates} new candidates, {new_sources_discovered} new sources discovered"
-                        )
-
-                    except Exception as e:
-                        logger.warning(f"Discovery search error for '{query}': {e}")
+                    if result["error"] or res is None:
+                        logger.warning(f"Discovery search error for '{query}': {result['error']}")
                         state.add_warning(f"Search failed: {query[:40]}")
                         if hasattr(state.discovery_state, "record_task_productivity"):
                             state.discovery_state.record_task_productivity(source=task.source, failed=True)
+                        continue
+
+                    new_candidates = 0
+                    dup_candidates = 0
+                    initial_companies = len(state.discovery_state.discovered_companies)
+                    initial_ats = len(state.discovery_state.discovered_ats)
+
+                    if res.success and res.data:
+                        for hit in res.data:
+                            url = hit.get("url")
+                            if not url:
+                                continue
+                            canon = canonicalize_url(url)
+                            if not canon or canon in state.seen_canonical_urls:
+                                dup_candidates += 1
+                                continue
+                            if state.mode in ("jobs", "job") and not is_valid_job_url(url):
+                                continue
+                            if state.mode in ("jobs", "job") and not self._is_promising_candidate(hit, state):
+                                continue
+
+                            detected_source = self.source_registry.identify_source_for_url(url)
+                            hit_source_id = detected_source.id if detected_source else task.source
+                            hit_source_name = detected_source.name if detected_source else "Public Web"
+                            hit["source_id"] = hit_source_id
+                            hit["source"] = hit_source_name
+
+                            state.seen_canonical_urls.add(canon)
+                            state.seen_urls.add(url)
+                            state.candidate_urls.append(hit)
+                            new_candidates += 1
+
+                            if "linkedin.com" in url and any(p in url for p in ("/posts/", "/feed/update/", "/pulse/")):
+                                snippet = hit.get("snippet") or ""
+                                if snippet:
+                                    try:
+                                        from datahunt.tools.fetch import store_prefetched_job_document
+                                        post_content = (
+                                            f"# {hit.get('title') or ''}\n\n"
+                                            f"URL: {url}\n\n"
+                                            f"Platform: LinkedIn Hiring Post\n\n"
+                                            f"## Post Snippet / Description\n"
+                                            f"{snippet}\n"
+                                        )
+                                        store_prefetched_job_document(url, hit.get("title") or "", post_content)
+                                    except Exception:
+                                        pass
+
+                            src_cat = _classify_job_source_category(url, hit_source_name)
+                            state.source_distribution[src_cat] = state.source_distribution.get(src_cat, 0) + 1
+
+                            if hit_source_id in state.source_run_results:
+                                s_rec = state.source_run_results[hit_source_id]
+                                s_rec.records_found += 1
+                                s_rec.status = SourceStatus.SUCCESS
+
+                        # Dynamic discovery: follow-up tasks from hits
+                        new_followup_tasks = self.discovery_engine.process_search_hits(
+                            res.data, task, state, state.discovery_state
+                        )
+                        if new_followup_tasks:
+                            state.discovery_state.task_queue.extend(new_followup_tasks)
+                            logger.info(f"Discovered {len(new_followup_tasks)} follow-up search tasks from search hits")
+
+                    task.metadata["results_count"] = len(res.data) if res.success else 0
+                    task.metadata["new_candidates"] = new_candidates
+                    state.discovery_state.completed_tasks.append(task)
+                    state.discovery_state.executed_queries.add(query)
+
+                    cur_round = task.round
+                    state.discovery_state.round_novel_candidates[cur_round] = (
+                        state.discovery_state.round_novel_candidates.get(cur_round, 0) + new_candidates
+                    )
+
+                    duration_ms = (time.time() - t_start) * 1000
+                    new_sources_discovered = (
+                        (len(state.discovery_state.discovered_companies) - initial_companies)
+                        + (len(state.discovery_state.discovered_ats) - initial_ats)
+                    )
+
+                    telemetry = DiscoveryRoundTelemetry(
+                        run_id=state.run_id,
+                        round=task.round,
+                        task_type=task.task_type.value,
+                        source=task.source,
+                        query=query,
+                        depth=task.depth,
+                        results_count=len(res.data) if res.success else 0,
+                        new_jobs_count=new_candidates,
+                        new_qualified_count=len(state.qualified_records),
+                        new_sources_count=new_sources_discovered,
+                        duration_ms=round(duration_ms, 2),
+                    )
+                    state.discovery_state.telemetry_logs.append(telemetry)
+                    emit("telemetry", telemetry.__dict__)
+
+                    if hasattr(state.discovery_state, "record_task_productivity"):
+                        state.discovery_state.record_task_productivity(
+                            source=task.source,
+                            raw_hits=len(res.data) if res.success else 0,
+                            candidate_jobs=new_candidates,
+                            unique_jobs=new_candidates,
+                            duplicate_jobs=dup_candidates,
+                        )
+
+                    self.decision_engine.record_search_iteration(
+                        state, query, len(res.data) if res.success else 0, new_candidates
+                    )
+                    state.add_observation(
+                        f"Search [R{task.round}/{task.metadata.get('track','?')}] '{query[:35]}': "
+                        f"{new_candidates} new candidates, {new_sources_discovered} new sources"
+                    )
 
                 # If task queue is empty for current round, advance to next discovery round if budget permits
                 while not state.discovery_state.task_queue and state.discovery_state.current_round < state.discovery_budget.max_expansion_rounds:
@@ -822,7 +962,8 @@ class AgentRuntime:
                 return
 
         # Branch 2: Standard Search Plan
-        batch_size = min(4, len(state.search_plan) - state.search_plan_index)
+        cfg_batch = getattr(settings, "SEARCH_BATCH_SIZE", 20)
+        batch_size = min(cfg_batch, len(state.search_plan) - state.search_plan_index)
         if batch_size <= 0:
             return
 
@@ -910,21 +1051,41 @@ class AgentRuntime:
                 continue
             promising.append(h)
 
-        # Prioritize locations if stated
-        if state.locations:
-            loc_tokens = [loc.lower() for loc in state.locations]
-            promising.sort(key=lambda h: (
-                0 if any(t in f"{h.get('url','')} {h.get('title','')} {h.get('snippet','')}".lower() for t in loc_tokens) else 1
-            ))
+        # Prioritize locations if stated using expanded regional aliases
+        target_geos = state.locations or ([state.explicit_location] if state.explicit_location else [])
+        if target_geos:
+            expanded_loc_tokens = set()
+            for loc in target_geos:
+                l_str = str(loc).lower().strip()
+                expanded_loc_tokens.add(l_str)
+                for cluster, aliases in GEO_ALIAS_GROUPS.items():
+                    if l_str == cluster or l_str in aliases or any(a in l_str for a in aliases if len(a) > 2):
+                        expanded_loc_tokens.update(aliases)
+
+            def _candidate_loc_rank(h: Dict[str, Any]) -> int:
+                text = f"{h.get('url','')} {h.get('title','')} {h.get('snippet','')} {h.get('location','')}".lower()
+                if any(t in text for t in expanded_loc_tokens):
+                    return 0
+                return 1
+
+            promising.sort(key=_candidate_loc_rank)
 
         remaining_fetches = max(0, state.max_fetch_calls - state.fetch_calls)
+        is_thorough = getattr(state, "collection_mode", None) == "thorough"
+        is_drain_phase = state.effective_search_deadline > 0 and time.time() >= state.effective_search_deadline
+        hard_deadline_ok = state.effective_hard_deadline == 0 or time.time() < state.effective_hard_deadline
+
         if remaining_fetches == 0:
-            if promising:
-                state.add_warning(
-                    f"Fetch budget exhausted; dropped {len(promising)} unprocessed candidates"
-                )
-            state.candidate_urls = []
-            return
+            # Complete existing searched items during drain phase or thorough mode if time permits
+            if (is_thorough or is_drain_phase) and hard_deadline_ok and promising:
+                remaining_fetches = min(25, len(promising))
+            else:
+                if promising:
+                    state.add_warning(
+                        f"Fetch budget exhausted; dropped {len(promising)} unprocessed candidates"
+                    )
+                state.candidate_urls = []
+                return
 
         batch = promising[:min(25, remaining_fetches)]
         # Retain remaining candidates

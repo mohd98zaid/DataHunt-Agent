@@ -25,6 +25,12 @@ def test_api_health():
     assert "gemini-3.8-flash" in data["models_available"]
     assert "gemini-flash-lite-latest" in data["models_available"]
 
+def test_api_health_remains_public_when_api_key_is_configured(monkeypatch):
+    from datahunt.api import settings
+    monkeypatch.setattr(settings, "API_KEY", "test-secret")
+    resp = client.get("/health")
+    assert resp.status_code == 200
+
 def test_api_list_tasks():
     resp = client.get("/tasks")
     assert resp.status_code == 200
@@ -59,6 +65,17 @@ def test_api_jobs_endpoints():
         assert patched["applied_status"] == "applied"
         assert patched["interview_status"] == "screening"
         assert patched["notes"] == "Test application tracking"
+
+def test_api_jobs_uses_page_size_to_avoid_redundant_count(monkeypatch):
+    from datahunt import api
+
+    monkeypatch.setattr(api.job_repo, "list_jobs", lambda **kwargs: [{"id": "job-1"}])
+    monkeypatch.setattr(api.job_repo, "count_jobs", lambda **kwargs: (_ for _ in ()).throw(AssertionError("count should be skipped")))
+
+    resp = client.get("/api/jobs?limit=10&offset=0")
+
+    assert resp.status_code == 200
+    assert resp.headers["X-Total-Count"] == "1"
 
 
 def test_api_jobs_delete_and_bulk_delete():

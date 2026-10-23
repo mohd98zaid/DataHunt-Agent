@@ -1,3 +1,4 @@
+import re
 from typing import Any, Dict, List, Optional
 from datahunt.models import ExtractedRecord, VerificationStatus
 from datahunt.policy import is_public_business_email
@@ -8,11 +9,11 @@ from datahunt.tools.extract import is_aggregator_or_count_title
 from datahunt.llm import NvidiaClient, GeminiClient
 
 GEO_SYNONYMS = {
-    "uae": ["uae", "united arab emirates", "dubai", "abu dhabi", "sharjah", "ajman", "al ain", "ras al khaimah", "middle east", "mena", "gcc", "ae"],
-    "dubai": ["dubai", "uae", "united arab emirates", "abu dhabi", "sharjah", "ajman", "al ain", "ras al khaimah", "middle east", "mena", "gcc", "difc", "internet city", "silicon oasis", "business bay", "jlt", "ae"],
-    "saudi": ["saudi", "saudi arabia", "ksa", "riyadh", "jeddah", "dammam", "khobar", "neom", "middle east", "mena", "gcc", "sa"],
-    "saudi arabia": ["saudi", "saudi arabia", "ksa", "riyadh", "jeddah", "dammam", "khobar", "neom", "middle east", "mena", "gcc", "sa"],
-    "ksa": ["saudi", "saudi arabia", "ksa", "riyadh", "jeddah", "dammam", "khobar", "neom", "middle east", "mena", "gcc", "sa"],
+    "uae": ["uae", "united arab emirates", "dubai", "abu dhabi", "sharjah", "ajman", "al ain", "ras al khaimah", "middle east", "mena", "gcc", "ae", "الإمارات", "الامارات", "أبو ظبي", "أبوظبي", "ابوظبي", "دبي", "الشارقة", "عجمان", "رأس الخيمة", "الفجيرة"],
+    "dubai": ["dubai", "uae", "united arab emirates", "abu dhabi", "sharjah", "ajman", "al ain", "ras al khaimah", "middle east", "mena", "gcc", "difc", "internet city", "silicon oasis", "business bay", "jlt", "ae", "دبي"],
+    "saudi": ["saudi", "saudi arabia", "ksa", "riyadh", "jeddah", "dammam", "khobar", "neom", "middle east", "mena", "gcc", "sa", "السعودية", "المملكة العربية السعودية", "الرياض", "جدة", "الدمام", "الخبر", "نيوم"],
+    "saudi arabia": ["saudi", "saudi arabia", "ksa", "riyadh", "jeddah", "dammam", "khobar", "neom", "middle east", "mena", "gcc", "sa", "السعودية", "المملكة العربية السعودية", "الرياض", "جدة", "الدمام", "الخبر", "نيوم"],
+    "ksa": ["saudi", "saudi arabia", "ksa", "riyadh", "jeddah", "dammam", "khobar", "neom", "middle east", "mena", "gcc", "sa", "السعودية", "المملكة العربية السعودية", "الرياض", "جدة", "الدمام", "الخبر", "نيوم"],
     "india": ["india", "bangalore", "bengaluru", "mumbai", "delhi", "hyderabad", "pune", "chennai", "gurgaon", "noida", "in"],
     "uk": ["uk", "united kingdom", "london", "england", "scotland", "manchester", "birmingham", "gb"],
     "london": ["london", "uk", "united kingdom", "england"],
@@ -31,6 +32,11 @@ KNOWN_HUBS = {
     "italy", "rome", "milan", "canada", "vancouver", "montreal", "australia", "sydney", "melbourne",
     "united states", "usa", "california", "texas", "united kingdom", "england", "scotland"
 }
+
+
+def _geo_term_matches(term: str, location: str) -> bool:
+    """Match a geography alias as a whole token/phrase, not a raw substring."""
+    return re.search(r"(?<!\w)" + re.escape(term) + r"(?!\w)", location, re.IGNORECASE) is not None
 
 def check_geographic_compliance(job_location: Optional[str], requested_geo: Optional[str]) -> bool:
     if not requested_geo or not str(requested_geo).strip():
@@ -52,11 +58,11 @@ def check_geographic_compliance(job_location: Optional[str], requested_geo: Opti
             allowed_terms.add(p)
 
     # 1. Direct allowed region match
-    if any(term in loc_lower for term in allowed_terms):
+    if any(_geo_term_matches(term, loc_lower) for term in allowed_terms):
         return True
 
     # 2. Conflicting foreign hub / country check
-    if any(hub in loc_lower for hub in KNOWN_HUBS if hub not in allowed_terms):
+    if any(_geo_term_matches(hub, loc_lower) for hub in KNOWN_HUBS if hub not in allowed_terms):
         return False
 
     # 3. Unanchored Remote / Worldwide / Anywhere is compliant

@@ -51,12 +51,25 @@ ATS_PLATFORMS = {
         "domain": "bamboohr.com",
         "patterns": [r"([a-zA-Z0-9-]+)\.bamboohr\.com"],
     },
+    "teamtailor": {
+        "domain": "career.teamtailor.com",
+        "patterns": [r"([a-zA-Z0-9-]+)\.teamtailor\.com", r"career\.teamtailor\.com/([^/?#]+)"],
+    },
+    "personio": {
+        "domain": "jobs.personio.com",
+        "patterns": [r"([a-zA-Z0-9-]+)\.jobs\.personio\.com", r"([a-zA-Z0-9-]+)\.personio\.de", r"jobs\.personio\.com/([^/?#]+)"],
+    },
+    "rippling": {
+        "domain": "ats.rippling.com",
+        "patterns": [r"ats\.rippling\.com/([^/?#]+)"],
+    },
 }
 
 IGNORED_COMPANIES = {
     "job", "jobs", "career", "careers", "hiring", "apply", "search", "post", "positions",
     "view", "index", "feed", "linkedin", "indeed", "glassdoor", "bayt", "baytcom", "bayt.com",
-    "gulftalent", "naukrigulf", "naukri", "monster", "tanqeeb", "dubai", "saudi", "riyadh",
+    "gulftalent", "naukrigulf", "naukri", "monster", "tanqeeb", "laimoon", "dubizzle",
+    "teamtailor", "personio", "rippling", "dubai", "saudi", "riyadh",
     "remote", "general", "fulltime", "parttime", "internship", "login", "register", "candidate",
     "applicant", "apply now", "click here", "read more", "view job", "work in", "vacancies",
     "vacancy", "openings", "opening", "requirements", "requirement", "salary", "salaries",
@@ -65,7 +78,7 @@ IGNORED_COMPANIES = {
 
 # Keep the regional seed plan broad enough to cover each source lane, but small
 # enough that verification/fetch work remains ahead of another search wave.
-# shortcut: 72 seed tasks, raise only when the search budget and verifier throughput grow.
+# shortcut: 96 seed tasks, covers more portals and ATS hubs while staying within budget.
 REGIONAL_INITIAL_TASK_LIMIT = 72
 # shortcut: 8 hit-driven tasks per search batch, raise only with queue backpressure.
 REGIONAL_DYNAMIC_TASK_LIMIT = 8
@@ -75,6 +88,10 @@ CORE_PUBLIC_ATS = (
     ("jobs.ashbyhq.com", "Ashby"),
     ("apply.workable.com", "Workable"),
     ("jobs.smartrecruiters.com", "SmartRecruiters"),
+    ("career.teamtailor.com", "Teamtailor"),
+    ("jobs.personio.com", "Personio"),
+    ("myworkdayjobs.com", "Workday"),
+    ("ats.rippling.com", "Rippling"),
 )
 
 
@@ -153,7 +170,14 @@ class DiscoveryEngine:
             "saudi", "ksa", "riyadh", "jeddah", "dammam", "khobar", "neom", "qatar", "doha",
             "gulf", "gcc", "mena", "middle east",
         )):
-            return [("naukrigulf.com", "NaukriGulf"), ("bayt.com", "Bayt"), ("gulftalent.com", "GulfTalent")]
+            return [
+                ("naukrigulf.com", "NaukriGulf"),
+                ("bayt.com", "Bayt"),
+                ("gulftalent.com", "GulfTalent"),
+                ("laimoon.com", "Laimoon"),
+                ("dubizzle.com", "Dubizzle"),
+                ("tanqeeb.com", "Tanqeeb"),
+            ]
         if any(k in low for k in ("india", "bengaluru", "bangalore", "hyderabad", "pune", "gurgaon", "gurugram", "noida", "mumbai", "delhi", "chennai")):
             return [("naukri.com", "Naukri"), ("instahyre.com", "Instahyre"), ("foundit.in", "Foundit")]
         if any(k in low for k in ("uk", "united kingdom", "london")):
@@ -184,13 +208,14 @@ class DiscoveryEngine:
     def _generate_regional_initial_tasks(self, state: Any, role: str, alt_role: Optional[str]) -> List[SearchTask]:
         regions = self._requested_regions(state)
         tasks: List[SearchTask] = []
-        lane_tasks: Dict[str, List[SearchTask]] = {
-            "regional_portals": [],
-            "major_boards": [],
-            "public_ats_careers": [],
-            "linkedin_hiring_posts": [],
-            "general_web": [],
+        lane_region_tasks: Dict[str, Dict[str, List[SearchTask]]] = {
+            lane: {region: [] for region in regions}
+            for lane in (
+                "regional_portals", "major_boards", "public_ats_careers",
+                "linkedin_hiring_posts", "general_web",
+            )
         }
+        total_created = 0
 
         def add(
             lane: str,
@@ -205,12 +230,17 @@ class DiscoveryEngine:
             hub: Optional[str] = None,
             **extra: Any,
         ) -> None:
+            nonlocal total_created
             metadata = {"lane": lane, "requested_region": region}
             if hub:
                 metadata["city"] = hub
             metadata.update(extra.pop("metadata", {}))
-            lane_tasks[lane].append(SearchTask(
-                id=f"r1_{prefix}_{sum(len(v) for v in lane_tasks.values())}",
+            if lane not in lane_region_tasks:
+                lane_region_tasks[lane] = {}
+            if region not in lane_region_tasks[lane]:
+                lane_region_tasks[lane][region] = []
+            lane_region_tasks[lane][region].append(SearchTask(
+                id=f"r1_{prefix}_{total_created}",
                 task_type=task_type,
                 query=query.strip(),
                 source=source,
@@ -223,6 +253,7 @@ class DiscoveryEngine:
                 metadata=metadata,
                 **extra,
             ))
+            total_created += 1
 
         for region in regions:
             hubs = self._region_hubs(region)
@@ -278,6 +309,13 @@ class DiscoveryEngine:
                     "linkedin.com", DiscoveredSourceType.COMMUNITY_FORUM, region, 2,
                     "Public LinkedIn recruiter/founder hiring-post discovery", hub=hub,
                 )
+            if hubs:
+                add(
+                    "linkedin_hiring_posts", "lipost_team", SearchTaskType.BOARD_SEARCH,
+                    f'site:linkedin.com/posts "we are hiring" {self._query_scope(role, region, hubs[0])}',
+                    "linkedin.com", DiscoveredSourceType.COMMUNITY_FORUM, region, 2,
+                    "Public LinkedIn team hiring announcement discovery", hub=hubs[0],
+                )
 
             # 5. General web-indexed job postings.  The alternate title is kept
             # in this lane rather than creating another source lane.
@@ -289,12 +327,23 @@ class DiscoveryEngine:
                     f"General web-indexed job search for {search_role}",
                 )
 
-        # Interleave lanes so a bounded plan cannot spend the whole budget on
+        # Interleave lanes and regions so a bounded plan cannot spend the whole budget on
         # portal pagination before ATS, LinkedIn, or web coverage is attempted.
         lane_order = (
             "regional_portals", "major_boards", "public_ats_careers",
             "linkedin_hiring_posts", "general_web",
         )
+        lane_tasks: Dict[str, List[SearchTask]] = {}
+        for lane in lane_order:
+            merged: List[SearchTask] = []
+            max_r = max((len(lane_region_tasks[lane].get(r, [])) for r in regions), default=0)
+            for idx in range(max_r):
+                for r in regions:
+                    r_list = lane_region_tasks[lane].get(r, [])
+                    if idx < len(r_list):
+                        merged.append(r_list[idx])
+            lane_tasks[lane] = merged
+
         positions = {lane: 0 for lane in lane_order}
         while len(tasks) < REGIONAL_INITIAL_TASK_LIMIT:
             added = False
@@ -317,13 +366,26 @@ class DiscoveryEngine:
         role_tokens = [t for t in re.findall(r"[a-z0-9]+", role.casefold()) if len(t) > 2]
         ai_role = any(term in role.casefold() for term in ("genai", "generative ai", "llm", "ai engineer", "machine learning"))
         if ai_role:
-            ai_terms = ("genai", "generative ai", "llm", "large language model", "machine learning", "deep learning", "ai engineer", "artificial intelligence")
+            ai_terms = (
+                "genai", "generative ai", "llm", "large language model", "machine learning",
+                "deep learning", "ai engineer", "artificial intelligence", "rag", "agentic",
+                "ai agent", "prompt engineer", "ai architect", "ai solution architect",
+                "copilot", "bedrock", "vertex ai", "vector database", "intelligent automation"
+            )
             if any(term in text for term in ai_terms):
                 return True
             return bool(
-                re.search(r"\bai\b", text)
-                and re.search(r"\b(engineer|developer|researcher|scientist|architect)\b", text)
+                (re.search(r"\bai\b", text) or re.search(r"\bgen\s*ai\b", text))
+                and re.search(r"\b(engineer|developer|researcher|scientist|architect|consultant|specialist|lead|manager)\b", text)
             )
+        from datahunt.agent.policies import ROLE_TAXONOMY
+        for family_key, family_spec in ROLE_TAXONOMY.items():
+            if any(re.search(r'\b' + re.escape(k) + r'\b', role.casefold()) for k in family_spec["keywords"]):
+                if any(dt in text for dt in family_spec["direct_titles"]):
+                    return True
+                if any(re.search(r'\b' + re.escape(k) + r'\b', text) for k in family_spec["keywords"]):
+                    return True
+
         return any(token in text for token in role_tokens)
 
     @staticmethod
@@ -568,8 +630,10 @@ class DiscoveryEngine:
         if is_gulf:
             if has_uae or is_generic_gulf:
                 li_post_tasks.append(f'site:linkedin.com/posts "hiring" "{role_clean}" Dubai')
+                li_post_tasks.append(f'site:linkedin.com/posts "hiring" "{role_clean}" "Abu Dhabi"')
             if has_saudi or is_generic_gulf:
                 li_post_tasks.append(f'site:linkedin.com/posts "hiring" "{role_clean}" Riyadh')
+                li_post_tasks.append(f'site:linkedin.com/posts "hiring" "{role_clean}" Jeddah')
         elif has_india:
             li_post_tasks.append(f'site:linkedin.com/posts "hiring" "{role_clean}" Bengaluru')
             li_post_tasks.append(f'site:linkedin.com/posts "hiring" "{role_clean}" India')
@@ -1181,8 +1245,20 @@ class DiscoveryEngine:
 
             # Round 5: Title & Skill Variations
             elif round_num == 5:
-                synonyms = ["Generative AI Engineer", "LLM Engineer", "AI Engineer", "Foundation Model Engineer", "Machine Learning Engineer"]
-                for syn in synonyms[:3]:
+                synonyms = [
+                    "Generative AI Engineer", "LLM Engineer", "AI Engineer",
+                    "Generative AI Solution Architect", "AI Solution Architect", "Enterprise AI Architect",
+                    "Agentic AI Engineer", "RAG Engineer", "Foundation Model Engineer", "Machine Learning Engineer"
+                ]
+                from datahunt.agent.policies import ROLE_TAXONOMY
+                role_low = role_clean.lower()
+                for family_key, family_spec in ROLE_TAXONOMY.items():
+                    if any(re.search(r'\b' + re.escape(k) + r'\b', role_low) for k in family_spec["keywords"]):
+                        fam_titles = [t.title() for t in family_spec["direct_titles"] if t.lower() != role_low]
+                        if fam_titles:
+                            synonyms = fam_titles
+                        break
+                for syn in synonyms[:4]:
                     if syn.lower() != role_clean.lower():
                         regions = requested_regions or [loc_str]
                         for region in regions:

@@ -4,6 +4,7 @@ from agent.orchestrator import ResearchOrchestrator
 from agent.job_agent import JobHuntAgent
 from agent.research_agent import DeepResearchAgent
 from agent.market_agent import MarketIntelAgent
+from agent.people_agent import PeopleScoutAgent
 
 def get_agent(mode: str = "research", model: Optional[str] = None) -> BaseAgent:
     """Factory helper to obtain an initialized specialized autonomous agent."""
@@ -13,6 +14,8 @@ def get_agent(mode: str = "research", model: Optional[str] = None) -> BaseAgent:
         return JobHuntAgent(orchestrator=orch, model=model)
     elif m == "market":
         return MarketIntelAgent(orchestrator=orch, model=model)
+    elif m == "people":
+        return PeopleScoutAgent(orchestrator=orch, model=model)
     else:
         return DeepResearchAgent(orchestrator=orch, model=model)
 
@@ -22,6 +25,7 @@ def list_agents():
         JobHuntAgent().get_info(),
         DeepResearchAgent().get_info(),
         MarketIntelAgent().get_info(),
+        PeopleScoutAgent().get_info(),
     ]
 
 __all__ = [
@@ -30,6 +34,7 @@ __all__ = [
     "JobHuntAgent",
     "DeepResearchAgent",
     "MarketIntelAgent",
+    "PeopleScoutAgent",
     "get_agent",
     "list_agents",
 ]

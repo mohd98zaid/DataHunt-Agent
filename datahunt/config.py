@@ -18,6 +18,8 @@ class Settings:
     NVIDIA_FALLBACK_MODEL: str = os.getenv("NVIDIA_FALLBACK_MODEL", "nvidia/nemotron-3.5-lightning-30b-a3b")
     NVIDIA_MAX_OUTPUT_TOKENS: int = int(os.getenv("NVIDIA_MAX_OUTPUT_TOKENS", "2048"))
     NVIDIA_TEMPERATURE: float = float(os.getenv("NVIDIA_TEMPERATURE", "0.1"))
+    NVIDIA_RPM: int = int(os.getenv("NVIDIA_RPM", "40"))          # max NVIDIA API calls per minute
+    SEARCH_BATCH_SIZE: int = int(os.getenv("SEARCH_BATCH_SIZE", "20"))  # search tasks dispatched in parallel per iteration
 
     # Gemini LLM Settings (kept intact for fallback / alternate provider)
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
@@ -56,6 +58,10 @@ class Settings:
     LANGSMITH_API_KEY: str = os.getenv("LANGSMITH_API_KEY", os.getenv("LANGCHAIN_API_KEY", ""))
     LANGSMITH_PROJECT: str = os.getenv("LANGSMITH_PROJECT", os.getenv("LANGCHAIN_PROJECT", "DataHunt"))
     LANGSMITH_TRACING: bool = os.getenv("LANGSMITH_TRACING", os.getenv("LANGCHAIN_TRACING_V2", "true")).lower() in ("true", "1", "yes")
+
+    # Run Defaults
+    DEFAULT_FRESHNESS: str = os.getenv("DEFAULT_FRESHNESS", "0sec")
+    DEFAULT_COLLECTION_MODE: str = os.getenv("DEFAULT_COLLECTION_MODE", "thorough")
 
     # API Security
     API_KEY: str = os.getenv("DATAHUNT_API_KEY", os.getenv("API_KEY", ""))
@@ -128,12 +134,189 @@ class Settings:
             "database_path": str(self.DATABASE_PATH),
             "export_dir": str(self.EXPORT_DIR),
             "max_run_seconds": self.MAX_RUN_SECONDS,
+            "drain_timeout_seconds": self.DRAIN_TIMEOUT_SECONDS,
             "max_iterations": self.MAX_ITERATIONS,
             "max_search_queries": self.MAX_SEARCH_QUERIES,
             "max_pages_fetched": self.MAX_PAGES_FETCHED,
             "max_response_bytes": self.MAX_RESPONSE_BYTES,
             "max_records": self.MAX_RECORDS,
+            "default_freshness": self.DEFAULT_FRESHNESS,
+            "default_collection_mode": self.DEFAULT_COLLECTION_MODE,
             "log_level": self.LOG_LEVEL,
+            "nvidia_rpm": self.NVIDIA_RPM,
+            "search_batch_size": self.SEARCH_BATCH_SIZE,
         }
 
+    def load_from_db(self) -> None:
+        """Load persistent settings overrides from SQLite database."""
+        try:
+            from datahunt.db.settings_repository import SettingsRepository
+            from datahunt.db.connection import get_connection
+            repo = SettingsRepository(conn_factory=lambda: get_connection(self.DATABASE_PATH))
+            overrides = repo.get_all()
+            for k, v in overrides.items():
+                target_key = k.upper()
+                if target_key in EDITABLE_SETTINGS:
+                    converter = EDITABLE_SETTINGS[target_key]
+                    try:
+                        if converter == bool:
+                            setattr(self, target_key, str(v).lower() in ("true", "1", "yes"))
+                        else:
+                            setattr(self, target_key, converter(v))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    def update_and_persist(self, updates: dict) -> dict:
+        """Atomically persist updates to database and synchronize to .env."""
+        from datahunt.db.settings_repository import SettingsRepository
+        from datahunt.db.connection import get_connection
+        repo = SettingsRepository(conn_factory=lambda: get_connection(self.DATABASE_PATH))
+        persisted = {}
+
+        for k, v in updates.items():
+            target_key = k.upper()
+            if target_key not in EDITABLE_SETTINGS:
+                continue
+
+            # Skip masked or empty API keys
+            if "KEY" in target_key and (not v or "***" in str(v) or "<unset>" in str(v)):
+                continue
+
+            converter = EDITABLE_SETTINGS[target_key]
+            try:
+                if converter == bool:
+                    val = str(v).lower() in ("true", "1", "yes")
+                else:
+                    val = converter(v)
+
+                # Validation guardrails
+                if target_key in ("MAX_RUN_SECONDS", "MAX_RECORDS", "MAX_SEARCH_QUERIES", "MAX_PAGES_FETCHED", "NVIDIA_RPM", "SEARCH_BATCH_SIZE") and val <= 0:
+                    continue
+                if target_key == "DRAIN_TIMEOUT_SECONDS" and val < 0:
+                    continue
+                if target_key == "LLM_PROVIDER" and val not in ("nvidia", "gemini"):
+                    continue
+                if target_key == "DEFAULT_FRESHNESS" and val not in ("0sec", "24h", "30d", "all_time"):
+                    continue
+                if target_key == "DEFAULT_COLLECTION_MODE" and val not in ("thorough", "fast"):
+                    continue
+
+                setattr(self, target_key, val)
+                persisted[target_key] = str(val)
+            except (ValueError, TypeError):
+                continue
+
+        if persisted:
+            repo.set_many(persisted)
+            self._sync_to_env_file(persisted)
+
+        return self.to_safe_dict()
+
+    def _sync_to_env_file(self, updates: dict) -> None:
+        """Synchronize key-value overrides into .env file for cold restart durability."""
+        env_path = Path(".env")
+        existing_lines = []
+        if env_path.exists():
+            try:
+                with open(env_path, "r", encoding="utf-8") as f:
+                    existing_lines = f.readlines()
+            except Exception:
+                existing_lines = []
+
+        updated_keys = set()
+        new_lines = []
+        for line in existing_lines:
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and "=" in stripped:
+                k, _ = stripped.split("=", 1)
+                k = k.strip().upper()
+                if k in updates:
+                    new_lines.append(f"{k}={updates[k]}\n")
+                    updated_keys.add(k)
+                    continue
+            new_lines.append(line)
+
+        for k, v in updates.items():
+            if k not in updated_keys:
+                if new_lines and not new_lines[-1].endswith("\n"):
+                    new_lines.append("\n")
+                new_lines.append(f"{k}={v}\n")
+
+        try:
+            with open(env_path, "w", encoding="utf-8") as f:
+                f.writelines(new_lines)
+        except Exception:
+            pass
+
+    def reset_to_defaults(self) -> dict:
+        """Clear database overrides and restore settings from default environment."""
+        try:
+            from datahunt.db.settings_repository import SettingsRepository
+            from datahunt.db.connection import get_connection
+            repo = SettingsRepository(conn_factory=lambda: get_connection(self.DATABASE_PATH))
+            repo.clear_all()
+        except Exception:
+            pass
+
+        # Clear synced overrides from .env if present
+        env_path = Path(".env")
+        if env_path.exists():
+            try:
+                with open(env_path, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                new_lines = [
+                    line for line in lines
+                    if not any(line.strip().startswith(f"{k}=") for k in EDITABLE_SETTINGS)
+                ]
+                with open(env_path, "w", encoding="utf-8") as f:
+                    f.writelines(new_lines)
+            except Exception:
+                pass
+
+        self.MAX_RUN_SECONDS = 1800
+        self.DRAIN_TIMEOUT_SECONDS = 600
+        self.MAX_RECORDS = 500
+        self.MAX_SEARCH_QUERIES = 150
+        self.MAX_PAGES_FETCHED = 300
+        self.LLM_PROVIDER = "nvidia"
+        self.NVIDIA_PRIMARY_MODEL = "openai/gpt-oss-20b"
+        self.NVIDIA_FALLBACK_MODEL = "nvidia/nemotron-3.5-lightning-30b-a3b"
+        self.NVIDIA_RPM = 40
+        self.SEARCH_BATCH_SIZE = 20
+        self.GEMINI_MODEL = "auto"
+        self.DEFAULT_FRESHNESS = "0sec"
+        self.DEFAULT_COLLECTION_MODE = "thorough"
+        self.LOG_LEVEL = "INFO"
+
+        return self.to_safe_dict()
+
+
+EDITABLE_SETTINGS = {
+    "MAX_RUN_SECONDS": int,
+    "DRAIN_TIMEOUT_SECONDS": int,
+    "MAX_RECORDS": int,
+    "MAX_SEARCH_QUERIES": int,
+    "MAX_PAGES_FETCHED": int,
+    "MAX_BROWSER_PAGES": int,
+    "MAX_ITERATIONS": int,
+    "LLM_PROVIDER": str,
+    "NVIDIA_PRIMARY_MODEL": str,
+    "NVIDIA_FALLBACK_MODEL": str,
+    "NVIDIA_API_KEY": str,
+    "NVIDIA_RPM": int,
+    "SEARCH_BATCH_SIZE": int,
+    "GEMINI_MODEL": str,
+    "GEMINI_API_KEY": str,
+    "DEFAULT_FRESHNESS": str,
+    "DEFAULT_COLLECTION_MODE": str,
+    "LOG_LEVEL": str,
+}
+
 settings = Settings()
+try:
+    settings.load_from_db()
+except Exception:
+    pass
+

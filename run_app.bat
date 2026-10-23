@@ -49,11 +49,7 @@ if %errorlevel% neq 0 (
     echo [WARN] Migration returned non-zero code. Continuing launch...
 )
 
-:: 5. Open Web Browser in background
-echo [INFO] Launching DataHunt Cybernetic Hub in default browser...
-start "" "http://127.0.0.1:8000"
-
-:: 6. Start FastAPI server via uvicorn
+:: 5. Start FastAPI server in the background
 echo.
 echo =====================================================================
 echo  DataHunt Server running at: http://127.0.0.1:8000
@@ -65,7 +61,25 @@ echo  Press Ctrl+C in this terminal to terminate the server.
 echo =====================================================================
 echo.
 
-python -m uvicorn datahunt.api:app --host 127.0.0.1 --port 8000 --reload --reload-dir datahunt --reload-dir frontend
+start "DataHunt API" /b cmd /c "python -m uvicorn datahunt.api:app --host 127.0.0.1 --port 8000 --reload --reload-dir datahunt --reload-dir frontend"
+
+:: 6. Wait for the server before opening the browser
+set /a attempts=0
+:wait_for_server
+powershell -NoProfile -Command "try { $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 http://127.0.0.1:8000/health; if ($r.StatusCode -eq 200) { exit 0 } } catch {} exit 1" >nul 2>&1
+if not errorlevel 1 goto server_ready
+set /a attempts+=1
+if %attempts% GEQ 30 goto server_timeout
+timeout /t 1 /nobreak >nul
+goto wait_for_server
+
+:server_ready
+echo [INFO] Server ready. Launching DataHunt Cybernetic Hub in default browser...
+start "" "http://127.0.0.1:8000"
+goto end
+
+:server_timeout
+echo [WARN] Server did not answer within 30 seconds. Open http://127.0.0.1:8000 manually when ready.
 goto end
 
 :no_python

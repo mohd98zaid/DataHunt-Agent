@@ -31,6 +31,7 @@ from datahunt.tools.market_analysis import (
     calculate_atr, calculate_volume_ratio, calculate_weekly_return,
     classify_freshness, classify_source_tier, score_market_candidate
 )
+from datahunt.agent.market_report import render_market_report
 
 
 class MarketDiscoveryEngine:
@@ -726,113 +727,12 @@ class MarketDiscoveryEngine:
         Period, Exchange, Market regime, Sector leaders, Top candidates
         Never promises performance or guarantees.
         """
-        now_str = datetime.now(timezone.utc).strftime("%d %b %Y")
-        horizon_label = intent.time_horizon.value.replace("_", " ").title()
-
-        regime_desc = {
-            MarketRegime.BULLISH: "Constructive momentum observed across benchmark indices with broad-based participation.",
-            MarketRegime.BEARISH: "Defensive positioning with selective rotation; benchmark indices facing overhead resistance.",
-            MarketRegime.SIDEWAYS: "Rangebound consolidation with selective stock-specific movement and index consolidation.",
-            MarketRegime.HIGH_VOLATILITY: "Heightened intraday volatility requiring cautious risk management.",
-            MarketRegime.MIXED: "Mixed sectoral signals with divergence between cyclicals and defensive counters.",
-        }.get(regime, "Consolidation regime.")
-
-        sector_leaders_text = ", ".join([f"{s['sector']} ({s['name']})" for s in top_sectors[:3]])
-
-        lines = [
-            f"# 📊 MARKET OUTLOOK: {intent.market}",
-            f"**Evaluation Period**: {horizon_label} ({now_str}) | **Exchange**: {intent.market} | **Asset Class**: {intent.asset_type.value.upper()}",
-            "",
-            "## 1. Market Regime & Macro Context",
-            f"- **Regime Assessment**: `{regime.value}` — {regime_desc}",
-            f"- **Benchmark Breadth**: {context_notes[0] if context_notes else 'Benchmark indices holding key support zones.'}",
-            f"- **Leading Sectors**: {sector_leaders_text}",
-            "",
-            "## 2. Top Monitored Candidates (Evidence-Backed Selection)",
-            "> **Disclaimer**: This intelligence briefing synthesizes publicly available market data, technical setups, and corporate events. It represents **evidence-backed technical and fundamental signals**, NOT an investment guarantee or certainty.",
-            "",
-        ]
-
-        if not records:
-            lines.append("No candidates satisfied multi-source evidence criteria during this research pass.")
-            return "\n".join(lines)
-
-        for idx, rec in enumerate(records, 1):
-            p_text = f"₹{rec.current_price:.2f}" if rec.current_price else "Live Exchange Quotes"
-            w_text = f"{rec.change_1w:+.2f}%" if rec.change_1w is not None else "Multi-day consolidation"
-            vol_ratio_text = f"{rec.volume_ratio:.2f}x" if rec.volume_ratio else "Normal Volume"
-            sector_name = rec.sector or "Diversified"
-
-            lines.append(f"### {idx}. {rec.company_name} (`{rec.symbol}`)")
-            lines.append(f"- **Exchange / Sector**: {rec.exchange} | {sector_name}")
-            lines.append(f"- **Current Quote / Trend**: {p_text} (1W: {w_text}) | Volume Activity: `{vol_ratio_text}`")
-            lines.append(f"- **Signal Direction**: `{rec.signal_direction}` | **Deterministic Score**: `{rec.signal_score}/100` | **Evidence Confidence**: `{rec.evidence_confidence}`")
-            lines.append("")
-
-            lines.append("**Why It Appears (Supporting Evidence)**:")
-            if rec.bullish_evidence:
-                for ev in rec.bullish_evidence[:3]:
-                    lines.append(f"- {ev.strip()}")
-            else:
-                lines.append(f"- Positive relative strength and momentum setup identified in {rec.exchange} trading scans.")
-            lines.append("")
-
-            lines.append("**Technical & Quantitative Setup**:")
-            tech_items = []
-            if rec.technical_signals.get("rsi"):
-                tech_items.append(f"RSI(14): {rec.technical_signals['rsi']}")
-            if rec.technical_signals.get("sma20"):
-                tech_items.append(f"SMA(20): ₹{rec.technical_signals['sma20']}")
-            if not tech_items:
-                tech_items.append("Price consolidating above near-term moving average support; positive volume accumulation.")
-            lines.append(f"- {', '.join(tech_items)}")
-            lines.append("")
-
-            lines.append("**Fundamentals & Corporate Catalysts**:")
-            fund_items = []
-            if rec.pe_ratio:
-                fund_items.append(f"P/E: {rec.pe_ratio:.1f}")
-            if rec.revenue_growth:
-                fund_items.append(f"Revenue Growth: {rec.revenue_growth:+.1f}%")
-            if not fund_items:
-                fund_items.append("Established market presence; recent corporate operational disclosures.")
-            lines.append(f"- {', '.join(fund_items)}")
-            lines.append("")
-
-            lines.append("**Counter-Evidence & Key Risk Factors**:")
-            if rec.risk_factors:
-                for rf in rec.risk_factors[:2]:
-                    lines.append(f"- ⚠️ {rf.strip()}")
-            else:
-                lines.append("- ⚠️ Broader market correction risk and near-term technical overhead resistance.")
-            lines.append("")
-
-            lines.append("**Evidence Sources & Provenance**:")
-            src_list = list(set([e.source_name for e in rec.source_evidence if e.source_name]))
-            if not src_list:
-                src_list = ["NSE India Official", "Financial Media Disclosures"]
-            lines.append(f"- Verified across: {', '.join(src_list[:4])}")
-            lines.append("")
-            lines.append("---")
-            lines.append("")
-
-        if watchlist:
-            lines.append("## 3. Watchlist / Insufficient Corroborating Evidence")
-            lines.append("> **Note**: These counters were identified in market scans but lacked sufficient multi-source evidence, disclosures, or confirmed volume breakout to qualify for the primary list.")
-            lines.append("")
-            for w_cand in watchlist[:5]:
-                lines.append(f"- **{w_cand.company_name}** (`{w_cand.symbol}`): Signal Score `{w_cand.signal_score:.1f}`, Confidence `{w_cand.evidence_confidence}` — Limited multi-source confirmation.")
-            lines.append("")
-            lines.append("---")
-            lines.append("")
-            lines.append("## 4. Research Coverage & Provenance Matrix")
-        else:
-            lines.append("## 3. Research Coverage & Provenance Matrix")
-
-        lines.append(f"- **Exchanges Monitored**: {', '.join(coverage.exchanges_checked)}")
-        lines.append(f"- **Total Discovered Candidates**: {coverage.candidate_count}")
-        lines.append(f"- **Symbol-Validated Candidates**: {coverage.validated_candidate_count}")
-        lines.append(f"- **Deeply Researched**: {coverage.deeply_researched_count}")
-        lines.append(f"- **Stop Condition Triggered**: `{coverage.stop_reason or 'COVERAGE_COMPLETE'}`")
-
-        return "\n".join(lines)
+        return render_market_report(
+            intent=intent,
+            coverage=coverage,
+            regime=regime,
+            context_notes=context_notes,
+            top_sectors=top_sectors,
+            records=records,
+            watchlist=watchlist,
+        )

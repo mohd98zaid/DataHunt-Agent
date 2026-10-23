@@ -28,11 +28,15 @@ GEO_ALIAS_GROUPS: Dict[str, List[str]] = {
     "saudi": [
         "saudi", "saudi arabia", "ksa", "riyadh", "jeddah", "dammam", "khobar", "dhahran",
         "neom", "mecca", "medina", "makkah", "jubail", "yanbu", "tabuk", "taif", "abha",
-        "al khobar", "qassim", "hail", "jizan", "najran"
+        "al khobar", "qassim", "hail", "jizan", "najran", "sa",
+        "السعودية", "المملكة العربية السعودية", "الرياض", "جدة", "الدمام", "الخبر", "الظهران",
+        "نيوم", "مكة", "المدينة", "ينبع", "تبوك", "القصيم"
     ],
     "uae": [
         "uae", "united arab emirates", "emirates", "dubai", "abu dhabi", "abu-dhabi",
-        "sharjah", "ajman", "ras al khaimah", "fujairah", "umm al quwain", "al ain"
+        "sharjah", "ajman", "ras al khaimah", "fujairah", "umm al quwain", "al ain", "ae",
+        "الإمارات", "الامارات", "أبو ظبي", "أبوظبي", "ابوظبي", "دبي", "الشارقة", "عجمان",
+        "رأس الخيمة", "الفجيرة", "أم القيوين", "العين"
     ],
     "egypt": ["egypt", "cairo", "alexandria", "giza"],
     "qatar": ["qatar", "doha"],
@@ -59,7 +63,9 @@ GEO_ALIAS_GROUPS: Dict[str, List[str]] = {
     ],
     "eu": [
         "germany", "france", "netherlands", "ireland", "spain", "italy", "berlin",
-        "paris", "amsterdam", "dublin", "europe"
+        "paris", "amsterdam", "dublin", "europe", "sweden", "gothenburg", "stockholm",
+        "poland", "warsaw", "switzerland", "zurich", "geneva", "belgium", "brussels",
+        "austria", "vienna", "norway", "oslo", "denmark", "copenhagen", "finland", "helsinki"
     ],
     "remote": ["remote", "worldwide", "global", "anywhere", "work from home", "wfh"],
 }
@@ -168,9 +174,13 @@ def match_location(requested: Optional[Any], actual: Optional[str], remote_ok: b
         # Fuzzy fallback: if user asked for a GCC/Saudi/UAE location and job says 'Gulf', 'Middle East', etc.
         _gcc_req = req_clusters & {"saudi", "uae", "qatar", "kuwait", "bahrain", "oman", "gcc", "mena"}
         if _gcc_req:
-            _gcc_hints = {"gulf", "gcc", "mena", "middle east", "arabian gulf", "gulf region", "gulf countries",
-                          "saudi", "ksa", "uae", "emirates", "qatar", "kuwait", "bahrain", "oman",
-                          "riyadh", "dubai", "abu dhabi", "doha", "sharjah", "jeddah"}
+            _gcc_hints = {
+                "gulf", "gcc", "mena", "middle east", "arabian gulf", "gulf region", "gulf countries",
+                "saudi", "ksa", "uae", "emirates", "qatar", "kuwait", "bahrain", "oman",
+                "riyadh", "dubai", "abu dhabi", "doha", "sharjah", "jeddah",
+                "ae", "sa", "السعودية", "الامارات", "الإمارات", "أبو ظبي", "أبوظبي", "ابوظبي",
+                "دبي", "الرياض", "جدة", "الدمام"
+            }
             if any(hint in act_lower for hint in _gcc_hints):
                 return MatchStatus.MATCH, f"GCC/MENA region hint matched requested location: '{actual}'"
         return MatchStatus.UNKNOWN, f"Could not classify job location: '{actual}'"
@@ -353,6 +363,136 @@ DISQUALIFYING_JOB_FAMILIES = [
     ]),
 ]
 
+ROLE_TAXONOMY: Dict[str, Dict[str, Any]] = {
+    "cloud": {
+        "keywords": ["cloud", "aws", "azure", "gcp", "google cloud", "multi-cloud"],
+        "direct_titles": [
+            "cloud engineer", "cloud architect", "cloud solutions architect", "aws solutions architect",
+            "azure solutions architect", "google cloud architect", "cloud infrastructure engineer",
+            "cloud platform engineer", "cloud security engineer", "cloud systems engineer",
+            "cloud migration consultant", "cloud devops engineer", "principal cloud architect",
+            "cloud data and ai architect", "cloud network engineer"
+        ],
+        "related_roles": ["devops engineer", "site reliability engineer", "platform engineer", "infrastructure engineer"],
+    },
+    "devops": {
+        "keywords": ["devops", "sre", "site reliability", "platform engineer", "infrastructure"],
+        "direct_titles": [
+            "devops engineer", "site reliability engineer", "sre", "platform engineer",
+            "cloud infrastructure engineer", "devsecops engineer", "build and release engineer",
+            "release engineer", "infrastructure engineer", "cloud operations engineer",
+            "production engineer", "systems reliability engineer", "devops architect"
+        ],
+        "related_roles": ["cloud engineer", "cloud architect", "systems administrator"],
+    },
+    "data_engineering": {
+        "keywords": ["data engineer", "data engineering", "big data", "etl", "data warehouse", "analytics engineer", "data platform"],
+        "direct_titles": [
+            "data engineer", "big data engineer", "data platform engineer", "analytics engineer",
+            "etl developer", "data warehouse architect", "data infrastructure engineer",
+            "data pipeline developer", "database engineer", "bi engineer", "data architect",
+            "principal data engineer", "data systems engineer"
+        ],
+        "related_roles": ["data scientist", "database administrator", "software engineer"],
+    },
+    "cybersecurity": {
+        "keywords": ["cybersecurity", "cyber security", "infosec", "information security", "soc analyst", "penetration tester", "appsec", "secops"],
+        "direct_titles": [
+            "cybersecurity engineer", "cyber security engineer", "information security engineer",
+            "infosec engineer", "security architect", "soc analyst", "penetration tester",
+            "ethical hacker", "appsec engineer", "cloud security architect", "cloud security engineer",
+            "vulnerability management specialist", "incident response engineer", "security consultant",
+            "cybersecurity architect", "information security manager"
+        ],
+        "related_roles": ["systems engineer", "network engineer"],
+    },
+    "data_science": {
+        "keywords": ["data scientist", "data science", "applied scientist", "quantitative researcher", "statistician", "decision scientist"],
+        "direct_titles": [
+            "data scientist", "machine learning scientist", "applied scientist",
+            "data science consultant", "lead data scientist", "quantitative researcher",
+            "decision scientist", "research scientist - data science", "statistician",
+            "principal data scientist", "ai/data scientist"
+        ],
+        "related_roles": ["machine learning engineer", "data engineer", "data analyst"],
+    },
+    "machine_learning": {
+        "keywords": ["machine learning", "ml engineer", "deep learning", "computer vision", "nlp", "mlops"],
+        "direct_titles": [
+            "machine learning engineer", "ml engineer", "deep learning engineer",
+            "computer vision engineer", "nlp engineer", "mlops engineer",
+            "ml platform engineer", "machine learning architect", "applied ml scientist",
+            "ai/ml engineer", "ai/ml solution architect", "azure machine learning architect",
+            "principal machine learning engineer"
+        ],
+        "related_roles": ["ai engineer", "data scientist", "data engineer"],
+    },
+    "backend": {
+        "keywords": ["backend", "back end", "server engineer", "api engineer", "distributed systems"],
+        "direct_titles": [
+            "backend engineer", "backend developer", "server engineer", "api engineer",
+            "api developer", "distributed systems engineer", "microservices engineer",
+            "java backend developer", "python backend engineer", "golang engineer",
+            "node.js backend developer", "backend software engineer", "principal backend engineer"
+        ],
+        "related_roles": ["software engineer", "full stack engineer", "systems engineer"],
+    },
+    "frontend": {
+        "keywords": ["frontend", "front end", "ui engineer", "react developer", "web developer", "ui/ux developer"],
+        "direct_titles": [
+            "frontend engineer", "frontend developer", "ui engineer", "react developer",
+            "next.js developer", "angular developer", "vue.js developer", "web application developer",
+            "design systems engineer", "frontend software engineer", "lead frontend developer"
+        ],
+        "related_roles": ["full stack engineer", "web developer", "ui/ux engineer"],
+    },
+    "full_stack": {
+        "keywords": ["full stack", "fullstack", "full-stack"],
+        "direct_titles": [
+            "full stack engineer", "full stack developer", "fullstack developer",
+            "full-stack software engineer", "ai full-stack developer", "lead full stack engineer"
+        ],
+        "related_roles": ["software engineer", "backend engineer", "frontend engineer"],
+    },
+    "mobile": {
+        "keywords": ["mobile developer", "mobile engineer", "ios developer", "android developer", "flutter", "react native"],
+        "direct_titles": [
+            "mobile developer", "mobile engineer", "ios developer", "android developer",
+            "flutter developer", "react native developer", "swift developer", "kotlin developer",
+            "mobile software engineer", "mobile solutions architect", "lead mobile engineer"
+        ],
+        "related_roles": ["frontend engineer", "software engineer"],
+    },
+    "qa": {
+        "keywords": ["qa engineer", "quality assurance", "sdet", "test automation", "software tester"],
+        "direct_titles": [
+            "qa engineer", "sdet", "software development engineer in test", "test automation engineer",
+            "quality assurance engineer", "quality engineer", "performance test engineer",
+            "automation test specialist", "lead qa engineer", "qa test architect"
+        ],
+        "related_roles": ["software engineer", "devops engineer"],
+    },
+    "product_management": {
+        "keywords": ["product manager", "product management", "product owner", "technical product manager"],
+        "direct_titles": [
+            "product manager", "technical product manager", "product owner",
+            "group product manager", "principal product manager", "associate product manager",
+            "director of product management", "head of product", "ai product manager", "genai product manager"
+        ],
+        "related_roles": ["program manager", "product operations"],
+    },
+    "solutions_architecture": {
+        "keywords": ["solutions architect", "solution architect", "enterprise architect", "technical architect", "systems architect"],
+        "direct_titles": [
+            "solutions architect", "solution architect", "enterprise architect",
+            "technical architect", "systems architect", "infrastructure architect",
+            "software architect", "domain architect", "integration architect",
+            "cloud solutions architect", "ai solution architect", "principal solutions architect"
+        ],
+        "related_roles": ["principal engineer", "engineering manager", "lead architect"],
+    },
+}
+
 
 def is_aggregator_or_count_title(title: Optional[str]) -> bool:
     """
@@ -437,6 +577,12 @@ def match_title_relevance(
             if not any(bt in req_t for bt in bad_terms):
                 for bt in bad_terms:
                     if re.search(r'\b' + re.escape(bt) + r'\b', job_t):
+                        # Allow AI/GenAI Full-Stack roles
+                        if family_name == "full_stack" and any(k in job_t for k in ("ai full", "genai full", "generative ai full", "llm full", "ai-full", "ai/ml full")):
+                            continue
+                        # Allow AI/GenAI Product Manager roles when user query is broad GenAI rather than specific engineering
+                        if family_name == "product_management" and not any(eng in req_t for eng in ("engineer", "developer", "programmer", "scientist")) and any(k in job_t for k in ("ai product", "genai product", "generative ai product")):
+                            continue
                         return (
                             MatchStatus.MISMATCH,
                             0.0,
@@ -448,19 +594,23 @@ def match_title_relevance(
         STRONG_GENAI_TERMS = [
             "genai", "gen ai", "generative ai", "generative-ai", "llm", "large language model",
             "large language models", "foundation model", "foundation models", "prompt engineer",
-            "prompt engineering", "rag engineer", "agentic", "ai agent", "ai agents",
+            "prompt engineering", "rag", "agentic", "ai agent", "ai agents",
             "llmops", "llm ops", "llm engineer", "llm developer", "llm researcher",
+            "copilot", "bedrock", "openai", "vertex ai", "multimodal",
+            "conversational ai", "vector database", "vector search",
+            "intelligent automation", "knowledge engineering",
         ]
-        if any(term in job_t for term in STRONG_GENAI_TERMS):
+        if any(re.search(r'\b' + re.escape(term) + r'\b', job_t) for term in STRONG_GENAI_TERMS):
             return MatchStatus.MATCH, 1.0, f"Direct GenAI title match: '{job_title}'"
 
         AI_ENG_TERMS = [
             "applied ai", "ai engineer", "artificial intelligence engineer", "ai platform engineer",
             "ai developer", "ai software engineer", "ai solutions engineer", "ai solutions architect",
-            "ai architect", "ai consultant", "artificial intelligence consultant", "generative ai consultant",
-            "ai technical lead", "ai lead", "head of ai", "director of ai", "ai specialist",
-            "ai application developer", "ai infrastructure engineer", "ai systems engineer", "ai research engineer",
-            "ai scientist", "ai researcher", "ai research scientist",
+            "ai solution architect", "ai architect", "ai consultant", "artificial intelligence consultant",
+            "generative ai consultant", "ai technical lead", "ai lead", "head of ai", "director of ai",
+            "ai specialist", "ai application developer", "ai infrastructure engineer", "ai systems engineer",
+            "ai research engineer", "ai scientist", "ai researcher", "ai research scientist",
+            "ai product manager", "genai product manager",
         ]
         if any(term in job_t for term in AI_ENG_TERMS):
             return MatchStatus.MATCH, 0.95, f"AI engineering role matches GenAI request: '{job_title}'"
@@ -468,6 +618,7 @@ def match_title_relevance(
         ML_TERMS = [
             "machine learning engineer", "ml engineer", "software engineer - ai", "deep learning engineer",
             "nlp engineer", "natural language processing", "computer vision engineer", "ml platform engineer",
+            "machine learning platform engineer", "machine learning architect", "azure machine learning",
             "mlops engineer", "applied scientist", "research scientist - ai", "ai researcher",
             "ml researcher", "nlp researcher", "ml scientist", "applied machine learning",
         ]
@@ -475,10 +626,10 @@ def match_title_relevance(
             return MatchStatus.MATCH, 0.85, f"Related ML/AI role aligns with GenAI request: '{job_title}'"
 
         # Legitimate whole-word AI role pattern (e.g. "Software Engineer, AI" or "Staff Software Engineer, AI")
-        if re.search(r'\bai\b', job_t) or re.search(r'\bgen\s*ai\b', job_t):
+        if re.search(r'\bai\b', job_t) or re.search(r'\bgen\s*ai\b', job_t) or 'artificial intelligence' in job_t:
             # Must still have a technical role marker
-            if any(term in job_t for term in ("engineer", "developer", "architect", "programmer", "scientist", "consultant", "specialist", "researcher")):
-                return MatchStatus.MATCH, 0.85, f"AI-focused technical role matches GenAI request: '{job_title}'"
+            if any(term in job_t for term in ("engineer", "developer", "architect", "programmer", "scientist", "consultant", "specialist", "researcher", "lead", "manager")):
+                return MatchStatus.MATCH, 0.95, f"AI-focused technical role matches GenAI request: '{job_title}'"
 
         # LLM/ML fallback: "machine learning" or "deep learning" anywhere in title
         if re.search(r'\b(machine learning|deep learning|neural network|nlp|natural language)\b', job_t):
@@ -496,6 +647,27 @@ def match_title_relevance(
                 return MatchStatus.MATCH, 0.85, f"Title '{job_title}' supported by GenAI responsibilities in job description"
 
         return MatchStatus.MISMATCH, 0.0, f"Title '{job_title}' does not match requested GenAI role"
+
+    # 2.5 Generalized Role Family Semantic Matching
+    # Maps any requested domain (Cloud, DevOps, Data Engineering, Cybersecurity, Backend, Frontend, Mobile, QA, Product, Solutions)
+    # to all of its associated solution architects, leads, specialists, and engineering titles.
+    for family_key, family_spec in ROLE_TAXONOMY.items():
+        if any(re.search(r'\b' + re.escape(k) + r'\b', req_t) for k in family_spec["keywords"]):
+            # Check direct domain titles
+            if any(dt in job_t for dt in family_spec["direct_titles"]):
+                return MatchStatus.MATCH, 1.0, f"Direct {family_key} role match: '{job_title}'"
+            # Check domain keywords combined with functional role markers
+            has_family_keyword = any(re.search(r'\b' + re.escape(k) + r'\b', job_t) for k in family_spec["keywords"])
+            if has_family_keyword:
+                ROLE_MARKERS = (
+                    "architect", "engineer", "developer", "lead", "principal", "consultant",
+                    "specialist", "scientist", "manager", "administrator", "analyst"
+                )
+                if any(rm in job_t for rm in ROLE_MARKERS):
+                    return MatchStatus.MATCH, 0.95, f"{family_key} domain role aligns with request: '{job_title}'"
+            # Check related/adjacent roles within family
+            if any(rr in job_t for rr in family_spec.get("related_roles", [])):
+                return MatchStatus.MATCH, 0.85, f"Related {family_key} role aligns with request: '{job_title}'"
 
     # 3. Check alternative titles
     all_targets = [req_t]
@@ -748,6 +920,8 @@ class QualificationPolicy:
                     "gulf", "gcc", "mena", "middle east", "gulf region", "arabian",
                     "saudi", "ksa", "uae", "emirates", "dubai", "abu dhabi", "riyadh",
                     "qatar", "kuwait", "bahrain", "oman", "doha", "sharjah", "jeddah",
+                    "ae", "sa", "السعودية", "الامارات", "الإمارات", "أبو ظبي", "أبوظبي", "ابوظبي",
+                    "دبي", "الرياض", "جدة", "الدمام",
                 )
                 _is_region_match = any(hint in _loc_lower for hint in _gcc_mena_hints)
                 is_agnostic_remote = (

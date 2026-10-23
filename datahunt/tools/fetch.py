@@ -391,7 +391,7 @@ class FetchTool:
                 return cached['result']
 
         try:
-            while redirect_count <= self.max_redirects:
+            while redirect_count < self.max_redirects:
                 # 1. Strict SSRF check before resolving or connecting to target
                 cleaned_url, validated_ip = validate_url_ssrf(current_url)
                 hostname = urlparse(cleaned_url).hostname
@@ -414,7 +414,10 @@ class FetchTool:
                 }
                 
                 with httpx.Client(timeout=timeout, follow_redirects=False, headers=headers) as client:
-                    response = client.get(cleaned_url)
+                    response = client.send(
+                        client.build_request("GET", cleaned_url),
+                        stream=True,
+                    )
 
                     # Check for redirect
                     if response.is_redirect:
@@ -533,9 +536,25 @@ class FetchTool:
                         )
 
                     # Read body with max_bytes enforcement
-                    body_bytes = response.content
-                    if len(body_bytes) > self.max_bytes:
-                        body_bytes = body_bytes[:self.max_bytes]
+                    body = bytearray()
+                    truncated_bytes = False
+                    try:
+                        truncated_bytes = int(response.headers.get("Content-Length", "0")) > self.max_bytes
+                    except (TypeError, ValueError):
+                        pass
+                    chunk_size = min(64 * 1024, max(self.max_bytes + 1, 1))
+                    for chunk in response.iter_bytes(chunk_size=chunk_size):
+                        remaining = self.max_bytes - len(body)
+                        if remaining <= 0:
+                            truncated_bytes = True
+                            break
+                        if len(chunk) > remaining:
+                            body.extend(chunk[:remaining])
+                            truncated_bytes = True
+                            break
+                        body.extend(chunk)
+                    body_bytes = bytes(body)
+                    if truncated_bytes:
                         policy_flags.append("truncated_bytes")
 
                     content_hash = hashlib.sha256(body_bytes).hexdigest()

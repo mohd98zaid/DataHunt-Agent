@@ -787,10 +787,8 @@ function renderZeroResultDiagnostics(runData) {
   `;
 }
 
-  const activeRunId = runData?.run_id || window.currentRunId || "";
-  const trackerUrl = (activeRunId && validRecords.length > 0)
-    ? `/jobs.html?run_id=${encodeURIComponent(activeRunId)}`
-    : '/jobs.html';
+  // Point to cumulative tracker view so new search results append to prior runs
+  const trackerUrl = '/jobs.html';
   // Note: cockpit-header-tracker-link stays pointing to /jobs.html globally so user is never trapped in an empty run filter
 
   // 1. Configure Header & Tab Labels based on Mode

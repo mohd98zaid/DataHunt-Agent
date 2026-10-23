@@ -169,8 +169,23 @@ def _safe_get(url: str, timeout: float = 12.0,
     if extra_headers:
         headers.update(extra_headers)
     try:
-        with httpx.Client(timeout=timeout, follow_redirects=True, headers=headers) as client:
-            resp = client.get(cleaned_url)
+        with httpx.Client(timeout=timeout, follow_redirects=False, headers=headers) as client:
+            redirect_count = 0
+            while True:
+                resp = client.get(cleaned_url)
+                if resp.status_code not in (301, 302, 303, 307, 308):
+                    break
+                if redirect_count >= 20:
+                    raise httpx.TooManyRedirects(
+                        "Exceeded maximum allowed redirects.",
+                        request=resp.request,
+                    )
+                location = resp.headers.get("Location")
+                if not location:
+                    return resp
+                redirect_count += 1
+                redirect_url = urljoin(cleaned_url, location)
+                cleaned_url, _ = validate_url_ssrf(redirect_url)
             if resp.status_code < 400:
                 return resp
 
@@ -1042,6 +1057,12 @@ def _dubizzle_listing_url(role: str, location: str) -> str:
     return f"https://uae.dubizzle.com/jobs/?q={role_enc}"
 
 
+def _tanqeeb_listing_url(role: str, location: str) -> str:
+    role_enc = re.sub(r"\s+", "-", role.lower().strip())
+    loc_slug = "saudi-arabia" if any(k in (location or "").lower() for k in ("saudi", "riyadh", "jeddah", "dammam")) else "uae"
+    return f"https://{loc_slug}.tanqeeb.com/jobs/search?keywords={role_enc}"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Career Page Crawler
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1393,6 +1414,12 @@ class MultiSourceCrawler:
                     _dubizzle_listing_url(primary_role, hub_loc),
                     [r"/jobs/[a-z0-9_-]+-\d+"],
                 ),
+                (
+                    "tanqeeb",
+                    "Tanqeeb",
+                    _tanqeeb_listing_url(primary_role, hub_loc),
+                    [r"/jobs/[a-z0-9_-]+", r"/job/\d+"],
+                ),
             ])
 
             def _crawl_regional(board_id, board_name, url, patterns):
@@ -1514,6 +1541,8 @@ class MultiSourceCrawler:
                     "url": job.url,
                     "title": job.title or f"Job at {job.company}",
                     "snippet": job.description[:200] if job.description else "",
+                    "company": job.company,
+                    "location": job.location,
                     "source": job.source_name,
                     "source_id": job.source_id,
                     "crawled": True,

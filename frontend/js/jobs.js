@@ -192,6 +192,27 @@ function setupEventListeners() {
       }
     });
   }
+
+  // Bottom & Top Pagination Button Listeners
+  const prevBtn = document.getElementById("page-prev-btn");
+  if (prevBtn) prevBtn.addEventListener("click", () => changePage(-1));
+  const nextBtn = document.getElementById("page-next-btn");
+  if (nextBtn) nextBtn.addEventListener("click", () => changePage(1));
+  const topPrevBtn = document.getElementById("top-page-prev-btn");
+  if (topPrevBtn) topPrevBtn.addEventListener("click", () => changePage(-1));
+  const topNextBtn = document.getElementById("top-page-next-btn");
+  if (topNextBtn) topNextBtn.addEventListener("click", () => changePage(1));
+
+  // Keyboard navigation for pagination (Left/Right arrow or [ / ])
+  document.addEventListener("keydown", (e) => {
+    const tag = (e.target.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || tag === "select") return;
+    if (e.key === "ArrowLeft" || e.key === "[") {
+      changePage(-1);
+    } else if (e.key === "ArrowRight" || e.key === "]") {
+      changePage(1);
+    }
+  });
 }
 
 function getDropdownConfig(type) {
@@ -460,7 +481,7 @@ function updateRunScopeBanner(runId) {
 window.clearRunScopeFilter = function() {
   const url = new URL(window.location);
   url.searchParams.delete("run_id");
-  url.searchParams.set("all", "1");
+  url.searchParams.delete("all");
   window.history.pushState({}, "", url);
   loadJobs(null);
 };
@@ -473,22 +494,7 @@ async function loadJobs(overrideRunId) {
 
   try {
     const urlParams = new URLSearchParams(window.location.search);
-    let runId = overrideRunId !== undefined ? overrideRunId : urlParams.get("run_id");
-
-    // If no run_id specified and user has not explicitly requested all jobs, default to latest active/completed run
-    if (!runId && !urlParams.has("all")) {
-      try {
-        const latestRes = await fetch("/runs/latest");
-        if (latestRes.ok) {
-          const latestRun = await latestRes.json();
-          if (latestRun && latestRun.id) {
-            runId = latestRun.id;
-          }
-        }
-      } catch (e) {
-        console.debug("Could not determine latest run:", e);
-      }
-    }
+    let runId = overrideRunId !== undefined ? overrideRunId : (urlParams.get("run_id") || null);
 
     updateRunScopeBanner(runId);
 
@@ -885,6 +891,8 @@ function renderTable(jobs) {
 
   if (!jobs || jobs.length === 0) {
     if (paginationBar) paginationBar.style.display = "none";
+    const topPag = document.getElementById("top-pagination-controls");
+    if (topPag) topPag.style.display = "none";
     const searchInput = document.getElementById("job-search-input");
     const qVal = searchInput ? searchInput.value.trim() : "";
     const urlParams = new URLSearchParams(window.location.search);
@@ -945,7 +953,7 @@ function renderTable(jobs) {
   const pageJobs = jobs.slice(startIdx, endIdx);
 
   if (paginationBar) {
-    paginationBar.style.display = "flex";
+    paginationBar.style.display = totalPages > 0 ? "flex" : "none";
     const paginationInfo = document.getElementById("pagination-info");
     if (paginationInfo) paginationInfo.textContent = `Showing ${startIdx + 1}–${endIdx} of ${jobs.length} jobs`;
     const pageDisplay = document.getElementById("page-current-display");
@@ -954,6 +962,41 @@ function renderTable(jobs) {
     if (prevBtn) prevBtn.disabled = (currentPage <= 1);
     const nextBtn = document.getElementById("page-next-btn");
     if (nextBtn) nextBtn.disabled = (currentPage >= totalPages);
+
+    const pageNumbersWrap = document.getElementById("page-numbers-wrap");
+    if (pageNumbersWrap) {
+      let pagesHtml = "";
+      const maxButtons = 7;
+      let startP = Math.max(1, currentPage - 3);
+      let endP = Math.min(totalPages, startP + maxButtons - 1);
+      if (endP - startP < maxButtons - 1) {
+        startP = Math.max(1, endP - maxButtons + 1);
+      }
+      if (startP > 1) {
+        pagesHtml += `<button type="button" class="page-num-btn" onclick="goToPage(1)">1</button>`;
+        if (startP > 2) pagesHtml += `<span class="page-num-ellipsis">…</span>`;
+      }
+      for (let p = startP; p <= endP; p++) {
+        const isActive = (p === currentPage);
+        pagesHtml += `<button type="button" class="page-num-btn ${isActive ? 'active' : ''}" onclick="goToPage(${p})" ${isActive ? 'disabled' : ''}>${p}</button>`;
+      }
+      if (endP < totalPages) {
+        if (endP < totalPages - 1) pagesHtml += `<span class="page-num-ellipsis">…</span>`;
+        pagesHtml += `<button type="button" class="page-num-btn" onclick="goToPage(${totalPages})">${totalPages}</button>`;
+      }
+      pageNumbersWrap.innerHTML = pagesHtml;
+    }
+  }
+
+  const topPagination = document.getElementById("top-pagination-controls");
+  if (topPagination) {
+    topPagination.style.display = totalPages > 1 ? "inline-flex" : "none";
+    const topPageDisplay = document.getElementById("top-page-current-display");
+    if (topPageDisplay) topPageDisplay.textContent = `${currentPage} / ${totalPages}`;
+    const topPrevBtn = document.getElementById("top-page-prev-btn");
+    if (topPrevBtn) topPrevBtn.disabled = (currentPage <= 1);
+    const topNextBtn = document.getElementById("top-page-next-btn");
+    if (topNextBtn) topNextBtn.disabled = (currentPage >= totalPages);
   }
 
   let html = "";
@@ -1074,13 +1117,27 @@ function changePage(delta) {
   if (newPage >= 1 && newPage <= totalPages) {
     currentPage = newPage;
     renderTable(filteredJobs);
-    const tableContainer = document.querySelector(".table-responsive");
-    if (tableContainer) {
-      tableContainer.scrollTop = 0;
+    const scrollArea = document.querySelector(".table-scroll-area");
+    if (scrollArea) {
+      scrollArea.scrollTop = 0;
     }
   }
 }
 window.changePage = changePage;
+
+function goToPage(targetPage) {
+  const totalPages = Math.max(1, Math.ceil(filteredJobs.length / pageSize));
+  const pageNum = parseInt(targetPage, 10);
+  if (!isNaN(pageNum) && pageNum >= 1 && pageNum <= totalPages && pageNum !== currentPage) {
+    currentPage = pageNum;
+    renderTable(filteredJobs);
+    const scrollArea = document.querySelector(".table-scroll-area");
+    if (scrollArea) {
+      scrollArea.scrollTop = 0;
+    }
+  }
+}
+window.goToPage = goToPage;
 
 function changePageSize(newSize) {
   const parsed = parseInt(newSize, 10);
@@ -1088,6 +1145,10 @@ function changePageSize(newSize) {
     pageSize = parsed;
     currentPage = 1;
     renderTable(filteredJobs);
+    const scrollArea = document.querySelector(".table-scroll-area");
+    if (scrollArea) {
+      scrollArea.scrollTop = 0;
+    }
   }
 }
 window.changePageSize = changePageSize;

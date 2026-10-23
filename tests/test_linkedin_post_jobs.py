@@ -109,3 +109,88 @@ def test_discovery_engine_generates_linkedin_post_tasks():
     post_tasks = [t for t in tasks if "linkedin.com/posts" in t.query]
     assert len(post_tasks) >= 1
     assert any("Dubai" in t.query or "Riyadh" in t.query for t in post_tasks)
+
+
+def test_extract_job_records_linkedin_post_location_fallback():
+    title = "Kareem on LinkedIn: Hiring GenAI Engineer to build autonomous agents"
+    url = "https://www.linkedin.com/posts/kareem_hiring-genai-activity-999888"
+    doc_text = (
+        "# Kareem on LinkedIn: Hiring GenAI Engineer\n\n"
+        "We are hiring a GenAI Engineer to join our founding AI team. "
+        "Experience with LLMs, RAG, and prompt optimization is required. "
+        "DM me your resume to apply!"
+    )
+    # The snippet itself has no explicit city/country keyword, but search metadata knows the target location
+    metadata = {
+        "title": title,
+        "url": url,
+        "domain": "linkedin.com",
+        "location": "Riyadh, Saudi Arabia"
+    }
+
+    records = extract_job_records_from_document(doc_text, metadata, topic="GenAI Engineer", geography="Riyadh, Saudi Arabia")
+    assert len(records) == 1
+    rec = records[0]
+    assert "GenAI Engineer" in rec["title"]
+    assert rec["location"] == "Riyadh, Saudi Arabia", "Should inherit location from metadata/geography instead of 'Remote / Unspecified'"
+
+
+def test_runtime_recovers_single_city_location():
+    from unittest.mock import MagicMock
+    state = AgentState(
+        task_id="t_loc",
+        run_id="r_loc",
+        request="Find GenAI Engineer jobs in Saudi or UAE",
+        mode="jobs",
+        locations=["Saudi Arabia", "UAE"]
+    )
+
+    # 1. Record with only "Dubai" in description
+    rec1 = MagicMock()
+    rec1.id = "rec1"
+    rec1.source_document_id = None
+    rec1.fields = {
+        "title": "GenAI Engineer",
+        "description": "Looking for a talented GenAI Engineer based in Dubai to join our engineering hub.",
+        "location": "Remote / Unspecified"
+    }
+    AgentRuntime._recover_candidate_location(None, rec1, state)
+    assert rec1.fields["location"] == "Dubai, UAE"
+    assert rec1.fields.get("location_recovered") is True
+
+    # 2. Record with only "Riyadh" in description
+    rec2 = MagicMock()
+    rec2.id = "rec2"
+    rec2.source_document_id = None
+    rec2.fields = {
+        "title": "LLM Developer",
+        "description": "Urgent opening for LLM Developer in Riyadh. Hybrid setup.",
+        "location": "Remote / Unspecified"
+    }
+    AgentRuntime._recover_candidate_location(None, rec2, state)
+    assert rec2.fields["location"] == "Riyadh, Saudi Arabia"
+    assert rec2.fields.get("location_recovered") is True
+
+
+def test_ats_platforms_and_regional_portals_expansion():
+    from datahunt.agent.discovery_engine import ATS_PLATFORMS, CORE_PUBLIC_ATS, DiscoveryEngine
+
+    # Verify ATS platforms expanded
+    assert "teamtailor" in ATS_PLATFORMS
+    assert "personio" in ATS_PLATFORMS
+    assert "rippling" in ATS_PLATFORMS
+
+    # Verify CORE_PUBLIC_ATS
+    ats_domains = [domain for domain, _ in CORE_PUBLIC_ATS]
+    assert "career.teamtailor.com" in ats_domains
+    assert "jobs.personio.com" in ats_domains
+    assert "ats.rippling.com" in ats_domains
+    assert "myworkdayjobs.com" in ats_domains
+
+    # Verify regional portals include Tanqeeb, Laimoon, Dubizzle
+    engine = DiscoveryEngine()
+    gulf_portals = dict(engine._regional_portals("Saudi Arabia"))
+    assert "tanqeeb.com" in gulf_portals
+    assert "laimoon.com" in gulf_portals
+    assert "dubizzle.com" in gulf_portals
+

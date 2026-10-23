@@ -19,7 +19,7 @@ Covers the 12 architectural/runtime issues:
 import pytest
 from unittest.mock import MagicMock, patch
 
-from datahunt.models import ExtractedRecord, VerificationStatus
+from datahunt.models import ExtractedRecord, SourceDocument, VerificationStatus
 from datahunt.agent.state import AgentState, AgentStatus, get_unprocessed_records
 from datahunt.agent.decision import AgentAction, DecisionEngine
 from datahunt.agent.discovery_models import (
@@ -32,6 +32,7 @@ from datahunt.agent.discovery_models import (
     DiscoveredSourceType,
 )
 from datahunt.agent.discovery_engine import DiscoveryEngine
+from datahunt.agent.runtime import AgentRuntime
 from datahunt.sources.crawlers import (
     MultiSourceCrawler,
     CrawlBudget,
@@ -73,6 +74,40 @@ def test_initial_search_runs_before_blind_crawling_when_discovery_queue_has_task
     engine = DecisionEngine()
     action, reason = engine.decide(state)
     # Search must run first to discover companies and endpoints
+    assert action == AgentAction.SEARCH
+    assert "Searching discovery queue" in reason
+
+
+def test_search_queue_precedes_blocked_direct_crawl_tasks():
+    state = AgentState(
+        request="GenAI Engineer in Saudi Arabia or UAE",
+        run_id="run_search_priority",
+        task_id="task_search_priority",
+        mode="jobs",
+        max_search_calls=12,
+        target_results=5,
+        crawl_done=True,
+    )
+    state.discovery_budget = DiscoveryBudget(max_search_requests=12)
+    state.discovery_state = DiscoveryState()
+    state.discovery_state.task_queue.append(SearchTask(
+        id="search_1",
+        task_type=SearchTaskType.REGIONAL_BOARD_SEARCH,
+        query='site:bayt.com "GenAI Engineer" "UAE"',
+        source="bayt.com",
+        source_type=DiscoveredSourceType.REGIONAL_BOARD,
+        priority=1,
+    ))
+    state.discovery_state.enqueue_crawl_task(CrawlTask(
+        id="crawl_blocked_board",
+        source="bayt.com",
+        source_type="regional_board",
+        url="https://www.bayt.com/en/uae/jobs/",
+        priority=1,
+    ))
+
+    action, reason = DecisionEngine().decide(state)
+
     assert action == AgentAction.SEARCH
     assert "Searching discovery queue" in reason
 
@@ -184,6 +219,123 @@ def test_multi_region_crawling_generates_independent_configs_for_all_regions():
 def test_broadly_relevant_job_title_preserves_variants(title, expected):
     keywords = ["GenAI Engineer"]
     assert is_broadly_relevant_job_title(title, keywords) is expected
+
+
+def test_runtime_prunes_known_foreign_locations_before_fetching():
+    runtime = AgentRuntime(
+        client=MagicMock(),
+        search=MagicMock(),
+        fetch=MagicMock(),
+        extract=MagicMock(),
+        verify=MagicMock(),
+        dedupe=MagicMock(),
+        export=MagicMock(),
+    )
+    state = AgentState(
+        request="Find GenAI Engineer jobs in Saudi or UAE",
+        run_id="r_geo_prefetch",
+        task_id="t_geo_prefetch",
+        mode="jobs",
+        explicit_titles=["GenAI Engineer"],
+        locations=["Saudi Arabia", "UAE"],
+    )
+
+    assert not runtime._is_promising_candidate(
+        {
+            "url": "https://jobs.example.test/new-york-ai",
+            "title": "GenAI Engineer",
+            "location": "New York, USA",
+        },
+        state,
+    )
+    assert runtime._is_promising_candidate(
+        {
+            "url": "https://jobs.example.test/dubai-ai",
+            "title": "GenAI Engineer",
+            "location": "Dubai, UAE",
+        },
+        state,
+    )
+
+    assert not runtime._is_promising_candidate(
+        {
+            "url": "https://jobs.example.test/india-ai",
+            "title": "GenAI Engineer",
+            "location": "Bengaluru, India",
+        },
+        state,
+    )
+
+
+def test_runtime_recovers_target_location_from_source_text():
+    runtime = AgentRuntime(
+        client=MagicMock(),
+        search=MagicMock(),
+        fetch=MagicMock(),
+        extract=MagicMock(),
+        verify=MagicMock(),
+        dedupe=MagicMock(),
+        export=MagicMock(),
+    )
+    state = AgentState(
+        request="Find GenAI Engineer jobs in Saudi or UAE",
+        run_id="r_location_recovery",
+        task_id="t_location_recovery",
+        mode="jobs",
+        locations=["Saudi Arabia", "UAE"],
+    )
+    record = ExtractedRecord(
+        id="rec_location_recovery",
+        run_id=state.run_id,
+        source_document_id="doc_location_recovery",
+        fields={
+            "title": "GenAI Engineer",
+            "company": "Example AI",
+            "location": "Remote / Unspecified",
+        },
+    )
+    state.fetched_docs = [SourceDocument(
+        id="doc_location_recovery",
+        run_id=state.run_id,
+        requested_url="https://www.linkedin.com/jobs/view/123",
+        domain="linkedin.com",
+        extracted_text="GenAI Engineer\nLocation: Abu Dhabi, United Arab Emirates",
+    )]
+
+    runtime._recover_candidate_location(record, state)
+
+    assert record.fields["location"] == "Abu Dhabi, UAE"
+    assert record.fields["location_recovered"] is True
+
+
+def test_runtime_drops_pending_candidates_when_fetch_budget_is_exhausted():
+    runtime = AgentRuntime(
+        client=MagicMock(),
+        search=MagicMock(),
+        fetch=MagicMock(),
+        extract=MagicMock(),
+        verify=MagicMock(),
+        dedupe=MagicMock(),
+        export=MagicMock(),
+    )
+    state = AgentState(
+        request="GenAI Engineer in UAE",
+        run_id="r_fetch_budget",
+        task_id="t_fetch_budget",
+        mode="jobs",
+        max_fetch_calls=2,
+    )
+    state.fetch_calls = 2
+    state.candidate_urls = [
+        {"url": "https://jobs.example.test/1", "title": "AI Engineer"},
+        {"url": "https://jobs.example.test/2", "title": "AI Engineer"},
+    ]
+
+    runtime._act_fetch(state, MagicMock())
+
+    assert state.candidate_urls == []
+    assert any("Fetch budget exhausted" in warning for warning in state.warnings)
+    runtime.fetch.execute.assert_not_called()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -469,4 +621,3 @@ def test_multi_region_normalization_extracts_all_regions():
     assert spec.geography is not None
     assert "Saudi Arabia" in spec.geography.name
     assert "UAE" in spec.geography.name
-
