@@ -926,8 +926,10 @@ class QualificationPolicy:
                 _is_region_match = any(hint in _loc_lower for hint in _gcc_mena_hints)
                 is_agnostic_remote = (
                     req_remote_allowed
-                    and remote_status == "remote"
-                    and _loc_lower in ("remote", "remote / unspecified", "worldwide", "global", "anywhere", "work from home", "wfh")
+                    and (
+                        remote_status == "remote"
+                        or _loc_lower in ("remote", "remote / unspecified", "worldwide", "global", "anywhere", "work from home", "wfh")
+                    )
                 )
                 if not is_agnostic_remote and not _is_region_match:
                     rejection_reasons.append(f"unverified_location:{location or 'undisclosed'}")

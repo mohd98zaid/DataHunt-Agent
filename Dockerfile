@@ -13,7 +13,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin datahunt \
+    && mkdir -p /app/data /app/exports \
+    && chown -R datahunt:datahunt /app
+
+COPY --chown=datahunt:datahunt . .
+
+USER datahunt
 
 EXPOSE 8000
 

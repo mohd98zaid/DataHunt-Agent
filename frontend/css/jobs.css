@@ -512,6 +512,8 @@
 
 /* Table */
 .table-container {
+  display: flex;
+  flex-direction: column;
   padding: 16px;
   border-radius: 12px;
   position: relative;
@@ -520,7 +522,8 @@
 
 .table-scroll-area {
   overflow: auto;
-  max-height: calc(100vh - 310px);
+  flex: 1 1 auto;
+  max-height: calc(100vh - 380px);
   contain: content;     /* isolate table reflows from the rest of the page */
 }
 

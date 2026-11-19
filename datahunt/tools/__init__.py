@@ -1,6 +1,6 @@
 from datahunt.tools.base import BaseTool, ToolResult
 from datahunt.tools.search import (
-    SearchTool, SearchHit, SearchProvider, MockSearchProvider,
+    SearchTool, SearchHit, SearchProvider, MockSearchProvider, FreeHireSearchProvider,
     generate_ats_queries, is_valid_job_url,
     generate_technical_research_queries, generate_market_research_queries,
     canonicalize_url, generate_job_fingerprint
@@ -16,7 +16,7 @@ from datahunt.tools.export import ExportTool
 
 __all__ = [
     "BaseTool", "ToolResult",
-    "SearchTool", "SearchHit", "SearchProvider", "MockSearchProvider",
+    "SearchTool", "SearchHit", "SearchProvider", "MockSearchProvider", "FreeHireSearchProvider",
     "generate_ats_queries", "is_valid_job_url",
     "generate_technical_research_queries", "generate_market_research_queries",
     "canonicalize_url", "generate_job_fingerprint",

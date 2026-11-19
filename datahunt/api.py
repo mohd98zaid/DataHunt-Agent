@@ -1,12 +1,14 @@
 import asyncio
+import hmac
 import json
+from threading import BoundedSemaphore
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Literal
 from fastapi import (
     FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect,
     Query, Request
 )
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -28,6 +30,28 @@ app = FastAPI(
     version=__version__
 )
 
+_run_slots = BoundedSemaphore(max(1, settings.MAX_CONCURRENT_RUNS))
+
+
+def _provided_api_key(headers: Any) -> str:
+    key = headers.get("x-api-key", "")
+    authorization = headers.get("authorization", "")
+    if authorization.lower().startswith("bearer "):
+        key = authorization[7:].strip()
+    return key
+
+
+def _api_key_is_valid(provided: str) -> bool:
+    configured = settings.API_KEY.strip()
+    return bool(configured and provided and hmac.compare_digest(provided, configured))
+
+
+def _is_public_path(path: str) -> bool:
+    return (
+        path in ("/", "/favicon.ico", "/health", "/api/info", "/redoc")
+        or path.startswith(("/frontend", "/css", "/js", "/docs", "/openapi.json"))
+    )
+
 @app.middleware("http")
 async def add_no_cache_headers(request: Request, call_next):
     response = await call_next(request)
@@ -48,25 +72,8 @@ async def add_no_cache_headers(request: Request, call_next):
 async def verify_api_key_middleware(request: Request, call_next):
     if settings.API_KEY and settings.API_KEY.strip():
         path = request.url.path
-        if not (
-            path.startswith("/frontend") or
-            path.startswith("/css") or
-            path.startswith("/js") or
-            path.startswith("/docs") or
-            path.startswith("/openapi.json") or
-            path in ("/", "/favicon.ico", "/health", "/api/info", "/api/health") or
-            path.startswith("/api/settings")
-        ):
-            key = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
-            auth_header = request.headers.get("authorization", "")
-            if auth_header.startswith("Bearer "):
-                key = auth_header[7:]
-            if key != settings.API_KEY:
-                return Response(
-                    content=json.dumps({"detail": "Invalid or missing API key"}),
-                    status_code=401,
-                    media_type="application/json"
-                )
+        if not _is_public_path(path) and not _api_key_is_valid(_provided_api_key(request.headers)):
+            return JSONResponse({"detail": "Invalid or missing API key"}, status_code=401)
     return await call_next(request)
 
 task_repo = TaskRepository()
@@ -76,7 +83,7 @@ exp_repo = ExportRepository()
 job_repo = JobTrackingRepository()
 
 class CreateTaskRequest(BaseModel):
-    query: str = Field(..., description="Natural language research query")
+    query: str = Field(..., min_length=1, max_length=10_000, description="Natural language research query")
     max_records: int = Field(150, ge=1, le=500)
     freshness_days: Optional[int] = Field(7, ge=1)
     output_format: str = Field("json", pattern="^(json|csv|xlsx|md|docx)$")
@@ -84,12 +91,15 @@ class CreateTaskRequest(BaseModel):
     allowed_domains: List[str] = Field(default_factory=list)
     blocked_domains: List[str] = Field(default_factory=list)
     run_in_background: bool = Field(False, description="Whether to execute asynchronously")
-    model: Optional[str] = Field("auto", description="AI model engine: auto, openai/gpt-oss-20b, or nvidia/nemotron-3.5-lightning-30b-a3b")
-    agent_mode: Optional[str] = Field("auto", description="Agent mode: auto, jobs, research, market, or people")
+    model: Optional[str] = Field("auto", max_length=200, description="AI model engine: auto, openai/gpt-oss-20b, or nvidia/nemotron-3.5-lightning-30b-a3b")
+    agent_mode: Optional[Literal["auto", "jobs", "research", "market", "people"]] = Field("auto", description="Agent mode: auto, jobs, research, market, or people")
 
 def run_task_background(run_id: str, model: Optional[str] = None):
-    orch = ResearchOrchestrator(model=model)
-    orch.execute_run(run_id)
+    try:
+        orch = ResearchOrchestrator(model=model)
+        orch.execute_run(run_id)
+    finally:
+        _run_slots.release()
 
 @app.get("/api/info")
 def api_info():
@@ -195,6 +205,30 @@ def get_settings_endpoint():
             "value": settings.DEFAULT_COLLECTION_MODE,
             "category": "Job Search Defaults",
             "help": "Thorough exhausts all source pagination; fast returns quicker preliminary results."
+        },
+        {
+            "key": "freehire_enabled",
+            "label": "Use FreeHire Catalogue",
+            "type": "boolean",
+            "value": settings.FREEHIRE_ENABLED,
+            "category": "Job Search Sources",
+            "help": "Use FreeHire's public read-only job catalogue before broad web search."
+        },
+        {
+            "key": "freehire_max_requests_per_run",
+            "label": "FreeHire Requests per Run",
+            "type": "number",
+            "value": settings.FREEHIRE_MAX_REQUESTS_PER_RUN,
+            "category": "Job Search Sources",
+            "help": "Maximum FreeHire API requests allowed during one run."
+        },
+        {
+            "key": "max_concurrent_runs",
+            "label": "Maximum Concurrent Runs",
+            "type": "number",
+            "value": settings.MAX_CONCURRENT_RUNS,
+            "category": "Execution Limits",
+            "help": "Maximum number of in-process runs executing at once. Restart the service after changing this value."
         }
     ]
     return {
@@ -268,7 +302,7 @@ def api_health():
 
     primary = getattr(settings, "NVIDIA_PRIMARY_MODEL", "openai/gpt-oss-20b")
     fallback = getattr(settings, "NVIDIA_FALLBACK_MODEL", "nvidia/nemotron-3.5-lightning-30b-a3b")
-    return {
+    payload = {
         "status": "healthy" if db_ok else "degraded",
         "database": "connected" if db_ok else "unreachable",
         "llm_provider": settings.LLM_PROVIDER,
@@ -279,11 +313,14 @@ def api_health():
         "model": primary,
         "gemini_configured": settings.is_gemini_configured,
     }
+    return JSONResponse(payload, status_code=200 if db_ok else 503)
 
 @app.post("/tasks", status_code=201)
 def create_task(req: CreateTaskRequest, background_tasks: BackgroundTasks):
-    orch = ResearchOrchestrator(model=req.model)
+    if not _run_slots.acquire(blocking=False):
+        raise HTTPException(status_code=429, detail="Maximum concurrent run capacity reached")
     try:
+        orch = ResearchOrchestrator(model=req.model)
         task, run = orch.create_task_and_run(
             request_text=req.query,
             max_records=req.max_records,
@@ -296,6 +333,7 @@ def create_task(req: CreateTaskRequest, background_tasks: BackgroundTasks):
             agent_mode=req.agent_mode,
         )
     except Exception as e:
+        _run_slots.release()
         raise HTTPException(status_code=400, detail=str(e))
 
     if req.run_in_background:
@@ -322,7 +360,10 @@ def create_task(req: CreateTaskRequest, background_tasks: BackgroundTasks):
                 "summary": result.get("summary")
             }
         except Exception as e:
+            _run_slots.release()
             raise HTTPException(status_code=500, detail=f"Execution error: {e}")
+        else:
+            _run_slots.release()
 
 @app.get("/tasks")
 def list_tasks(limit: int = Query(20, ge=1, le=100)):
@@ -617,6 +658,9 @@ def broadcast_stream_event(event_type: str, event_data: Dict[str, Any], loop: as
 @app.websocket("/ws/agent-stream")
 async def websocket_agent_stream(websocket: WebSocket):
     await websocket.accept()
+    if settings.API_KEY and settings.API_KEY.strip() and not _api_key_is_valid(_provided_api_key(websocket.headers)):
+        await websocket.close(code=1008, reason="Invalid or missing API key")
+        return
     stream_clients.add(websocket)
     loop = asyncio.get_running_loop()
 
@@ -635,30 +679,41 @@ async def websocket_agent_stream(websocket: WebSocket):
                 continue
 
             if action == "start_run":
-                query_text = payload.get("query", "").strip()
-                if not query_text:
-                    await websocket.send_json({"event": "error", "data": {"message": "Query cannot be empty"}})
+                try:
+                    task_request = CreateTaskRequest(
+                        query=payload.get("query", ""),
+                        max_records=payload.get("max_records", 150),
+                        freshness_days=payload.get("freshness_days", 7),
+                        output_format=payload.get("output_format", "json"),
+                        contact_policy=payload.get("contact_policy", "business_public_only"),
+                        allowed_domains=payload.get("allowed_domains", []),
+                        blocked_domains=payload.get("blocked_domains", []),
+                        model=payload.get("model", "auto"),
+                        agent_mode=payload.get("agent_mode", "auto"),
+                    )
+                except Exception as exc:
+                    await websocket.send_json({"event": "error", "data": {"message": f"Invalid task request: {exc}"}})
                     continue
 
-                max_records = int(payload.get("max_records", 150))
-                freshness_days = payload.get("freshness_days")
-                if freshness_days is not None:
-                    freshness_days = int(freshness_days)
-                output_format = payload.get("output_format", "json")
-                model_choice = payload.get("model", "auto")
-                agent_mode = payload.get("agent_mode", "auto")
+                if not _run_slots.acquire(blocking=False):
+                    await websocket.send_json({"event": "error", "data": {"message": "Maximum concurrent run capacity reached"}})
+                    continue
 
-                orch = ResearchOrchestrator(model=model_choice)
+                orch = ResearchOrchestrator(model=task_request.model)
                 try:
                     task, run = orch.create_task_and_run(
-                        request_text=query_text,
-                        max_records=max_records,
-                        freshness_days=freshness_days,
-                        output_format=output_format,
-                        model=model_choice,
-                        agent_mode=agent_mode,
+                        request_text=task_request.query,
+                        max_records=task_request.max_records,
+                        freshness_days=task_request.freshness_days,
+                        output_format=task_request.output_format,
+                        contact_policy=task_request.contact_policy,
+                        allowed_domains=task_request.allowed_domains,
+                        blocked_domains=task_request.blocked_domains,
+                        model=task_request.model,
+                        agent_mode=task_request.agent_mode,
                     )
                 except Exception as e:
+                    _run_slots.release()
                     await websocket.send_json({"event": "error", "data": {"message": f"Task creation failed: {e}"}})
                     continue
 
@@ -671,6 +726,8 @@ async def websocket_agent_stream(websocket: WebSocket):
                     except Exception as e:
                         logger.error(f"Background run {run_id} execution error: {e}", exc_info=True)
                         broadcast_stream_event("run.failed", {"error": str(e), "run_id": run_id}, loop)
+                    finally:
+                        _run_slots.release()
 
                 # Detach run execution so page refreshes never abort or kill the background process
                 asyncio.create_task(_background_execute(run.id))
@@ -818,4 +875,3 @@ def monitor_check_endpoint():
 # Mount frontend static directory if exists
 if frontend_dir.exists():
     app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
-

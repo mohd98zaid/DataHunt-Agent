@@ -21,6 +21,15 @@ class Settings:
     NVIDIA_RPM: int = int(os.getenv("NVIDIA_RPM", "40"))          # max NVIDIA API calls per minute
     SEARCH_BATCH_SIZE: int = int(os.getenv("SEARCH_BATCH_SIZE", "20"))  # search tasks dispatched in parallel per iteration
 
+    # Optional FreeHire public job-catalogue integration
+    FREEHIRE_ENABLED: bool = os.getenv("FREEHIRE_ENABLED", "false").lower() in ("true", "1", "yes")
+    FREEHIRE_API_URL: str = os.getenv("FREEHIRE_API_URL", "https://freehire.me/api/v1")
+    FREEHIRE_API_KEY: str = os.getenv("FREEHIRE_API_KEY", "")
+    FREEHIRE_MAX_REQUESTS_PER_RUN: int = int(os.getenv("FREEHIRE_MAX_REQUESTS_PER_RUN", "20"))
+
+    # Brave Search API (free tier — 2000 req/month; fallback when DDG rate-limits)
+    BRAVE_API_KEY: str = os.getenv("BRAVE_API_KEY", "")
+
     # Gemini LLM Settings (kept intact for fallback / alternate provider)
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "auto")
@@ -43,6 +52,7 @@ class Settings:
     MAX_RECORDS: int = int(os.getenv("MAX_RECORDS", "500"))
     MAX_TOOL_STEPS: int = int(os.getenv("MAX_TOOL_STEPS", "50"))
     MAX_ITERATIONS: int = int(os.getenv("MAX_ITERATIONS", "200"))
+    MAX_CONCURRENT_RUNS: int = int(os.getenv("MAX_CONCURRENT_RUNS", "2"))
     
     # Fetch Settings
     CONNECT_TIMEOUT_SECONDS: float = float(os.getenv("CONNECT_TIMEOUT_SECONDS", "5.0"))
@@ -140,11 +150,16 @@ class Settings:
             "max_pages_fetched": self.MAX_PAGES_FETCHED,
             "max_response_bytes": self.MAX_RESPONSE_BYTES,
             "max_records": self.MAX_RECORDS,
+            "max_concurrent_runs": self.MAX_CONCURRENT_RUNS,
             "default_freshness": self.DEFAULT_FRESHNESS,
             "default_collection_mode": self.DEFAULT_COLLECTION_MODE,
             "log_level": self.LOG_LEVEL,
             "nvidia_rpm": self.NVIDIA_RPM,
             "search_batch_size": self.SEARCH_BATCH_SIZE,
+            "freehire_enabled": self.FREEHIRE_ENABLED,
+            "freehire_api_url": self.FREEHIRE_API_URL,
+            "freehire_configured": bool(self.FREEHIRE_API_KEY.strip()),
+            "freehire_max_requests_per_run": self.FREEHIRE_MAX_REQUESTS_PER_RUN,
         }
 
     def load_from_db(self) -> None:
@@ -192,7 +207,7 @@ class Settings:
                     val = converter(v)
 
                 # Validation guardrails
-                if target_key in ("MAX_RUN_SECONDS", "MAX_RECORDS", "MAX_SEARCH_QUERIES", "MAX_PAGES_FETCHED", "NVIDIA_RPM", "SEARCH_BATCH_SIZE") and val <= 0:
+                if target_key in ("MAX_RUN_SECONDS", "MAX_RECORDS", "MAX_SEARCH_QUERIES", "MAX_PAGES_FETCHED", "NVIDIA_RPM", "SEARCH_BATCH_SIZE", "FREEHIRE_MAX_REQUESTS_PER_RUN", "MAX_CONCURRENT_RUNS") and val <= 0:
                     continue
                 if target_key == "DRAIN_TIMEOUT_SECONDS" and val < 0:
                     continue
@@ -280,6 +295,7 @@ class Settings:
         self.MAX_RECORDS = 500
         self.MAX_SEARCH_QUERIES = 150
         self.MAX_PAGES_FETCHED = 300
+        self.MAX_CONCURRENT_RUNS = 2
         self.LLM_PROVIDER = "nvidia"
         self.NVIDIA_PRIMARY_MODEL = "openai/gpt-oss-20b"
         self.NVIDIA_FALLBACK_MODEL = "nvidia/nemotron-3.5-lightning-30b-a3b"
@@ -301,14 +317,17 @@ EDITABLE_SETTINGS = {
     "MAX_PAGES_FETCHED": int,
     "MAX_BROWSER_PAGES": int,
     "MAX_ITERATIONS": int,
+    "MAX_CONCURRENT_RUNS": int,
     "LLM_PROVIDER": str,
     "NVIDIA_PRIMARY_MODEL": str,
     "NVIDIA_FALLBACK_MODEL": str,
-    "NVIDIA_API_KEY": str,
     "NVIDIA_RPM": int,
     "SEARCH_BATCH_SIZE": int,
+    "FREEHIRE_ENABLED": bool,
+    "FREEHIRE_API_URL": str,
+    "FREEHIRE_MAX_REQUESTS_PER_RUN": int,
+    "BRAVE_API_KEY": str,
     "GEMINI_MODEL": str,
-    "GEMINI_API_KEY": str,
     "DEFAULT_FRESHNESS": str,
     "DEFAULT_COLLECTION_MODE": str,
     "LOG_LEVEL": str,

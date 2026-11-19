@@ -9,10 +9,11 @@ It can be used through:
 - A Rich command-line interface.
 - Python agent wrappers such as `get_agent("jobs")` and `get_agent("people")`.
 
-> **Status:** The repository is an active engineering workspace. The core test suite is passing, but some documentation, Docker defaults, and UI surfaces are still being aligned with the evolving implementation. See [Known Gaps and Caveats](#known-gaps-and-caveats).
+> **Status:** Active development. The latest recorded full-suite run had 734 passing tests and one crawler log-capture failure; subsequent focused checks passed. This is a local workstation with in-process execution, not a hosted multi-tenant service. See [Testing and Quality Checks](#testing-and-quality-checks) and [Known Gaps and Caveats](#known-gaps-and-caveats).
 
 ## Table of Contents
 
+- [Quick Start](#quick-start)
 - [What DataHunt Does](#what-datahunt-does)
 - [Core Capabilities](#core-capabilities)
 - [Agent Fleet](#agent-fleet)
@@ -27,17 +28,68 @@ It can be used through:
 - [Using the Web Interfaces](#using-the-web-interfaces)
 - [Request Lifecycle](#request-lifecycle)
 - [Job Discovery Pipeline](#job-discovery-pipeline)
+- [FreeHire Integration Reference](#freehire-integration-reference)
 - [Research and Market Pipelines](#research-and-market-pipelines)
 - [People, Company, and Interview Intelligence](#people-company-and-interview-intelligence)
 - [Persistence and Data Model](#persistence-and-data-model)
 - [Exports](#exports)
 - [Security and Trust Boundaries](#security-and-trust-boundaries)
 - [Docker](#docker)
+- [Operations and Recovery](#operations-and-recovery)
 - [Testing and Quality Checks](#testing-and-quality-checks)
 - [Troubleshooting](#troubleshooting)
 - [Known Gaps and Caveats](#known-gaps-and-caveats)
 - [Contributing](#contributing)
+- [Further Documentation](#further-documentation)
 - [License](#license)
+
+## Quick Start
+
+Run these commands from the repository root. Python 3.10+ is required; the container uses Python 3.12. The frontend is static HTML/CSS/JavaScript served by FastAPI, so no Node.js build is required.
+
+**Windows PowerShell**
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+```
+
+**macOS/Linux**
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+test -f .env || cp .env.example .env
+```
+
+Edit `.env` before starting. The example selects Gemini: set `GEMINI_API_KEY`, or select `LLM_PROVIDER=nvidia` and set `NVIDIA_API_KEY`. It also enables FreeHire; set `FREEHIRE_ENABLED=false` if you do not want that external catalogue queried.
+
+Then use the virtual environment's Python:
+
+```powershell
+# Windows PowerShell
+.\.venv\Scripts\python.exe -m datahunt.cli migrate
+.\.venv\Scripts\python.exe -m uvicorn datahunt.api:app --host 127.0.0.1 --port 8000
+```
+
+```bash
+# macOS/Linux
+.venv/bin/python -m datahunt.cli migrate
+.venv/bin/python -m uvicorn datahunt.api:app --host 127.0.0.1 --port 8000
+```
+
+Open the [hub](http://127.0.0.1:8000/) or [API docs](http://127.0.0.1:8000/docs). For a first run, select Job Radar and enter a role and geography, such as `Find AI Engineer jobs in Dubai, UAE`. Inspect the run's warnings, verified records, and export links when it finishes. A target record count is a ceiling/goal, not a promise that enough matching vacancies exist.
+
+| Your goal | Start here |
+| --- | --- |
+| Search and track jobs | Hub → Job Radar; `/jobs.html` for tracking |
+| Compare technologies or collect research | Hub → Deep Research |
+| Analyze market signals | Hub → Market Intel |
+| Find public hiring contacts | CLI/API/Python with `people` mode |
+| Use FreeHire | [Configuration and adapter behavior](#freehire-integration-reference) |
+| Integrate another client | [REST and WebSocket API](#using-the-api) |
+| Run without a browser | [CLI examples](#using-the-cli) |
 
 ## What DataHunt Does
 
@@ -98,6 +150,23 @@ Records retain source-document relationships and field-level evidence. The canon
 ### Bounded execution
 
 Every run has limits for time, search calls, fetched pages, response size, iterations, and output records. These limits are persisted with the run so later code does not silently replace them with process-wide defaults.
+
+### Optional FreeHire catalogue source
+
+DataHunt can use [FreeHire](https://github.com/strelov1/freehire), an MIT-licensed open-source job catalogue, as an additional structured source for job searches. The integration calls FreeHire's public read-only API and then sends the returned links through DataHunt's existing geography, freshness, title, deduplication, verification, and qualification pipeline.
+
+Enable it explicitly in `.env`:
+
+```dotenv
+FREEHIRE_ENABLED=true
+FREEHIRE_API_URL=https://freehire.me/api/v1
+FREEHIRE_API_KEY=
+FREEHIRE_MAX_REQUESTS_PER_RUN=20
+```
+
+The adapter uses `GET /jobs/search` with full-text query fields and preserves the employer application URL when FreeHire provides one. If a posting is direct-apply, it uses the public FreeHire job page as the source URL. A FreeHire API key is optional for the public API, but commercial/product use must follow FreeHire's current data-licence terms and rate limits. The integration is disabled by the Python runtime default to avoid unexpected external calls; the checked-in `.env.example` opts it in for a fresh local setup.
+
+The settings API accepts the enable flag and request cap. The browser settings form renders the flag as a checkbox. Safe settings output includes the endpoint URL and a key-configured boolean, but not the FreeHire API key. See the [integration reference](#freehire-integration-reference) for request mapping, fallback order, and limitations.
 
 ### Job-specific precision
 
@@ -229,7 +298,7 @@ The repository also contains focused modules used by the main agents and API wor
 └──────────────┬───────────────────────┬───────────────────────┘
                │                       │
 ┌──────────────▼──────────────┐  ┌─────▼───────────────────────┐
-│ Discovery engines             │  │ Specialized agents          │
+│ Discovery engines           │  │ Specialized agents          │
 │ jobs / research / market     │  │ parsing, people, company,   │
 │ / people workflow            │  │ interview, ranking, risk    │
 └──────────────┬──────────────┘  └─────┬────────────────────────┘
@@ -301,6 +370,7 @@ DataHunt_agent/
 │   └── js/                        # Browser controllers
 ├── migrations/                    # Ordered SQLite schema migrations
 ├── tests/                         # Pytest suite
+├── docs/                          # Architecture, database, security, and design notes
 ├── data/                          # Default SQLite data directory
 ├── exports/                       # Generated artifacts
 ├── Dockerfile                     # Single-container image
@@ -399,11 +469,31 @@ From a Command Prompt:
 run_app.bat
 ```
 
-The launcher attempts to activate `.venv` or `venv`, creates `.env` from `.env.example` when missing, runs migrations, starts Uvicorn on port `8000`, waits for `/health`, and opens the hub in the default browser.
+The launcher attempts to activate `.venv` or `venv`, creates `.env` from `.env.example` when missing, runs migrations, starts Uvicorn on port `8000`, waits for `/health`, and opens the hub in the default browser. Install dependencies first: the launcher does not create a virtual environment or install requirements. It currently continues even if migration returns an error; resolve any migration error before running tasks.
 
 ## Configuration
 
 Configuration is loaded from `.env` by `datahunt/config.py`. Settings can also be updated through the `/api/settings` endpoints and persisted to SQLite plus `.env` for the editable settings supported by the application.
+
+### Configuration precedence
+
+1. Existing process environment variables take precedence over `.env` during `load_dotenv()`.
+2. Missing variables use defaults in `Settings`.
+3. Stored `system_settings` values override editable settings when the settings singleton loads.
+4. Request-level values such as mode, model, record target, and freshness are passed to task creation and normalized into the run specification.
+
+Relative storage paths resolve from the process working directory. Run commands from the repository root so `.env`, SQLite, migrations, and exports use the expected locations. Changing `.env` does not refresh an existing provider instance; restart the service and check `/api/settings` for database overrides that may still win.
+
+### FreeHire settings
+
+| Variable | Runtime default | Purpose |
+| --- | --- | --- |
+| `FREEHIRE_ENABLED` | `false` | Enable the optional catalogue; `.env.example` sets `true` |
+| `FREEHIRE_API_URL` | `https://freehire.me/api/v1` | API base URL including `/api/v1` |
+| `FREEHIRE_API_KEY` | empty | Optional Bearer token for a FreeHire API plan |
+| `FREEHIRE_MAX_REQUESTS_PER_RUN` | `20` | Request cap, enforced per provider instance |
+
+All four values are editable through the settings API. Only the flag and cap have browser form fields. The configured endpoint is visible in safe settings output; credentials belong in the dedicated key field, not in the URL.
 
 ### LLM providers
 
@@ -449,6 +539,7 @@ The checked-in `.env.example` currently selects Gemini, while `datahunt/config.p
 | `MAX_RECORDS` | Maximum output records | `500` |
 | `MAX_TOOL_STEPS` | Tool-step ceiling | `50` |
 | `MAX_ITERATIONS` | Runtime decision-loop ceiling | `200` |
+| `MAX_CONCURRENT_RUNS` | In-process execution slots | `2` |
 | `SEARCH_BATCH_SIZE` | Parallel search dispatch size | `20` |
 | `DEFAULT_FRESHNESS` | UI/job freshness default | `0sec` |
 | `DEFAULT_COLLECTION_MODE` | Collection strategy | `thorough` |
@@ -481,7 +572,7 @@ or:
 Authorization: Bearer replace-with-a-long-random-value
 ```
 
-Health, API metadata, documentation, frontend assets, and settings routes are intentionally treated differently by the current middleware. Do not expose an unauthenticated deployment to the public internet without reviewing `datahunt/api.py` and adding a reverse proxy/authentication boundary appropriate for the deployment.
+The current middleware exempts `/`, `/health`, `/api/info`, `/favicon.ico`, `/redoc`, and prefixes `/frontend`, `/css`, `/js`, `/docs`, and `/openapi.json`. Settings writes/resets, task/run/job/export routes, telemetry, and other API routes require the key. Top-level HTML pages such as `/cockpit.html` also require the key when configured, so use the hub without `DATAHUNT_API_KEY` or place authentication at a reverse proxy that supports the UI. The WebSocket checks `X-API-Key` or Bearer authentication before accepting run commands. These are current access-control boundaries, not a complete identity or tenant system.
 
 ### LangSmith observability
 
@@ -509,11 +600,15 @@ curl -X POST http://127.0.0.1:8000/api/settings \
   -d '{"max_run_seconds": 600, "default_collection_mode": "fast"}'
 ```
 
-Reset editable settings:
+The API accepts either a flat object or `{"settings": {...}}`. Unknown keys and some invalid values are ignored; read back the effective value rather than treating HTTP success as proof that every field changed. Provider API keys are intentionally not editable through this endpoint; keep them in environment/secret-manager configuration. Non-secret editable values are persisted to SQLite and synchronized to `.env`.
+
+Reset stored overrides and selected runtime defaults:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/settings/reset
 ```
+
+Reset clears database overrides and removes editable non-secret keys from `.env`, then resets the supported in-memory defaults. Provider keys and FreeHire values supplied only through environment variables are not deleted. The concurrent-run semaphore is initialized at process startup, so restart after changing `max_concurrent_runs`.
 
 ## Running the Application
 
@@ -636,6 +731,43 @@ python -m datahunt.cli status RUN_ID_HERE
 
 The API is defined in `datahunt/api.py`. FastAPI generates the complete OpenAPI schema automatically.
 
+Examples below assume local execution with `DATAHUNT_API_KEY` unset. When it is set, add `-H "X-API-Key: $DATAHUNT_API_KEY"` to protected requests in Bash, or supply `@{"X-API-Key" = $env:DATAHUNT_API_KEY}` as PowerShell headers. Multi-line `curl` examples use Bash syntax; use `curl.exe` with PowerShell-compatible quoting or `Invoke-RestMethod` on Windows.
+
+### Endpoint index
+
+| Method | Path | Result |
+| --- | --- | --- |
+| `GET` | `/health` | Database connectivity and model configuration |
+| `GET` | `/api/info` | Application name, runtime version, docs link |
+| `GET` | `/api/settings` | Effective safe settings and form schema |
+| `POST` | `/api/settings` | Persist editable settings |
+| `POST` | `/api/settings/reset` | Clear overrides and reset selected values |
+| `POST` | `/tasks` | Create and execute or queue a run |
+| `GET` | `/tasks` | Recent tasks; `limit` defaults to 20, maximum 100 |
+| `GET` | `/tasks/{task_id}` | Persisted task specification |
+| `GET` | `/runs/latest` | Most recent run and available Markdown summary |
+| `GET` | `/runs/{run_id}` | Run status, counters, warnings, exports, errors |
+| `GET` | `/runs/{run_id}/records` | Records, optionally filtered by verification `status` |
+| `GET` | `/runs/{run_id}/export` | Download or generate an export; default `format=md` |
+| `GET` | `/exports/{export_id}/download` | Download an existing export artifact |
+| `GET` | `/api/jobs` | Paginated tracked jobs; optional `run_id`, `limit`, `offset` |
+| `GET` | `/api/jobs/saved` | Saved jobs |
+| `GET` | `/api/jobs/applications` | Recorded applications |
+| `GET`, `PATCH`, `DELETE` | `/api/jobs/{record_id}` | Read, update tracking state, or delete a job |
+| `POST` | `/api/jobs/bulk-delete` | Delete supplied `record_ids` |
+| `POST` | `/api/jobs/{record_id}/save` | Save a job and optional notes |
+| `POST` | `/api/jobs/{record_id}/ignore` | Record an ignore reason |
+| `POST` | `/api/jobs/{record_id}/apply` | Record an application and optional cover letter |
+| `POST` | `/api/company/research` | Research a company |
+| `POST` | `/api/interview/prep` | Generate an interview preparation pack |
+| `POST` | `/api/interview/evaluate` | Evaluate a practice answer |
+| `GET` | `/api/monitor/events` | Unnotified saved-job changes |
+| `POST` | `/api/monitor/check` | Check saved postings now |
+| `GET` | `/telemetry/runs` | LangSmith project run data |
+| WebSocket | `/ws/agent-stream` | Start runs and receive broadcast events |
+
+`/docs`, `/redoc`, and `/openapi.json` provide generated schema documentation. There is currently no public REST cancellation, resume, or scheduling endpoint.
+
 ### Health and metadata
 
 ```bash
@@ -678,13 +810,43 @@ curl -X POST http://127.0.0.1:8000/tasks \
 
 The response contains `task_id`, `run_id`, and a status. Use the run endpoints to inspect progress and results.
 
+For a background request, the HTTP status is `201` and the response has this shape (IDs below are illustrative):
+
+```json
+{
+  "task_id": "task_example",
+  "run_id": "run_example",
+  "status": "queued",
+  "message": "Task accepted and running in background."
+}
+```
+
+`queued` is an acknowledgment value, not a `RunStatus` enum member. The background work runs inside the API process, not in a durable external queue. Synchronous responses additionally include verified/rejected counts, confidence, model metadata, export filename, and summary.
+
+PowerShell example:
+
+```powershell
+$body = @{
+    query = "Find AI Engineer jobs in Dubai, UAE"
+    agent_mode = "jobs"
+    max_records = 20
+    freshness_days = 7
+    output_format = "json"
+    run_in_background = $true
+} | ConvertTo-Json
+$headers = @{}
+if ($env:DATAHUNT_API_KEY) { $headers["X-API-Key"] = $env:DATAHUNT_API_KEY }
+$task = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/tasks" -Headers $headers -ContentType "application/json" -Body $body
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/runs/$($task.run_id)" -Headers $headers
+```
+
 ### `POST /tasks` request fields
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `query` | string | required | Natural-language directive |
-| `max_records` | integer | `150` at the API boundary | Must be at least `1`; bounded by configured/runtime limits |
-| `freshness_days` | integer or null | `7` | Used by normalization and source planning |
+| `max_records` | integer | `150` at the API boundary | Valid range `1–500`; also subject to run limits |
+| `freshness_days` | integer or null | `7` | Integer values must be at least `1`; used by normalization and planning |
 | `output_format` | string | `json` | `json`, `csv`, `xlsx`, `md`, or `docx` |
 | `contact_policy` | string | `business_public_only` | Contact handling policy |
 | `allowed_domains` | string[] | `[]` | Optional source allowlist |
@@ -704,6 +866,25 @@ curl http://127.0.0.1:8000/runs/latest
 ```
 
 The run response includes status, counters, warnings, timestamps, exports, and any error code/message. Records include fields, canonical URL, verification status, confidence, evidence, and warnings.
+
+Filter records by verification state:
+
+```bash
+curl 'http://127.0.0.1:8000/runs/RUN_ID/records?status=verified'
+curl 'http://127.0.0.1:8000/runs/RUN_ID/records?status=needs_review'
+```
+
+| Verification state | Meaning |
+| --- | --- |
+| `unverified` | Stored record awaiting verification |
+| `verified` | Passed the applicable pipeline checks |
+| `needs_review` | Insufficient or ambiguous evidence needs inspection |
+| `rejected` | Failed applicable validation or qualification |
+| `duplicate` | Collapsed into another record's identity |
+
+Verification describes the checks implemented by the selected pipeline; it is not a guarantee that an employer is still accepting applications or that every report claim is correct.
+
+Common HTTP errors are `400` for task creation or invalid verification status, `401` for a missing/incorrect API key on protected routes, `404` for missing tasks/runs/jobs/exports, `422` for Pydantic request validation, and `500` for execution/export failures. A valid task can also finish with `status=failed`; inspect the run resource rather than relying only on the creation response.
 
 ### On-demand exports
 
@@ -743,6 +924,10 @@ curl -X PATCH http://127.0.0.1:8000/api/jobs/RECORD_ID \
     "notes": "Technical screen scheduled"
   }'
 ```
+
+Application statuses accepted by `PATCH` are `not_applied`, `applied`, `interviewing`, `offered`, and `rejected`. Interview statuses are `no_call`, `screening`, `technical`, `final_round`, `offered`, and `rejected`.
+
+`GET /api/jobs` defaults to `limit=200`, accepts up to `5000`, and uses a zero-based `offset`. Read `X-Total-Count` for pagination. The `/apply` action only records your application in DataHunt; it does not send anything to an employer.
 
 ### Company research and interview endpoints
 
@@ -812,6 +997,10 @@ Start a run by sending a JSON message:
 ```
 
 The server emits lifecycle events such as `run.started`, `phase.change`, `model.active`, `agent.decision`, `record.extracted`, `record.verified`, `run.completed`, and `run.failed`. A `ping` action returns a `pong` event.
+
+Each message is an envelope of the form `{"event": "event.name", "data": {...}}`. Connections share an in-memory broadcast set: events are not isolated by user, and there is no replay cursor. Browser disconnection does not cancel an already detached task, but stopping/reloading the server stops in-process execution. Use the REST run/record endpoints to recover persisted state after reconnecting.
+
+Unlike `POST /tasks`, the current WebSocket start handler does not forward `allowed_domains`, `blocked_domains`, or `contact_policy` fields. Use the REST API or CLI when an explicit source policy is required.
 
 ## Using the Web Interfaces
 
@@ -953,6 +1142,97 @@ Freshness is extracted from structured metadata and page text where possible. Va
 
 When both an aggregator URL and a direct ATS/application URL are available, the direct application URL is preferred while source evidence remains preserved.
 
+## FreeHire Integration Reference
+
+FreeHire is an external job-search service and a separately maintained MIT-licensed Go application. DataHunt integrates its read-only HTTP API; running DataHunt does not install FreeHire's Go backend, PostgreSQL database, Meilisearch index, or Svelte UI.
+
+Implementation: [`FreeHireSearchProvider` in `datahunt/tools/search.py`](datahunt/tools/search.py). Public exports are available from `datahunt.tools`, and `SearchProviderRegistry` recognizes both `freehire` and `fh`.
+
+### Enable or disable
+
+Set the four [FreeHire environment variables](#freehire-settings), then restart the application. To update a running service's settings for new provider instances:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/settings \
+  -H 'Content-Type: application/json' \
+  -d '{"settings":{"freehire_enabled":true,"freehire_max_requests_per_run":20}}'
+```
+
+Use `false` to disable. Existing orchestrators retain providers initialized with their previous configuration. `freehire_configured` in the settings response means a key is present; it does not mean the integration is enabled or the service is reachable. Keyless requests are possible when allowed by FreeHire's service terms.
+
+### Search order and fallback
+
+```text
+HybridSearchProvider.search(query)
+  ├─ Job-keyword match + FreeHire enabled → FreeHire catalogue
+  │    └─ Enough hits? Return them
+  ├─ DuckDuckGo → fill remaining slots
+  │    └─ Any catalogue/web hits? Return them
+  ├─ Job query → direct public job-board providers
+  ├─ LLM-assisted candidate discovery, when configured
+  └─ Empty result; mock fallback only when explicitly enabled for testing
+```
+
+The job-keyword heuristic checks query text rather than the orchestrator's mode. A research query containing words such as `engineer`, `developer`, or `architect` can therefore reach FreeHire when enabled. Disable FreeHire for a session that needs exclusively general research sources.
+
+### Request mapping
+
+| DataHunt input | FreeHire request behavior |
+| --- | --- |
+| `query` | Remove `site:` operators, supported experience ranges, and selected search noise words; send remaining text as `q` |
+| Searchable fields | `q_fields=title,company,description,location` |
+| Country aliases | Repeated `countries` parameters using lower-case ISO codes |
+| `0-6 years`, `0–6 years`, `0 to 6 years` | `experience_years_min=0`, `experience_years_max=6` |
+| Positive `freshness_days` | `posted_within_days` |
+| `limit` | Clamped to `1–100` per API request |
+| `page` | `offset=(page-1)*clamped_limit`, minimum zero |
+| Sorting | `sort=posted_at`, `order=desc` |
+| Optional API key | `Authorization: Bearer ...` |
+
+Country aliases currently cover Saudi Arabia/KSA, UAE, Qatar, Kuwait, Bahrain, Oman, India, UK, Singapore, Canada, and USA. Cities remain free-text terms; the adapter does not resolve city facets. Country words also remain in `q`, so complex multi-country sentences may be more restrictive than the country facet alone. This lightweight translation is not a complete natural-language role/location parser.
+
+Each call performs at most one HTTP request, with an HTTPX timeout derived from `READ_TIMEOUT_SECONDS` and clamped to 3–10 seconds. A thread lock protects request reservation. Errors, HTTP `429`, and other HTTP error statuses return an empty provider result so hybrid search can continue. There is no adapter-level retry or `Retry-After` scheduler.
+
+Despite the variable name `FREEHIRE_MAX_REQUESTS_PER_RUN`, the counter belongs to the provider instance. Fresh CLI/API orchestrators normally create fresh counters; reusing a Python agent or orchestrator shares the cap across its runs. The cap is not persisted across process restarts and is not a global rate limiter.
+
+### Returned data and qualification
+
+- The employer URL becomes the candidate URL when supplied; otherwise a public slug produces `https://freehire.me/jobs/{slug}`.
+- Titles include the company when present. The snippet contains company/location context plus up to 1,200 characters of HTML-stripped description.
+- `source_domain` identifies `freehire.me`, and `provider_citation_id` preserves `freehire:{public_slug}` when available.
+- Allowed/blocked domains are checked against returned URLs. Explicitly blocking `freehire.me` also skips this provider.
+- Results are discovery candidates. The adapter does not mark them verified or bypass DataHunt's downstream fetch, qualification, and deduplication steps.
+- Salary, complete description, publication timestamps, and enrichment fields are not mapped into structured job records directly by this adapter. A candidate link still needs downstream evidence collection.
+
+### Programmatic catalogue-only lookup
+
+The following makes one external search request. It returns `SearchHit` objects, not persisted or verified records:
+
+```python
+from datahunt.tools import FreeHireSearchProvider
+
+provider = FreeHireSearchProvider(enabled=True, max_requests=1)
+hits = provider.search(
+    "AI Engineer jobs in UAE",
+    limit=5,
+    page=1,
+    freshness_days=7,
+)
+for hit in hits:
+    print(hit.to_dict())
+print("Requests used:", provider.requests_used)
+```
+
+For the normal persisted workflow, use `--agent jobs` or `agent_mode="jobs"` with FreeHire enabled instead of calling the provider directly.
+
+### Upstream references and usage terms
+
+- [FreeHire source repository](https://github.com/strelov1/freehire)
+- [Public API schema](https://github.com/strelov1/freehire/blob/main/web/static/openapi.yaml)
+- [Hosted-service data licence](https://freehire.me/terms#data-licence)
+
+The upstream code's MIT licence and the hosted catalogue's data-use terms are separate. FreeHire's published API contract restricts keyless access to personal/non-commercial use and requires an appropriate API plan for displaying postings in a product offered to others. No FreeHire application-submission, CV-upload, or account-management endpoints are called by this integration.
+
 ## Research and Market Pipelines
 
 ### Research waves
@@ -1001,6 +1281,8 @@ It does not infer personal addresses from naming conventions.
 
 `POST /api/interview/prep` returns structured technical, behavioral, role-specific, company-specific, and interviewer questions. `POST /api/interview/evaluate` scores and critiques practice answers, using deterministic fallback feedback when no live model is available.
 
+The company and interview API handlers currently construct `NvidiaClient` directly. Changing `LLM_PROVIDER` to Gemini does not switch those specific endpoints; general task orchestration has separate provider routing.
+
 ## Persistence and Data Model
 
 DataHunt uses SQLite with migrations under `migrations/`. The default path is `./data/datahunt.sqlite3`.
@@ -1025,6 +1307,8 @@ DataHunt uses SQLite with migrations under `migrations/`. The default path is `.
 | `job_change_events` | Saved-job closure/removal/update events |
 | `discovery_schedules` | Persisted recurring-discovery metadata |
 | `run_checkpoints` | Durable runtime checkpoints for resumable execution |
+| `schema_migrations` | Applied SQL migration filenames and timestamps |
+| `system_settings` | Editable configuration overrides; created by `SettingsRepository` |
 
 ### Migrations
 
@@ -1056,6 +1340,8 @@ The `ExportTool` and `/runs/{run_id}/export` endpoint support:
 
 Generated files are written under `EXPORT_DIR`. The database stores the export path/key, format, row count, run relationship, and hash metadata.
 
+Use `/exports/{export_id}/download` for a known stored artifact or `/runs/{run_id}/export?format=xlsx` to request a format. The latter reuses an existing file of the same format when available. Export downloads depend on both the database row and the local file; keeping only one is insufficient for recovery.
+
 ## Security and Trust Boundaries
 
 DataHunt handles untrusted URLs, public web content, model output, and user-provided search directives. The important controls are:
@@ -1086,13 +1372,13 @@ DataHunt handles untrusted URLs, public web content, model output, and user-prov
 
 ### API deployment
 
-The built-in API key middleware is useful for local or simple deployments, but it is not a complete production identity system. For production exposure, place the service behind an authenticated reverse proxy or an identity-aware gateway, restrict network access, and rotate credentials through a secret manager.
+The service has no per-user ownership model. WebSocket events are broadcast to all connected clients without per-user isolation, and a single API key grants access to all protected resources. Use a network/authentication boundary around the entire application when sharing it beyond localhost.
 
 ### What DataHunt does not do
 
 - It does not solve CAPTCHAs.
 - It does not bypass authentication or access private accounts.
-- It does not use stealth/proxy rotation as a scraping strategy.
+- It has no configured proxy-rotation service. The current crawler includes a `DDGS.extract` fallback after selected HTTP failures, described in its code/logging as TLS browser impersonation; this is separate from the read-only FreeHire adapter.
 - It does not automatically submit job applications.
 - It does not turn inferred personal contact data into “verified” data.
 
@@ -1100,9 +1386,24 @@ The built-in API key middleware is useful for local or simple deployments, but i
 
 ### Build the image
 
+The Dockerfile installs `requirements.txt` and copies the checkout into `/app`. The checkout currently has no `.dockerignore`; exclude private `.env`, database, and export files from the build context before distributing an image.
+
 ```bash
 docker build -t datahunt-agent .
 ```
+
+### Initialize the mounted database
+
+The container entrypoint starts Uvicorn; it does not apply migrations. Initialize the persistent data directory before starting the server:
+
+```bash
+docker run --rm \
+  -e DATABASE_PATH=/app/data/datahunt.sqlite3 \
+  -v "$(pwd)/data:/app/data" \
+  datahunt-agent python -m datahunt.cli migrate
+```
+
+Container commands in this section use Bash path syntax. On PowerShell use an absolute host path or `${PWD}` in bind-mount arguments.
 
 ### Run the image
 
@@ -1126,22 +1427,77 @@ uvicorn datahunt.api:app --host 0.0.0.0 --port 8000
 
 ### Docker Compose
 
+Review and correct the persistence mapping described below, then initialize and launch:
+
 ```bash
+docker compose build
+docker compose run --rm datahunt-agent python -m datahunt.cli migrate
 docker compose up --build
 ```
 
-The checked-in Compose file is useful as a starting point, but review its environment and volume mappings before relying on it for persistence. The current Python settings read `DATABASE_PATH`, while the Compose file contains a legacy `DATAHUNT_DB_PATH` variable and mounts a root-level `datahunt.db`. To make persistence explicit, prefer a Compose override or environment values equivalent to:
+The checked-in Compose file sets `DATABASE_PATH=/app/data/datahunt.sqlite3`, `EXPORT_DIR=/app/exports`, uses named persistent volumes, and includes a healthcheck. Initialize its database before the first launch:
 
-```yaml
-environment:
-  DATABASE_PATH: /app/data/datahunt.sqlite3
-  EXPORT_DIR: /app/exports
-volumes:
-  - ./data:/app/data
-  - ./exports:/app/exports
+```bash
+docker compose build
+docker compose run --rm datahunt-agent python -m datahunt.cli migrate
+docker compose up -d
 ```
 
 Do not commit API keys into Compose files. Use an `.env` file excluded by Git or your deployment secret store.
+
+## Operations and Recovery
+
+### Process model
+
+Use one Uvicorn worker for the current local workstation architecture. Background tasks, WebSocket clients, provider counters, and caches are process-local. Adding workers does not create a shared task queue or shared event stream.
+
+- `--reload` is useful during development but reloads interrupt active in-process work.
+- Closing a browser tab does not stop a detached WebSocket run.
+- A persisted checkpoint can support runtime recovery paths, but the API does not automatically reschedule every interrupted run after restart.
+- `discovery_schedules` stores scheduling metadata; there is no standalone scheduler command in the public CLI.
+- Run `POST /api/monitor/check` to explicitly recheck saved postings.
+
+### Inspect an incomplete run
+
+1. Read `/runs/{run_id}` for status, counters, warnings, and `error_code`/`error_message`.
+2. Read `/runs/{run_id}/records` to see records persisted before interruption, including review/rejected states.
+3. Check service logs and the configured source/model availability.
+4. Start a new task when a fresh run is needed. Reusing an internal runtime checkpoint is a Python-level workflow, not a documented REST resume operation.
+
+Persisted run states include `planned`, `searching`, `collecting`, `extracting`, `verifying`, `deduplicating`, `exporting`, `completed`, `partial`, `failed`, and `cancelled`. The exact phases visited depend on the selected engine.
+
+### Logs and tracing
+
+`datahunt/logger.py` emits JSON logs to stdout with UTC timestamps, levels, messages, and optional run/tool context. Its formatter redacts recognized token, email, and phone patterns. Redaction is pattern-based; inspect a diagnostic log before sharing it.
+
+`LOG_LEVEL` is a configuration field, but `get_logger()` currently initializes the application logger at `INFO` rather than reading that field. In a Python diagnostic session, set `logger.setLevel(logging.DEBUG)` explicitly if needed. FreeHire HTTP failures other than `429` are logged at debug level.
+
+LangSmith is optional and sends trace data to an external service when configured. `/telemetry/runs` reads the configured project; SQLite remains the source of local task/run/record state.
+
+### Backup and restore
+
+Back up the configured SQLite database and `EXPORT_DIR` together. Settings updates can store provider keys in `system_settings`, so treat the database and `.env` as private configuration as well as application data.
+
+For a straightforward cold backup:
+
+1. Wait for active runs to finish and stop every DataHunt process using the database.
+2. Copy the database and any remaining adjacent `-wal` and `-shm` files, plus the export directory, into a private backup directory.
+3. Store `.env` separately with equivalent access restrictions.
+4. Restart the application.
+
+For backups while the database is live, use SQLite's backup API rather than copying only the main database file. WAL mode can leave committed data in the write-ahead log.
+
+To restore, stop the service, restore the matching data/export snapshot at the configured paths, and restart. Export rows store file paths: moving a backup to a different filesystem layout can leave download references pointing to old locations. `/health` checks connectivity, not backup completeness or migration correctness.
+
+### Updating a checkout
+
+1. Preserve local work and take a data/configuration backup.
+2. Review dependency and migration changes.
+3. Install the updated `requirements.txt` in the same virtual environment.
+4. Run `python -m datahunt.cli migrate` before starting the updated application.
+5. Check `/health`, list recent runs, and open an existing export.
+
+Migrations are recorded by filename and are designed to run once. Do not edit already-applied migrations as an upgrade mechanism; add a subsequent migration instead. There is no public down-migration command.
 
 ## Testing and Quality Checks
 
@@ -1159,6 +1515,7 @@ python -m pytest -q tests/test_job_agent_e2e.py
 python -m pytest -q tests/test_research_discovery_engine.py
 python -m pytest -q tests/test_market_agent.py
 python -m pytest -q tests/test_api.py
+python -m pytest -q tests/test_freehire_search.py
 ```
 
 ### Compile-check Python files
@@ -1185,7 +1542,17 @@ The repository currently contains pre-existing Ruff/style debt in legacy files. 
 
 ### Latest local verification snapshot
 
-At the time this README was updated, the full local test command completed with **730 passed**. Re-run the command in your checkout; test counts and external-source behavior can change as the repository evolves.
+Recorded on **2026-10-26** after production-readiness hardening:
+
+| Check | Recorded result |
+| --- | --- |
+| Full `python -m pytest -q` | 740 passed |
+| Production-readiness, API, configuration, and registry focused checks | 21 passed |
+| Python compilation and patch whitespace | Passed |
+| README structure/link/example validation | Passed |
+| Compose structure validation | Passed |
+
+These are local results, not a CI badge or a current source-availability guarantee. FreeHire's dedicated tests mock HTTP; the production suite does not prove that external providers, model keys, or public job sources are reachable in deployment.
 
 ## Troubleshooting
 
@@ -1231,6 +1598,24 @@ GEMINI_API_KEY=...
 
 Restart the process after changing provider variables.
 
+### FreeHire is enabled but no jobs appear
+
+Check `/api/settings` for `freehire_enabled`, `freehire_api_url`, and the request cap. A false `freehire_configured` only means no API key is present; it does not disable keyless searches.
+
+Other causes include exhausted instance budgets, upstream throttling, domain filtering, restrictive query text, or downstream job rejection. The provider returns an empty list on HTTP/parse/connection failures, allowing the other providers to continue. A successful run therefore does not prove that FreeHire contributed results. Inspect candidate provenance and debug logs when investigating coverage.
+
+### Editing `.env` does not change behavior
+
+Stored `system_settings` overrides are loaded after environment settings. Read the effective settings response and update the relevant editable field through `/api/settings`, or remove its database override deliberately. Restart to recreate provider instances. The global reset removes editable non-secret configuration lines; provider keys remain environment/secret-manager values.
+
+### PowerShell activation is blocked
+
+Activation is optional. Invoke `.\.venv\Scripts\python.exe` directly as shown in [Quick Start](#quick-start), using the same interpreter for installation, migrations, tests, and Uvicorn.
+
+### The port is already in use
+
+Start Uvicorn on another local port, for example `--port 8001`, and open `http://127.0.0.1:8001/`. The Windows launcher is fixed to port 8000; use the direct command for another port.
+
 ### Search returns zero or partial results
 
 This can be correct behavior. Public sources may:
@@ -1257,20 +1642,26 @@ The API sets no-cache headers for frontend assets and run endpoints, but browser
 
 ### Docker writes data to the wrong location
 
-Use `DATABASE_PATH=/app/data/datahunt.sqlite3` and mount `/app/data`, as shown in [Docker](#docker). `DATAHUNT_DB_PATH` is not the setting read by the current Python configuration.
+Use `DATABASE_PATH=/app/data/datahunt.sqlite3` and persist `/app/data`, as shown in [Docker](#docker). `DATAHUNT_DB_PATH` is not a supported setting.
 
 ## Known Gaps and Caveats
 
 These are implementation facts worth knowing before deploying:
 
-1. **Runtime/package version mismatch:** `datahunt/__init__.py` reports `0.1.0`, while `pyproject.toml` declares `0.2.0`.
+1. **Version source duplication:** `datahunt/__init__.py` and `pyproject.toml` currently both report `0.2.0`, but releases must keep these two declarations synchronized.
 2. **Environment-example drift:** `.env.example` still uses some older Gemini/default limit values. `datahunt/config.py` is the runtime source of truth.
-3. **Compose persistence drift:** The checked-in Compose file uses a legacy database variable/mount arrangement. Set `DATABASE_PATH` explicitly for reliable persistence.
+3. **Compose storage model:** Compose uses named volumes for database and exports. Back them up with Docker volume tooling or replace them with deliberate host mounts and matching permissions.
 4. **People UI exposure:** The People agent is wired into the Python factory, CLI, API mode, and orchestrator, but the central HTML hub does not yet have a dedicated People navigation card.
 5. **Market routing is equity-first:** Explicit `market` mode routes through the market discovery engine. SaaS/competitive helper code exists, but market-intent routing continues to evolve.
 6. **External-source volatility:** Search engines and public career pages can throttle, block, or change structure without notice.
 7. **Full lint debt:** The full repository has unrelated existing Ruff findings; passing tests do not imply a clean lint baseline.
 8. **No automatic applications:** Job records and application tracking are supported, but submitting an application remains a user action.
+9. **FreeHire integration scope:** Query translation uses a small alias/regex mapping, retains country words in full text, and uses a query-keyword heuristic rather than an explicit agent-mode argument. The request cap is per provider instance, not a durable per-run/global quota.
+10. **Settings/runtime boundaries:** Provider keys are environment/secret-manager configuration and cannot be changed through the settings API. FreeHire provider instances and the concurrent-run semaphore are initialized at process startup; restart after configuration changes.
+11. **Local-service authentication limits:** A configured API key is shared by all callers; there is no per-user ownership or tenant isolation, and WebSocket events broadcast across connected clients.
+12. **Background execution:** Work runs inside the server process; checkpoints do not provide a durable queue or automatic restart scheduling. Use one worker for consistent local telemetry.
+13. **Provider selection in auxiliary endpoints:** Company research and interview endpoints instantiate NVIDIA directly, independently of the general task provider choice.
+14. **Deployment verification:** The test suite does not validate live provider credentials, external source availability, container image builds, or volume restore procedures.
 
 ## Contributing
 
@@ -1295,6 +1686,33 @@ git diff -- path/to/changed/file.py
 
 Keep commits focused and use conventional prefixes such as `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, or `chore:` when committing is requested.
 
+### Extending the application
+
+| Change | Main integration points | Useful checks |
+| --- | --- | --- |
+| Add a search source | `SearchProvider`/`SearchHit`, hybrid routing, provider registry, config, exports | Provider mapping/error tests, domain-policy and fallback tests |
+| Add an agent mode | `agent/` wrapper and factory, orchestrator routing, CLI/API input, optional frontend entry | `tests/test_agent_directory.py` and route-specific tests |
+| Change job qualification | Canonical query/spec models, `datahunt/agent/policies.py`, runtime and extraction callers | Related/unrelated role, geography, experience, and explicit-skill regressions |
+| Change stored records | Domain models, repositories, a new ordered SQL migration | Migration/idempotence, persistence, API, and export tests |
+| Change report presentation | `research_report.py`, `market_report.py`, compatible engine wrappers and export formatting | Report evidence/format assertions |
+
+Inject mock search/model dependencies for deterministic tests. Keep credentials in private local configuration, and use fixture job/company data rather than copying production exports into tests.
+
+## Further Documentation
+
+- [Architecture notes](docs/Architecture.md)
+- [Database design](docs/Database.md)
+- [Security notes](docs/Security.md)
+- [Error handling](docs/Error-handling.md)
+- [Prompts](docs/Prompts.md)
+- [Project phases](docs/Phases.md)
+- [Job discovery audit](docs/JOB_DISCOVERY_AUDIT.md)
+- [Repository contribution instructions](AGENTS.md)
+
+Design notes may describe intended behavior beyond the current implementation. For exact runtime contracts, consult `datahunt/config.py`, `datahunt/api.py`, `datahunt/models/`, and the generated `/openapi.json`.
+
 ## License
 
 DataHunt is distributed under the [Apache License 2.0](LICENSE).
+
+FreeHire is a separate [MIT-licensed project](https://github.com/strelov1/freehire). Its hosted API/data terms and third-party source terms apply independently of DataHunt's code licence.

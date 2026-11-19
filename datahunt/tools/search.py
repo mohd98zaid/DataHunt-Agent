@@ -7,6 +7,7 @@ from urllib.parse import urlparse, unquote
 import httpx
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 
 from datahunt.errors import DataHuntError, ErrorCode
 from datahunt.logger import logger
@@ -679,10 +680,35 @@ class DuckDuckGoSearchProvider:
     """
     Public web search provider using DuckDuckGo Lite endpoint (high-throughput,
     anti-bot resilient, zero JS) with fallback to DDGS and HTML endpoints.
+    Includes circuit breaker cooldown when IP rate-limits or connection drops occur.
     """
     LITE_URL = "https://lite.duckduckgo.com/lite/"
     SEARCH_URL = "https://html.duckduckgo.com/html/"
-    
+
+    # Class-level circuit breaker shared across queries in the process
+    _circuit_broken_until: float = 0.0
+    _consecutive_errors: int = 0
+    _ERROR_THRESHOLD: int = 2
+    _COOLDOWN_SECONDS: float = 60.0
+
+    @classmethod
+    def trip_circuit_breaker(cls, reason: str = "") -> None:
+        cls._consecutive_errors += 1
+        if cls._consecutive_errors >= cls._ERROR_THRESHOLD:
+            cls._circuit_broken_until = time.time() + cls._COOLDOWN_SECONDS
+            logger.warning(
+                f"DuckDuckGo rate-limiting/connection drops detected ({cls._consecutive_errors} consecutive failures; latest: {reason}). "
+                f"Tripping circuit breaker for {cls._COOLDOWN_SECONDS}s to avoid pipeline freeze."
+            )
+
+    @classmethod
+    def record_success(cls) -> None:
+        cls._consecutive_errors = 0
+
+    @classmethod
+    def is_cooling_down(cls) -> bool:
+        return time.time() < cls._circuit_broken_until
+
     def search(
         self,
         query: str,
@@ -692,6 +718,10 @@ class DuckDuckGoSearchProvider:
         allowed_domains: Optional[List[str]] = None,
         blocked_domains: Optional[List[str]] = None
     ) -> List[SearchHit]:
+        if self.is_cooling_down():
+            logger.debug(f"DuckDuckGo circuit breaker active; skipping search for '{query}'")
+            return []
+
         hits: List[SearchHit] = []
         timelimit = None
         if freshness_days is not None and "site:" not in query.lower() and " or " not in query.lower():
@@ -710,7 +740,7 @@ class DuckDuckGoSearchProvider:
         }
         for attempt in range(1):
             try:
-                with httpx.Client(timeout=3.0, headers=headers, follow_redirects=True) as client:
+                with httpx.Client(timeout=2.5, headers=headers, follow_redirects=True) as client:
                     post_data: Dict[str, str] = {"q": query}
                     if page > 1:
                         post_data["s"] = str((page - 1) * 30)
@@ -752,16 +782,22 @@ class DuckDuckGoSearchProvider:
                             if len(hits) >= limit:
                                 break
                         if hits:
+                            self.record_success()
                             return hits
-                        break  # Got 200 from Lite endpoint, don't retry same endpoint
-                    else:
-                        import time
-                        time.sleep(0.75 * (attempt + 1))  # Backoff on non-200
+                        break  # Got clean 200 from Lite endpoint, don't retry same endpoint
+                    elif resp.status_code in (403, 429):
+                        self.trip_circuit_breaker(f"HTTP {resp.status_code}")
+                        break
             except Exception as lite_err:
+                err_str = str(lite_err).lower()
+                is_drop = any(t in err_str for t in ("10054", "connection reset", "connection closed", "timed out", "timeout"))
                 logger.debug(f"DuckDuckGo Lite attempt {attempt+1} error on '{query}': {lite_err}")
-                if attempt == 0:
-                    import time
-                    time.sleep(0.75)
+                if is_drop:
+                    self.trip_circuit_breaker(str(lite_err))
+                    break
+
+        if self.is_cooling_down():
+            return hits
 
         # 2. Secondary fallback: DDGS client
         try:
@@ -770,7 +806,8 @@ class DuckDuckGoSearchProvider:
             if timelimit:
                 ddgs_kwargs["timelimit"] = timelimit
 
-            raw_results = list(DDGS().text(query, **ddgs_kwargs))
+            with DDGS(timeout=3) as ddgs_client:
+                raw_results = list(ddgs_client.text(query, **ddgs_kwargs))
             if raw_results:
                 for item in raw_results:
                     url = item.get("href") or item.get("link") or ""
@@ -798,13 +835,20 @@ class DuckDuckGoSearchProvider:
                     if len(hits) >= limit:
                         break
             if hits:
+                self.record_success()
                 return hits
         except Exception as ddg_err:
+            err_str = str(ddg_err).lower()
+            if any(t in err_str for t in ("10054", "connection reset", "timed out", "timeout", "ratelimit")):
+                self.trip_circuit_breaker(str(ddg_err))
             logger.debug(f"DDGS search attempt on '{query}': {ddg_err}")
+
+        if self.is_cooling_down():
+            return hits
 
         # 3. Tertiary fallback: HTML endpoint
         try:
-            with httpx.Client(timeout=3.0, headers=headers, follow_redirects=True) as client:
+            with httpx.Client(timeout=2.5, headers=headers, follow_redirects=True) as client:
                 post_data = {"q": query}
                 if page > 1:
                     post_data["s"] = str((page - 1) * 30)
@@ -849,11 +893,19 @@ class DuckDuckGoSearchProvider:
                         ))
                         if len(hits) >= limit:
                             break
+                    if hits:
+                        self.record_success()
+                        return hits
+                elif resp.status_code in (403, 429):
+                    self.trip_circuit_breaker(f"HTTP {resp.status_code}")
         except Exception as e:
+            err_str = str(e).lower()
+            if any(t in err_str for t in ("10054", "connection reset", "timed out", "timeout")):
+                self.trip_circuit_breaker(str(e))
             logger.warning(f"DuckDuckGo HTML search error: {e}")
 
-        # If restrictive freshness filter returned 0 hits, retry without timelimit
-        if not hits and timelimit:
+        # If restrictive freshness filter returned 0 hits, retry without timelimit ONLY IF circuit is healthy
+        if not hits and timelimit and not self.is_cooling_down():
             logger.info(f"Freshness filter '{timelimit}' returned 0 hits for '{query}', falling back to standard search.")
             return self.search(
                 query=query,
@@ -865,6 +917,68 @@ class DuckDuckGoSearchProvider:
             )
 
         return hits
+
+
+class BraveSearchProvider:
+    """Brave Search API — free tier (2000 req/month), no JS bot blocks, real SERP results.
+    Set BRAVE_API_KEY in .env to enable. Silently returns [] when key absent."""
+
+    _API_URL = "https://api.search.brave.com/res/v1/web/search"
+
+    def search(
+        self,
+        query: str,
+        limit: int = 10,
+        page: int = 1,
+        freshness_days: Optional[int] = None,
+        allowed_domains: Optional[List[str]] = None,
+        blocked_domains: Optional[List[str]] = None,
+    ) -> List[SearchHit]:
+        from datahunt.config import settings
+        api_key = getattr(settings, "BRAVE_API_KEY", "").strip()
+        if not api_key:
+            return []
+        params: Dict[str, Any] = {
+            "q": query,
+            "count": min(limit, 20),
+            "offset": max(0, (page - 1) * limit),
+        }
+        if freshness_days:
+            params["freshness"] = "pd" if freshness_days <= 1 else ("pw" if freshness_days <= 7 else "pm")
+        try:
+            resp = httpx.get(
+                self._API_URL,
+                params=params,
+                headers={
+                    "Accept": "application/json",
+                    "Accept-Encoding": "gzip",
+                    "X-Subscription-Token": api_key,
+                },
+                timeout=10.0,
+                follow_redirects=True,
+            )
+            resp.raise_for_status()
+            hits: List[SearchHit] = []
+            for item in resp.json().get("web", {}).get("results", []):
+                url = canonicalize_url(item.get("url", ""))
+                if not url or is_ad_or_tracking_url(url):
+                    continue
+                if allowed_domains and not any(d in url for d in allowed_domains):
+                    continue
+                if blocked_domains and any(d in url for d in blocked_domains):
+                    continue
+                hits.append(SearchHit(
+                    url=url,
+                    title=item.get("title", ""),
+                    snippet=item.get("description", ""),
+                    source="brave",
+                ))
+            logger.info(f"Brave Search returned {len(hits)} hits for '{query}'")
+            return hits
+        except Exception as e:
+            logger.debug(f"Brave search error for '{query}': {e}")
+            return []
+
 
 class MockSearchProvider:
     """Mock/offline search provider for testing and deterministic validation."""
@@ -1101,6 +1215,166 @@ class LiveJobBoardSearchProvider:
 
         return hits
 
+
+class FreeHireSearchProvider:
+    """Read-only adapter for FreeHire's public, structured job-search API."""
+
+    def __init__(
+        self,
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        enabled: Optional[bool] = None,
+        max_requests: Optional[int] = None,
+    ):
+        from datahunt.config import settings
+
+        self.base_url = (base_url or settings.FREEHIRE_API_URL).rstrip("/")
+        self.api_key = api_key if api_key is not None else settings.FREEHIRE_API_KEY
+        self.enabled = enabled if enabled is not None else settings.FREEHIRE_ENABLED
+        self.max_requests = max_requests if max_requests is not None else settings.FREEHIRE_MAX_REQUESTS_PER_RUN
+        self.requests_used = 0
+        self._request_lock = Lock()
+
+    @staticmethod
+    def _clean_query(query: str) -> str:
+        # FreeHire has its own q grammar; search-plan site: operators are for
+        # DuckDuckGo and would otherwise become literal query text.
+        cleaned = re.sub(r"\bsite:[^\s]+", " ", query or "", flags=re.IGNORECASE)
+        cleaned = re.sub(
+            r"\b(?:with\s+)?\d+\s*(?:-|–|to)\s*\d+\s*(?:years?|yrs?)(?:\s+(?:of\s+)?experience)?\b",
+            " ",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        cleaned = re.sub(r"\b(?:find|search|jobs?|openings?|roles?|positions?)\b", " ", cleaned, flags=re.IGNORECASE)
+        return re.sub(r"\s+", " ", cleaned).strip()
+
+    @staticmethod
+    def _query_filters(query: str) -> Dict[str, Any]:
+        lower = (query or "").casefold()
+        aliases = {
+            "saudi arabia": "sa", "saudi": "sa", "ksa": "sa",
+            "united arab emirates": "ae", "uae": "ae",
+            "qatar": "qa", "kuwait": "kw", "bahrain": "bh", "oman": "om",
+            "india": "in", "united kingdom": "gb", "uk": "gb",
+            "singapore": "sg", "canada": "ca", "united states": "us", "usa": "us",
+        }
+        countries = []
+        for alias, code in aliases.items():
+            if re.search(r"(?<!\w)" + re.escape(alias) + r"(?!\w)", lower) and code not in countries:
+                countries.append(code)
+
+        filters: Dict[str, Any] = {}
+        if countries:
+            filters["countries"] = countries
+
+        experience = re.search(
+            r"\b(\d+)\s*(?:-|–|to)\s*(\d+)\s*(?:years?|yrs?)(?:\s+(?:of\s+)?experience)?\b",
+            lower,
+        )
+        if experience:
+            filters["experience_years_min"] = int(experience.group(1))
+            filters["experience_years_max"] = int(experience.group(2))
+        return filters
+
+    def search(
+        self,
+        query: str,
+        limit: int = 10,
+        page: int = 1,
+        freshness_days: Optional[int] = None,
+        allowed_domains: Optional[List[str]] = None,
+        blocked_domains: Optional[List[str]] = None,
+    ) -> List[SearchHit]:
+        if not self.enabled or self.requests_used >= max(0, self.max_requests):
+            return []
+
+        try:
+            check_domain_policy("freehire.me", blocked_domains=blocked_domains)
+        except DataHuntError:
+            return []
+
+        cleaned_query = self._clean_query(query)
+        if not cleaned_query:
+            return []
+
+        try:
+            from datahunt.config import settings
+
+            request_limit = min(max(1, limit), 100)
+            offset = max(0, (page - 1) * request_limit)
+            params: Dict[str, Any] = {
+                "q": cleaned_query,
+                "q_fields": "title,company,description,location",
+                "limit": request_limit,
+                "offset": offset,
+                "sort": "posted_at",
+                "order": "desc",
+            }
+            params.update(self._query_filters(query))
+            if freshness_days is not None and freshness_days > 0:
+                params["posted_within_days"] = freshness_days
+            headers = {
+                "Accept": "application/json",
+                "User-Agent": "datahunt-agent/0.2 (+https://github.com/strelov1/freehire)",
+            }
+            if self.api_key.strip():
+                headers["Authorization"] = f"Bearer {self.api_key.strip()}"
+
+            with self._request_lock:
+                if self.requests_used >= max(0, self.max_requests):
+                    return []
+                self.requests_used += 1
+            timeout = min(max(3.0, settings.READ_TIMEOUT_SECONDS), 10.0)
+            with httpx.Client(timeout=timeout, follow_redirects=True, headers=headers) as client:
+                response = client.get(f"{self.base_url}/jobs/search", params=params)
+
+            if response.status_code == 429:
+                logger.warning("FreeHire search rate limit reached; continuing with local providers")
+                return []
+            if response.status_code >= 400:
+                logger.debug("FreeHire search returned HTTP %s", response.status_code)
+                return []
+
+            payload = response.json()
+            items = payload.get("data", []) if isinstance(payload, dict) else []
+            hits: List[SearchHit] = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                slug = str(item.get("public_slug") or "").strip()
+                target_url = str(item.get("url") or "").strip()
+                if not target_url.startswith(("http://", "https://")):
+                    if not slug:
+                        continue
+                    target_url = f"https://freehire.me/jobs/{slug}"
+                try:
+                    check_domain_policy(urlparse(target_url).netloc, allowed_domains, blocked_domains)
+                except DataHuntError:
+                    continue
+
+                title = str(item.get("title") or "Job opening").strip()
+                company = str(item.get("company") or "").strip()
+                location = str(item.get("location") or "").strip()
+                description = str(item.get("description") or "").strip()
+                description = BeautifulSoup(description, "html.parser").get_text(" ", strip=True)
+                context = " | ".join(value for value in (company, location) if value)
+                snippet = "\n".join(value for value in (context, description[:1200]) if value)
+                display_title = f"{title} at {company}" if company else title
+                hits.append(SearchHit(
+                    url=target_url,
+                    title=display_title,
+                    snippet=snippet,
+                    source_domain="freehire.me",
+                    provider_citation_id=f"freehire:{slug}" if slug else None,
+                ))
+                if len(hits) >= limit:
+                    break
+            return hits
+        except Exception as exc:
+            logger.debug("FreeHire search failed for %r: %s", query, exc)
+            return []
+
 class LLMSearchProvider:
     """
     Search provider using Gemini LLM to discover and retrieve high-probability
@@ -1192,7 +1466,9 @@ class HybridSearchProvider:
     """Multi-tier search provider: DDG -> Regional LLM Discovery / Job Boards -> Deterministic Mock (test-only)."""
     def __init__(self, gemini_client=None, fallback_to_mock: bool = False):
         self.ddg = DuckDuckGoSearchProvider()
+        self.brave = BraveSearchProvider()
         self.job_board = LiveJobBoardSearchProvider()
+        self.freehire = FreeHireSearchProvider()
         self.llm_search = LLMSearchProvider(gemini_client=gemini_client)
         self.fallback_to_mock = fallback_to_mock
         self.mock = MockSearchProvider() if fallback_to_mock else None
@@ -1206,22 +1482,51 @@ class HybridSearchProvider:
         allowed_domains: Optional[List[str]] = None,
         blocked_domains: Optional[List[str]] = None
     ) -> List[SearchHit]:
-        # 1. Try DuckDuckGo
-        hits = self.ddg.search(
+        q_low = query.lower()
+        is_job = any(k in q_low for k in ("job", "jobs", "hiring", "career", "careers", "intern", "vacancy", "openings", "engineer", "developer", "remote", "architect", "lead"))
+
+        # 1. Use FreeHire's structured catalogue for job queries before broad SERP search.
+        # shortcut: cap external catalogue calls per run; raise the configured cap when a
+        # deployment has an API plan and needs deeper pagination.
+        freehire_hits = self.freehire.search(
             query,
             limit=limit,
+            page=page,
+            freshness_days=freshness_days,
+            allowed_domains=allowed_domains,
+            blocked_domains=blocked_domains,
+        ) if is_job else []
+        if len(freehire_hits) >= limit:
+            return freehire_hits[:limit]
+
+        # 2. Try DuckDuckGo
+        hits = self.ddg.search(
+            query,
+            limit=max(1, limit - len(freehire_hits)),
             page=page,
             freshness_days=freshness_days,
             allowed_domains=allowed_domains,
             blocked_domains=blocked_domains
         )
         if hits:
-            return hits
+            return (freehire_hits + hits)[:limit]
 
-        q_low = query.lower()
-        is_job = any(k in q_low for k in ("job", "jobs", "hiring", "career", "careers", "intern", "vacancy", "openings", "engineer", "developer", "remote", "architect", "lead"))
+        if freehire_hits:
+            return freehire_hits[:limit]
 
-        # 2. For job queries: try direct live job board endpoints first (zero LLM quota cost)
+        # 2b. Brave Search — real SERP fallback, no bot-block; activates when DDG circuit-broke or returned 0
+        brave_hits = self.brave.search(
+            query,
+            limit=limit,
+            page=page,
+            freshness_days=freshness_days,
+            allowed_domains=allowed_domains,
+            blocked_domains=blocked_domains,
+        )
+        if brave_hits:
+            return (freehire_hits + brave_hits)[:limit]
+
+        # 3. For job queries: try direct live job board endpoints first (zero LLM quota cost)
         if is_job:
             hits = self.job_board.search(
                 query,
@@ -1235,7 +1540,7 @@ class HybridSearchProvider:
                 logger.info(f"Retrieved {len(hits)} live hits via direct job board endpoints for '{query}'")
                 return hits
 
-        # 3. Try LLM-assisted search discovery if models are available
+        # 4. Try LLM-assisted search discovery if models are available
         try:
             hits = self.llm_search.search(
                 query,
@@ -1251,7 +1556,7 @@ class HybridSearchProvider:
         except Exception as e:
             logger.debug(f"LLM search fallback failed for '{query}': {e}")
 
-        # 4. Final fallback: only use mock if explicitly enabled for test isolation
+        # 5. Final fallback: only use mock if explicitly enabled for test isolation
         if self.fallback_to_mock and self.mock:
             logger.info("Live search returned 0 hits across all live providers, utilizing test mock fallback")
             return self.mock.search(
@@ -1403,17 +1708,20 @@ class ParallelSearchEngine:
 
 class SearchProviderRegistry:
     """
-    Registry for pluggable search providers (DuckDuckGo, LiveJobBoard, LLM, Mock, Hybrid).
+    Registry for pluggable search providers (DuckDuckGo, FreeHire, LiveJobBoard, LLM, Mock, Hybrid).
     Enables dynamic provider selection, fallback chains, and pagination.
     """
     def __init__(self):
         self._providers: Dict[str, SearchProvider] = {}
         ddg = DuckDuckGoSearchProvider()
+        freehire = FreeHireSearchProvider()
         jb = LiveJobBoardSearchProvider()
         mock = MockSearchProvider()
         hybrid = HybridSearchProvider()
         self.register("duckduckgo", ddg)
         self.register("ddg", ddg)
+        self.register("freehire", freehire)
+        self.register("fh", freehire)
         self.register("job_boards", jb)
         self.register("mock", mock)
         self.register("hybrid", hybrid)

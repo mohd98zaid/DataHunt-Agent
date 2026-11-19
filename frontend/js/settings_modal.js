@@ -96,7 +96,15 @@
       toast.style.color = '#ff3366';
       toast.style.boxShadow = '0 0 20px rgba(255, 51, 102, 0.3)';
       toastIcon.textContent = '✕';
-    } else {
+           } else if (field.type === 'boolean') {
+             const input = document.createElement('input');
+             input.id = `dh-setting-${field.key}`;
+             input.name = field.key;
+             input.className = 'settings-input';
+             input.type = 'checkbox';
+             input.checked = field.value === true || String(field.value).toLowerCase() === 'true';
+             group.appendChild(input);
+           } else {
       toast.style.borderColor = '#00ffa3';
       toast.style.color = '#00ffa3';
       toast.style.boxShadow = '0 0 20px rgba(0, 255, 163, 0.3)';
@@ -189,7 +197,9 @@
             select.appendChild(optEl);
           });
           group.appendChild(select);
-        } else {
+       } else if (input.type === 'checkbox') {
+         updates[name] = input.checked;
+       } else {
           const input = document.createElement('input');
           input.id = `dh-setting-${field.key}`;
           input.name = field.key;

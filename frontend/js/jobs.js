@@ -1113,8 +1113,8 @@ function renderTable(jobs) {
 
 function changePage(delta) {
   const totalPages = Math.max(1, Math.ceil(filteredJobs.length / pageSize));
-  const newPage = currentPage + delta;
-  if (newPage >= 1 && newPage <= totalPages) {
+  const newPage = Math.min(Math.max(1, currentPage + delta), totalPages);
+  if (newPage !== currentPage) {
     currentPage = newPage;
     renderTable(filteredJobs);
     const scrollArea = document.querySelector(".table-scroll-area");

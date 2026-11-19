@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import re
 import sys
 from datetime import datetime, timezone
@@ -70,11 +71,12 @@ class JsonFormatter(logging.Formatter):
 def get_logger(name: str = "datahunt") -> logging.Logger:
     logger = logging.getLogger(name)
     if not logger.handlers:
-        logger.setLevel(logging.INFO)
+        configured_level = os.getenv("LOG_LEVEL", "INFO").upper()
+        logger.setLevel(getattr(logging, configured_level, logging.INFO))
         handler = logging.StreamHandler(sys.stdout)
         handler.setFormatter(JsonFormatter())
         logger.addHandler(handler)
-        logger.propagate = False
+        logger.propagate = True
     return logger
 
 logger = get_logger("datahunt")

@@ -11,8 +11,23 @@ services:
       - GEMINI_LITE_MODEL=gemini-flash-lite-latest
       - GEMINI_FLASH_MODEL=gemini-3.8-flash
       - DATAHUNT_API_KEY=${DATAHUNT_API_KEY:-}
-      - DATAHUNT_DB_PATH=datahunt.db
+      - DATABASE_PATH=/app/data/datahunt.sqlite3
+      - EXPORT_DIR=/app/exports
+      - FREEHIRE_ENABLED=${FREEHIRE_ENABLED:-false}
+      - FREEHIRE_API_URL=${FREEHIRE_API_URL:-https://freehire.me/api/v1}
+      - FREEHIRE_API_KEY=${FREEHIRE_API_KEY:-}
+      - FREEHIRE_MAX_REQUESTS_PER_RUN=${FREEHIRE_MAX_REQUESTS_PER_RUN:-20}
     volumes:
-      - ./exports:/app/exports
-      - ./datahunt.db:/app/datahunt.db
+      - datahunt-data:/app/data
+      - datahunt-exports:/app/exports
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     restart: unless-stopped
+
+volumes:
+  datahunt-data:
+  datahunt-exports:

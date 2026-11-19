@@ -1376,8 +1376,25 @@ class ResearchOrchestrator:
             self.run_repo.update_run_counters(run.id, counters)
 
             has_results = (len(final_records) > 0 or len(fetched_docs) > 0)
-            has_verification_failures = counters.records_rejected > 0
-            critical_errors = [w for w in warnings if "error" in w.lower()]
+            # Rejection of unqualified candidates during verification is normal filtering;
+            # only mark verification failure if zero records survived verification despite candidate rejections
+            has_verification_failures = (len(final_records) == 0 and counters.records_rejected > 0)
+            _ignorable_warning_substrings = (
+                "duckduckgo",
+                "search error",
+                "timed out",
+                "connection reset",
+                "connection closed",
+                "rate limit",
+                "http error",
+                "fetch error",
+                "403 forbidden",
+                "stopped early",
+            )
+            critical_errors = [
+                w for w in warnings
+                if "error" in w.lower() and not any(sub in w.lower() for sub in _ignorable_warning_substrings)
+            ]
             final_status = RunStatus.COMPLETED if has_results and not (has_verification_failures or critical_errors) else (RunStatus.PARTIAL if has_results else RunStatus.FAILED)
             now_iso = datetime.now(timezone.utc).isoformat()
             self.run_repo.update_run_status(run.id, final_status, finished_at=now_iso)
