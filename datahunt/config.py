@@ -29,6 +29,10 @@ class Settings:
 
     # Brave Search API (free tier — 2000 req/month; fallback when DDG rate-limits)
     BRAVE_API_KEY: str = os.getenv("BRAVE_API_KEY", "")
+    # Serper.dev — Google Search API (2500 free queries/month, no CC)
+    SERPER_API_KEY: str = os.getenv("SERPER_API_KEY", "")
+    # Tavily Search — AI-optimized (1000 free queries/month, no CC)
+    TAVILY_API_KEY: str = os.getenv("TAVILY_API_KEY", "")
 
     # Gemini LLM Settings (kept intact for fallback / alternate provider)
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
@@ -327,6 +331,8 @@ EDITABLE_SETTINGS = {
     "FREEHIRE_API_URL": str,
     "FREEHIRE_MAX_REQUESTS_PER_RUN": int,
     "BRAVE_API_KEY": str,
+    "SERPER_API_KEY": str,
+    "TAVILY_API_KEY": str,
     "GEMINI_MODEL": str,
     "DEFAULT_FRESHNESS": str,
     "DEFAULT_COLLECTION_MODE": str,

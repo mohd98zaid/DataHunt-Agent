@@ -375,6 +375,9 @@ def test_production_search_never_returns_mock_example_com():
     provider = HybridSearchProvider(fallback_to_mock=False)
     
     with patch.object(provider.ddg, "search", return_value=[]), \
+         patch.object(provider.serper, "search", return_value=[]), \
+         patch.object(provider.tavily, "search", return_value=[]), \
+         patch.object(provider.brave, "search", return_value=[]), \
          patch.object(provider.job_board, "search", return_value=[]), \
          patch.object(provider.llm_search, "search", return_value=[]):
         hits = provider.search("GenAI Engineer in Dubai")

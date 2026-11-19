@@ -971,12 +971,116 @@ class BraveSearchProvider:
                     url=url,
                     title=item.get("title", ""),
                     snippet=item.get("description", ""),
-                    source="brave",
+                    source_domain=urlparse(url).netloc,
                 ))
             logger.info(f"Brave Search returned {len(hits)} hits for '{query}'")
             return hits
         except Exception as e:
             logger.debug(f"Brave search error for '{query}': {e}")
+            return []
+
+
+class SerperSearchProvider:
+    """Serper.dev — Google Search API, 2500 free queries/month, no CC.
+    Set SERPER_API_KEY in .env to enable. Silently returns [] when key absent."""
+
+    _API_URL = "https://google.serper.dev/search"
+
+    def search(
+        self,
+        query: str,
+        limit: int = 10,
+        page: int = 1,
+        freshness_days: Optional[int] = None,
+        allowed_domains: Optional[List[str]] = None,
+        blocked_domains: Optional[List[str]] = None,
+    ) -> List[SearchHit]:
+        from datahunt.config import settings
+        api_key = getattr(settings, "SERPER_API_KEY", "").strip()
+        if not api_key:
+            return []
+        payload: Dict[str, Any] = {"q": query, "num": min(limit, 10), "page": page}
+        if freshness_days and freshness_days <= 7:
+            payload["tbs"] = f"qdr:{'d' if freshness_days <= 1 else 'w'}"
+        try:
+            resp = httpx.post(
+                self._API_URL,
+                json=payload,
+                headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
+                timeout=10.0,
+            )
+            resp.raise_for_status()
+            hits: List[SearchHit] = []
+            for item in resp.json().get("organic", []):
+                url = canonicalize_url(item.get("link", ""))
+                if not url or is_ad_or_tracking_url(url):
+                    continue
+                if allowed_domains and not any(d in url for d in allowed_domains):
+                    continue
+                if blocked_domains and any(d in url for d in blocked_domains):
+                    continue
+                hits.append(SearchHit(
+                    url=url,
+                    title=item.get("title", ""),
+                    snippet=item.get("snippet", ""),
+                    source_domain=urlparse(url).netloc,
+                ))
+            logger.info(f"Serper returned {len(hits)} hits for '{query}'")
+            return hits
+        except Exception as e:
+            logger.debug(f"Serper search error for '{query}': {e}")
+            return []
+
+
+class TavilySearchProvider:
+    """Tavily Search — AI-optimized, 1000 free queries/month, no CC.
+    Set TAVILY_API_KEY in .env to enable. Silently returns [] when key absent."""
+
+    _API_URL = "https://api.tavily.com/search"
+
+    def search(
+        self,
+        query: str,
+        limit: int = 10,
+        page: int = 1,
+        freshness_days: Optional[int] = None,
+        allowed_domains: Optional[List[str]] = None,
+        blocked_domains: Optional[List[str]] = None,
+    ) -> List[SearchHit]:
+        from datahunt.config import settings
+        api_key = getattr(settings, "TAVILY_API_KEY", "").strip()
+        if not api_key:
+            return []
+        payload: Dict[str, Any] = {
+            "api_key": api_key,
+            "query": query,
+            "max_results": min(limit, 10),
+            "search_depth": "basic",
+        }
+        if allowed_domains:
+            payload["include_domains"] = allowed_domains[:5]
+        if blocked_domains:
+            payload["exclude_domains"] = blocked_domains[:5]
+        if freshness_days and freshness_days <= 7:
+            payload["days"] = freshness_days
+        try:
+            resp = httpx.post(self._API_URL, json=payload, timeout=12.0)
+            resp.raise_for_status()
+            hits: List[SearchHit] = []
+            for item in resp.json().get("results", []):
+                url = canonicalize_url(item.get("url", ""))
+                if not url or is_ad_or_tracking_url(url):
+                    continue
+                hits.append(SearchHit(
+                    url=url,
+                    title=item.get("title", ""),
+                    snippet=item.get("content", ""),
+                    source_domain=urlparse(url).netloc,
+                ))
+            logger.info(f"Tavily returned {len(hits)} hits for '{query}'")
+            return hits
+        except Exception as e:
+            logger.debug(f"Tavily search error for '{query}': {e}")
             return []
 
 
@@ -1467,6 +1571,8 @@ class HybridSearchProvider:
     def __init__(self, gemini_client=None, fallback_to_mock: bool = False):
         self.ddg = DuckDuckGoSearchProvider()
         self.brave = BraveSearchProvider()
+        self.serper = SerperSearchProvider()
+        self.tavily = TavilySearchProvider()
         self.job_board = LiveJobBoardSearchProvider()
         self.freehire = FreeHireSearchProvider()
         self.llm_search = LLMSearchProvider(gemini_client=gemini_client)
@@ -1514,17 +1620,22 @@ class HybridSearchProvider:
         if freehire_hits:
             return freehire_hits[:limit]
 
-        # 2b. Brave Search — real SERP fallback, no bot-block; activates when DDG circuit-broke or returned 0
-        brave_hits = self.brave.search(
-            query,
-            limit=limit,
-            page=page,
-            freshness_days=freshness_days,
-            allowed_domains=allowed_domains,
-            blocked_domains=blocked_domains,
-        )
-        if brave_hits:
-            return (freehire_hits + brave_hits)[:limit]
+        # 2b. Serper (Google) → Tavily → Brave — real SERP fallbacks when DDG circuit-broke or returned 0
+        for _provider, _name in (
+            (self.serper, "Serper"),
+            (self.tavily, "Tavily"),
+            (self.brave, "Brave"),
+        ):
+            fallback_hits = _provider.search(
+                query,
+                limit=limit,
+                page=page,
+                freshness_days=freshness_days,
+                allowed_domains=allowed_domains,
+                blocked_domains=blocked_domains,
+            )
+            if fallback_hits:
+                return (freehire_hits + fallback_hits)[:limit]
 
         # 3. For job queries: try direct live job board endpoints first (zero LLM quota cost)
         if is_job:
