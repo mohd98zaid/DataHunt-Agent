@@ -20,6 +20,7 @@ from datahunt.logger import logger
 from datahunt.models import RetrievalStatus, SourceDocument
 from datahunt.policy import validate_url_ssrf, check_domain_policy
 from datahunt.tools.base import ToolResult
+from datahunt.tools.search import unwrap_tracking_redirect_url, DISALLOWED_JOB_DOMAINS
 
 def clean_html_to_text(html_content: str) -> tuple[str, str]:
     """
@@ -140,8 +141,10 @@ def is_actual_job_posting(doc: "SourceDocument") -> tuple[bool, str]:
     fin_url_low = (doc.final_url or "").lower()
     if "example.com" in req_url_low or "example.com" in fin_url_low:
         return False, "Placeholder or mock example.com URL"
-    if "expired_jd_redirect" in req_url_low or "expired_jd_redirect" in fin_url_low:
-        return False, "Job expired redirect detected"
+    if any(sig in req_url_low or sig in fin_url_low for sig in (
+        "not_found=true", "expired_jd_redirect", "job-closed", "job_closed", "position-closed", "job-expired", "status=expired"
+    )):
+        return False, "Job expired or closed posting detected"
 
     # 3. Aggregator Category / Search Result Form Rejection
     # If it has more than 10 separate job links and no primary role description
@@ -327,6 +330,34 @@ class FetchTool:
     ) -> ToolResult:
         retrieved_at = datetime.now(timezone.utc).isoformat()
 
+        # Unwrap Google and search engine tracking redirects before evaluation
+        url = unwrap_tracking_redirect_url(url)
+        url_low = url.lower()
+        parsed_req = urlparse(url_low)
+        req_host = (parsed_req.hostname or "").lower()
+        if req_host.startswith("www."):
+            req_host = req_host[4:]
+
+        # Fast-drop for disallowed non-job / social media domains
+        if any(req_host == d or req_host.endswith("." + d) for d in DISALLOWED_JOB_DOMAINS):
+            logger.info(f"Fast-dropping disallowed domain before fetch: {url}")
+            return ToolResult(
+                success=False,
+                error_code=ErrorCode.FETCH_BLOCKED.value,
+                error_message=f"Disallowed non-job domain: {req_host}",
+                metadata={"url": url}
+            )
+
+        # Fast-drop for expired / not_found signals in candidate URL
+        if any(sig in url_low for sig in ("not_found=true", "expired_jd_redirect", "job-closed", "job_closed", "position-closed", "job-expired", "status=expired", "error=true", "/404")):
+            logger.info(f"Fast-dropping expired job candidate before fetch: {url}")
+            return ToolResult(
+                success=False,
+                error_code=ErrorCode.FETCH_BLOCKED.value,
+                error_message="Job posting has expired or closed",
+                metadata={"url": url}
+            )
+
         # Route Greenhouse board-index URLs to public JSON API (avoids JS/SPA fetching empty pages)
         gh_slug = _is_greenhouse_board_index(url)
         if gh_slug:
@@ -429,13 +460,16 @@ class FetchTool:
                                 user_message="Redirect missing Location header.",
                                 operator_message=f"Missing Location on redirect from {cleaned_url}"
                             )
-                        current_url = urljoin(cleaned_url, location)
+                        current_url = unwrap_tracking_redirect_url(urljoin(cleaned_url, location))
                         logger.info(f"Following redirect {redirect_count}/{self.max_redirects} to: {current_url}")
 
                         parsed_redir = urlparse(current_url)
                         redir_host = (parsed_redir.hostname or "").lower()
+                        if redir_host.startswith("www."):
+                            redir_host = redir_host[4:]
                         redir_path = parsed_redir.path or ""
                         redir_query = parsed_redir.query or ""
+                        redir_low = current_url.lower()
 
                         # 1. Reject dummy / mock domains
                         if "example.com" in redir_host or "localhost" in redir_host:
@@ -449,15 +483,28 @@ class FetchTool:
                                 )
                             )
 
-                        # 2. LinkedIn expired job redirect or search redirect
-                        if (
-                            "expired_jd_redirect" in current_url
-                            or "expired_jd_redirect" in redir_query
-                            or ("linkedin.com" in redir_host and redir_path.startswith("/jobs/search"))
-                        ):
-                            logger.info(f"LinkedIn expired job redirect detected: {current_url}")
+                        # 1.5. Reject redirects to disallowed non-job or social media domains
+                        if any(redir_host == d or redir_host.endswith("." + d) for d in DISALLOWED_JOB_DOMAINS):
+                            logger.info(f"Rejecting redirect to disallowed domain: {current_url}")
                             return ToolResult(
                                 success=False,
+                                error_code=ErrorCode.FETCH_BLOCKED.value,
+                                error_message=f"Redirected to disallowed domain: {redir_host}",
+                                metadata={"url": current_url}
+                            )
+
+                        # 2. Reject expired job redirects (Workable ?not_found=true, LinkedIn expired, etc.)
+                        if (
+                            any(sig in redir_low or sig in redir_query.lower() for sig in (
+                                "not_found=true", "expired_jd_redirect", "job-closed", "job_closed", "position-closed", "job-expired", "status=expired", "error=true", "/404"
+                            ))
+                            or ("linkedin.com" in redir_host and redir_path.startswith("/jobs/search"))
+                        ):
+                            logger.info(f"Expired/closed job redirect detected: {current_url}")
+                            return ToolResult(
+                                success=False,
+                                error_code=ErrorCode.FETCH_BLOCKED.value,
+                                error_message="Job posting has expired or closed.",
                                 error=DataHuntError(
                                     ErrorCode.FETCH_BLOCKED,
                                     user_message="Job posting has expired or closed.",
@@ -465,20 +512,19 @@ class FetchTool:
                                 )
                             )
 
-                        # 3. Intercept Greenhouse ?error=true redirects — the job is on an EU or
-                        # private board. Extract the company slug and fetch via the JSON API instead.
-                        if (
-                            "greenhouse.io" in redir_host
-                            and "error=" in redir_query
-                        ):
-                            path_segs = [s for s in redir_path.strip("/").split("/") if s]
-                            if path_segs:
-                                gh_slug = path_segs[0]
-                                logger.info(
-                                    f"Greenhouse redirect error intercepted for '{gh_slug}'. "
-                                    f"Routing to JSON API."
+                        # 3. Greenhouse ?error=true redirects — individual job is closed/expired
+                        if "greenhouse.io" in redir_host and "error=" in redir_query:
+                            logger.info(f"Greenhouse job expired/closed redirect detected: {current_url}")
+                            return ToolResult(
+                                success=False,
+                                error_code=ErrorCode.FETCH_BLOCKED.value,
+                                error_message="Job posting has expired or closed.",
+                                error=DataHuntError(
+                                    ErrorCode.FETCH_BLOCKED,
+                                    user_message="Job posting has expired or closed.",
+                                    operator_message=f"Greenhouse job expired redirect to {current_url}"
                                 )
-                                return fetch_greenhouse_jobs_api(gh_slug, run_id)
+                            )
                         continue
 
 

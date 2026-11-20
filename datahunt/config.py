@@ -33,6 +33,12 @@ class Settings:
     SERPER_API_KEY: str = os.getenv("SERPER_API_KEY", "")
     # Tavily Search — AI-optimized (1000 free queries/month, no CC)
     TAVILY_API_KEY: str = os.getenv("TAVILY_API_KEY", "")
+    # SearXNG Metasearch (Self-hosted aggregator — Google/Bing/DDG, no API keys, no rate limits)
+    SEARXNG_URL: str = os.getenv("SEARXNG_URL", "").rstrip("/")
+    # Primary Search Provider Override ("auto", "serper", "tavily", "brave", "searxng", "ddg")
+    PRIMARY_SEARCH_PROVIDER: str = os.getenv("PRIMARY_SEARCH_PROVIDER", "auto").lower()
+    # Direct ATS Ingestion Enabled (Query public Greenhouse/Lever/Ashby APIs directly)
+    DIRECT_ATS_ENABLED: bool = os.getenv("DIRECT_ATS_ENABLED", "true").lower() in ("true", "1", "yes")
 
     # Gemini LLM Settings (kept intact for fallback / alternate provider)
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
@@ -164,6 +170,13 @@ class Settings:
             "freehire_api_url": self.FREEHIRE_API_URL,
             "freehire_configured": bool(self.FREEHIRE_API_KEY.strip()),
             "freehire_max_requests_per_run": self.FREEHIRE_MAX_REQUESTS_PER_RUN,
+            "searxng_url": self.SEARXNG_URL,
+            "searxng_configured": bool(self.SEARXNG_URL.strip()),
+            "primary_search_provider": self.PRIMARY_SEARCH_PROVIDER,
+            "direct_ats_enabled": self.DIRECT_ATS_ENABLED,
+            "serper_configured": bool(self.SERPER_API_KEY.strip()),
+            "tavily_configured": bool(self.TAVILY_API_KEY.strip()),
+            "brave_configured": bool(self.BRAVE_API_KEY.strip()),
         }
 
     def load_from_db(self) -> None:
@@ -333,6 +346,9 @@ EDITABLE_SETTINGS = {
     "BRAVE_API_KEY": str,
     "SERPER_API_KEY": str,
     "TAVILY_API_KEY": str,
+    "SEARXNG_URL": str,
+    "PRIMARY_SEARCH_PROVIDER": str,
+    "DIRECT_ATS_ENABLED": bool,
     "GEMINI_MODEL": str,
     "DEFAULT_FRESHNESS": str,
     "DEFAULT_COLLECTION_MODE": str,

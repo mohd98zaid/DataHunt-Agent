@@ -11,6 +11,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
+from urllib.parse import urlparse
 
 from datahunt.config import settings
 from datahunt.errors import DataHuntError, ErrorCode
@@ -561,6 +562,17 @@ class AgentRuntime:
         cand_loc_str = str(candidate_location or "").lower()
         text = f"{url} {title} {snippet} {cand_loc_str}"
 
+        # 0. Fast-drop for disallowed non-job domains and expired/closed URLs
+        from datahunt.tools.search import DISALLOWED_JOB_DOMAINS
+        parsed_url = urlparse(url)
+        cand_host = (parsed_url.hostname or "").lower()
+        if cand_host.startswith("www."):
+            cand_host = cand_host[4:]
+        if any(cand_host == d or cand_host.endswith("." + d) for d in DISALLOWED_JOB_DOMAINS):
+            return False
+        if any(sig in url for sig in ("not_found=true", "job-closed", "job_closed", "position-closed", "job-expired", "status=expired", "error=true")):
+            return False
+
         # 1. Non-job URL patterns
         JUNK_URL_PATTERNS = ["/jobs/search", "/browse/", "/tag/", "/category/", "/login", "/signup", "/people/", "/candidate/"]
         if any(p in url for p in JUNK_URL_PATTERNS):
@@ -574,13 +586,26 @@ class AgentRuntime:
         # 3. If in jobs mode:
         if state.mode in ("jobs", "job"):
             req_t = (state.canonical_job_request.job_title if state.canonical_job_request else state.request).lower()
-            if any(k in req_t for k in ("genai", "generative ai", "llm", "ai engineer")):
+            is_ai_req = any(k in req_t for k in (
+                "ai", "ml", "machine learning", "data scientist", "data science",
+                "deep learning", "nlp", "llm", "genai", "generative ai", "ai engineer", "agentic", "computer vision"
+            ))
+            if is_ai_req:
                 DISQUALIFYING_ROLES = [
                     "cybersecurity", "cyber security", "infosec", "soc analyst",
                     "full stack", "fullstack", "front end", "frontend", "ui developer",
-                    "accountant", "bookkeeper", "sales manager", "recruiter", "talent acquisition"
+                    "accountant", "bookkeeper", "sales manager", "recruiter", "talent acquisition",
+                    "customer care", "customer service", "collections", "copywriter", "copy writer",
+                    "compliance", "cashier", "clerk", "fraud", "call center", "advisor",
+                    "receptionist", "telecaller", "administrative", "office manager",
+                    "legal counsel", "people partner"
                 ]
-                if any(dr in title for dr in DISQUALIFYING_ROLES) and not any(ai in title for ai in ("genai", "generative ai", "llm", "ai engineer", "ai full", "ai-full", "ai/ml")):
+                AI_TITLE_SIGNALS = (
+                    "ai", "ml", "machine learning", "data scientist", "data science",
+                    "deep learning", "nlp", "llm", "genai", "generative", "agentic",
+                    "computer vision", "artificial intelligence", "algorithm"
+                )
+                if any(dr in title for dr in DISQUALIFYING_ROLES) and not any(ai in title for ai in AI_TITLE_SIGNALS):
                     return False
 
             # If user requested specific regions, e.g. GCC/Gulf/Saudi/UAE, reject explicit foreign anchors and foreign domain subdomains
@@ -847,6 +872,9 @@ class AgentRuntime:
                             url = hit.get("url")
                             if not url:
                                 continue
+                            from datahunt.tools.search import unwrap_tracking_redirect_url
+                            url = unwrap_tracking_redirect_url(url)
+                            hit["url"] = url
                             canon = canonicalize_url(url)
                             if not canon or canon in state.seen_canonical_urls:
                                 dup_candidates += 1

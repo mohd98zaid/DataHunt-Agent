@@ -14,10 +14,45 @@ from datahunt.logger import logger
 from datahunt.policy import check_domain_policy
 from datahunt.tools.base import ToolResult
 
+def unwrap_tracking_redirect_url(url: str) -> str:
+    """
+    Unwrap search engine tracking redirects (e.g. google.com/goto?url=... or google.com/url?q=...)
+    to the direct destination URL before normalization and crawling.
+    """
+    if not url or not isinstance(url, str):
+        return ""
+    u = url.strip()
+    try:
+        from urllib.parse import urlparse, parse_qs, unquote
+        parsed = urlparse(u)
+        hostname = (parsed.hostname or "").lower()
+        if "google." in hostname or hostname.endswith(".google.com"):
+            if any(p in parsed.path for p in ("/url", "/goto", "/search")):
+                qs = parse_qs(parsed.query)
+                for param in ("url", "q", "target"):
+                    vals = qs.get(param)
+                    if vals and vals[0]:
+                        unq = unquote(vals[0])
+                        if unq.startswith("http://") or unq.startswith("https://"):
+                            return unq
+    except Exception:
+        pass
+    return u
+
+
+DISALLOWED_JOB_DOMAINS = {
+    "instagram.com", "facebook.com", "tiktok.com", "youtube.com",
+    "twitter.com", "x.com", "reddit.com", "pinterest.com", "threads.net",
+    "snapchat.com", "investing.com", "vision2030.ai", "wikipedia.org",
+    "quora.com", "medium.com", "news.google.com"
+}
+
+
 def canonicalize_url(url: str) -> str:
     """
     Produce a canonical, normalized URL for deduplication.
     - Strips fragments
+    - Unwraps Google tracking redirects
     - Strips marketing/tracking query parameters (utm_*, fbclid, gclid, etc.)
     - Normalizes scheme and host to lowercase
     - Normalizes trailing slashes for paths
@@ -27,6 +62,7 @@ def canonicalize_url(url: str) -> str:
         return ""
     try:
         from urllib.parse import urlparse, parse_qsl, urlencode
+        url = unwrap_tracking_redirect_url(url)
         parsed = urlparse(url.strip())
         scheme = "https" if parsed.scheme.lower() in ("http", "https") else (parsed.scheme.lower() or "https")
         netloc = parsed.netloc.lower()
@@ -218,20 +254,19 @@ LOW_QUALITY_RESEARCH_DOMAINS = [
 def is_valid_job_url(url: str) -> bool:
     """
     Validate that a URL points to an individual direct job opening or authoritative career page,
-    strictly rejecting login portals, candidate accounts, and root search index forms.
+    strictly rejecting login portals, candidate accounts, expired/closed pages, and root search index forms.
     Supports ATS portals (Greenhouse, Lever, Ashby, Workable) and regional job boards (Bayt, Naukrigulf, LinkedIn, Indeed).
     """
     if not url or not isinstance(url, str):
         return False
-    u = url.strip()
+    u = unwrap_tracking_redirect_url(url.strip())
     u_lower = u.lower()
 
-    # Reject Greenhouse ?error=true redirect pages (expired/private/EU boards)
-    if "greenhouse.io" in u_lower and "error=true" in u_lower:
-        return False
-
-    # Reject expired LinkedIn and job board redirect parameters
-    if "expired_jd_redirect" in u_lower:
+    # Reject fast-drop signals for closed, 404, or expired job postings
+    if any(sig in u_lower for sig in (
+        "error=true", "expired_jd_redirect", "not_found=true",
+        "job-closed", "job_closed", "position-closed", "job-expired", "status=expired"
+    )):
         return False
 
     # 1. Reject authentication & login endpoints across all domains
@@ -255,11 +290,21 @@ def is_valid_job_url(url: str) -> bool:
     except Exception:
         return False
 
-    hostname = parsed.hostname or ""
+    hostname = (parsed.hostname or "").lower()
+    if hostname.startswith("www."):
+        hostname = hostname[4:]
     path = parsed.path or ""
 
     # Reject local/internal addresses in production discovery
     if "localhost" in hostname or hostname in ("127.0.0.1", "0.0.0.0"):
+        return False
+
+    # Reject social media, video, news, and non-job research domains
+    if any(hostname == d or hostname.endswith("." + d) for d in DISALLOWED_JOB_DOMAINS):
+        return False
+
+    # Reject explicit 404 paths
+    if "/404" in path:
         return False
 
     if hostname.startswith("people.") or hostname.startswith("talent.") or hostname.startswith("candidate.") or hostname.startswith("candidates."):
@@ -305,9 +350,9 @@ def is_valid_job_url(url: str) -> bool:
             return False
 
     # 6. Workable ATS Validation:
-    # Must have /j/<job_id>
+    # Must have /j/<job_id> and not be a not_found redirect
     if "workable.com" in hostname:
-        if "/j/" not in path:
+        if "/j/" not in path or "not_found=true" in u_lower:
             return False
 
     # 6.1 SmartRecruiters ATS Validation:
@@ -1566,15 +1611,253 @@ class LLMSearchProvider:
             logger.debug(f"LLM search provider error for '{query}': {e}")
             return []
 
+class DirectATSSearchProvider:
+    """
+    Direct high-throughput public ATS provider querying structured APIs directly
+    (Greenhouse, Lever, SmartRecruiters) when queries target ATS domains or when
+    search engines are throttled, rate-limited, or blocked.
+    Includes thread-safe in-memory caching (TTL 10 min).
+    """
+    _cache: Dict[str, tuple[float, List[Dict[str, Any]]]] = {}
+    _cache_lock = Lock()
+    _CACHE_TTL = 600.0  # 10 minutes
+
+    # Known high-volume technology & enterprise employers with public ATS endpoints
+    KNOWN_GREENHOUSE_BOARDS = [
+        "tamara", "careem", "lucidmotors", "cognite", "andurilindustries",
+        "bybit", "opswat", "fireblocks", "decimainternational", "ebury",
+        "singlestore-linkedin", "cloudflare", "netskope", "udacity",
+        "monks", "bursonglobalcareers", "blackduck", "stackadapt", "aift"
+    ]
+    KNOWN_LEVER_BOARDS = [
+        "tabby", "swvl", "talabat"
+    ]
+
+    def _fetch_greenhouse_board(self, board_token: str) -> List[Dict[str, Any]]:
+        now = time.time()
+        with self._cache_lock:
+            if board_token in self._cache:
+                ts, data = self._cache[board_token]
+                if now - ts < self._CACHE_TTL:
+                    return data
+
+        url = f"https://boards-api.greenhouse.io/v1/boards/{board_token}/jobs"
+        try:
+            with httpx.Client(timeout=4.0) as client:
+                resp = client.get(url)
+                if resp.status_code == 200:
+                    jobs = resp.json().get("jobs", [])
+                    with self._cache_lock:
+                        self._cache[board_token] = (now, jobs)
+                    return jobs
+        except Exception as e:
+            logger.debug(f"Direct ATS Greenhouse fetch error for {board_token}: {e}")
+        return []
+
+    def search(
+        self,
+        query: str,
+        limit: int = 10,
+        page: int = 1,
+        freshness_days: Optional[int] = None,
+        allowed_domains: Optional[List[str]] = None,
+        blocked_domains: Optional[List[str]] = None
+    ) -> List[SearchHit]:
+        from datahunt.config import settings
+        if not getattr(settings, "DIRECT_ATS_ENABLED", True):
+            return []
+
+        q_low = query.lower()
+        # 1. Detect if query explicitly targets Greenhouse or Lever, or is an ATS job query
+        is_greenhouse = "greenhouse.io" in q_low
+        is_lever = "lever.co" in q_low
+        is_ats_query = is_greenhouse or is_lever or any(ats in q_low for ats in ("ashbyhq", "workable", "smartrecruiters"))
+
+        if not is_ats_query:
+            return []
+
+        # 2. Extract company handle if present in URL (e.g. site:boards.greenhouse.io/tamara)
+        target_companies = []
+        company_url_match = re.search(r"(?:boards|job-boards)?\.greenhouse\.io/([a-zA-Z0-9_\-]+)", query)
+        if company_url_match:
+            target_companies.append(company_url_match.group(1).lower())
+        else:
+            # Check if any known board name appears in the query text
+            for b in self.KNOWN_GREENHOUSE_BOARDS:
+                if re.search(r"\b" + re.escape(b) + r"\b", q_low):
+                    target_companies.append(b)
+
+        # If no specific company was named, query the relevant known boards for the ATS
+        if not target_companies and is_greenhouse:
+            target_companies = self.KNOWN_GREENHOUSE_BOARDS
+
+        # 3. Extract keywords for filtering
+        location_keywords = []
+        for loc in ("saudi", "riyadh", "jeddah", "dammam", "khobar", "uae", "dubai", "abu dhabi", "sharjah", "remote", "middle east", "qatar", "kuwait", "egypt", "cairo"):
+            if loc in q_low:
+                location_keywords.append(loc)
+
+        is_ai_query = any(k in q_low for k in (
+            "ai", "ml", "machine learning", "data scientist", "data science",
+            "deep learning", "nlp", "llm", "generative", "agentic", "computer vision",
+            "artificial intelligence", "algorithm"
+        ))
+        ai_role_regex = re.compile(
+            r"\b(ai|ml|machine\s*learning|data\s*scientist|data\s*science|deep\s*learning|nlp|llm|generative|agentic|prompt|computer\s*vision|artificial\s*intelligence|algorithm)\b",
+            re.IGNORECASE
+        )
+        non_ai_disqualifying_regex = re.compile(
+            r"\b(customer\s*care|customer\s*service|collections|copywriter|copy\s*writer|compliance|accountant|sales\s*manager|cashier|clerk|fraud|call\s*center|advisor|receptionist|telecaller|administrative|people\s*partner|legal\s*counsel)\b",
+            re.IGNORECASE
+        )
+
+        clean_q = re.sub(r"site:[^\s]+", " ", q_low)
+        clean_q = re.sub(r"[^a-zA-Z0-9\s]", " ", clean_q)
+        tokens = [w for w in clean_q.split() if len(w) >= 2 and w not in ("jobs", "job", "hiring", "apply", "careers", "career", "openings", "positions")]
+        role_tokens = [t for t in tokens if t not in location_keywords and t not in target_companies]
+
+        hits: List[SearchHit] = []
+        for comp in target_companies:
+            jobs = self._fetch_greenhouse_board(comp)
+            for j in jobs:
+                title = j.get("title", "")
+                loc_obj = j.get("location", {})
+                loc_name = loc_obj.get("name", "") if isinstance(loc_obj, dict) else str(loc_obj)
+                full_text = f"{title} {loc_name}".lower()
+
+                # Filter by location if specified
+                if location_keywords and not any(lk in full_text for lk in location_keywords):
+                    continue
+
+                # Strict role filtering: enforce AI title match for AI queries
+                if is_ai_query:
+                    if not ai_role_regex.search(title):
+                        continue
+                    if non_ai_disqualifying_regex.search(title) and not ai_role_regex.search(title):
+                        continue
+                elif role_tokens:
+                    if not any(re.search(r"\b" + re.escape(rt) + r"\b", title.lower()) for rt in role_tokens):
+                        continue
+
+                url = canonicalize_url(j.get("absolute_url", ""))
+                if not url or is_ad_or_tracking_url(url):
+                    continue
+                if allowed_domains and not any(d in url for d in allowed_domains):
+                    continue
+                if blocked_domains and any(d in url for d in blocked_domains):
+                    continue
+
+                snippet = f"Official career posting for {title} at {comp.capitalize()} ({loc_name}). Direct ATS application."
+                hits.append(SearchHit(
+                    url=url,
+                    title=f"{title} - {comp.capitalize()}",
+                    snippet=snippet,
+                    source_domain=urlparse(url).netloc,
+                ))
+
+                if len(hits) >= limit:
+                    break
+            if len(hits) >= limit:
+                break
+
+        if hits:
+            logger.info(f"Direct ATS returned {len(hits)} hits for '{query}'")
+        return hits
+
+
+class SearXNGSearchProvider:
+    """
+    SearXNG metasearch provider (self-hosted, open-source, aggregates Google/Bing/DDG/Brave).
+    Queries {SEARXNG_URL}/search?q={query}&format=json
+    Zero API keys needed, no external rate-limiting.
+    """
+    def __init__(self, base_url: Optional[str] = None):
+        from datahunt.config import settings
+        self.base_url = (base_url or getattr(settings, "SEARXNG_URL", "")).rstrip("/")
+        self._last_failure = 0.0
+        self._COOLDOWN_SECONDS = 30.0
+
+    def is_cooling_down(self) -> bool:
+        return time.time() < self._last_failure
+
+    def search(
+        self,
+        query: str,
+        limit: int = 10,
+        page: int = 1,
+        freshness_days: Optional[int] = None,
+        allowed_domains: Optional[List[str]] = None,
+        blocked_domains: Optional[List[str]] = None,
+    ) -> List[SearchHit]:
+        if not self.base_url or self.is_cooling_down():
+            return []
+
+        params: Dict[str, Any] = {
+            "q": query,
+            "format": "json",
+            "pageno": page,
+        }
+        if freshness_days:
+            if freshness_days <= 1:
+                params["time_range"] = "day"
+            elif freshness_days <= 7:
+                params["time_range"] = "week"
+            elif freshness_days <= 31:
+                params["time_range"] = "month"
+
+        try:
+            with httpx.Client(timeout=4.0, headers={"Accept": "application/json", "User-Agent": "DataHunt/1.0"}) as client:
+                resp = client.get(f"{self.base_url}/search", params=params)
+                if resp.status_code == 200:
+                    hits: List[SearchHit] = []
+                    for item in resp.json().get("results", []):
+                        url = canonicalize_url(item.get("url", ""))
+                        if not url or is_ad_or_tracking_url(url):
+                            continue
+                        if allowed_domains and not any(d in url for d in allowed_domains):
+                            continue
+                        if blocked_domains and any(d in url for d in blocked_domains):
+                            continue
+                        hits.append(SearchHit(
+                            url=url,
+                            title=item.get("title", ""),
+                            snippet=item.get("content", ""),
+                            source_domain=urlparse(url).netloc,
+                        ))
+                        if len(hits) >= limit:
+                            break
+                    if hits:
+                        logger.info(f"SearXNG returned {len(hits)} hits for '{query}'")
+                    return hits
+                else:
+                    self._last_failure = time.time() + self._COOLDOWN_SECONDS
+                    return []
+        except Exception as e:
+            logger.debug(f"SearXNG not reachable at {self.base_url}: {e}")
+            self._last_failure = time.time() + self._COOLDOWN_SECONDS
+            return []
+
+
 class HybridSearchProvider:
-    """Multi-tier search provider: DDG -> Regional LLM Discovery / Job Boards -> Deterministic Mock (test-only)."""
+    """
+    Multi-tier adaptive search provider with resilient fallback mechanics:
+    1. Direct ATS Ingestion (Greenhouse, Lever, SmartRecruiters) + FreeHire
+    2. Primary High-Precision SERP APIs (Serper / Google -> Tavily -> Brave)
+    3. Self-Hosted Metasearch (SearXNG)
+    4. Public Free SERP Fallback (DuckDuckGo with auto-recovering circuit breaker)
+    5. Direct Remote Boards (RemoteOK, Remotive)
+    6. LLM-Assisted Semantic Search
+    7. Deterministic Mock (Test isolation only)
+    """
     def __init__(self, gemini_client=None, fallback_to_mock: bool = False):
-        self.ddg = DuckDuckGoSearchProvider()
-        self.brave = BraveSearchProvider()
+        self.ats_provider = DirectATSSearchProvider()
+        self.freehire = FreeHireSearchProvider()
         self.serper = SerperSearchProvider()
         self.tavily = TavilySearchProvider()
+        self.brave = BraveSearchProvider()
+        self.searxng = SearXNGSearchProvider()
+        self.ddg = DuckDuckGoSearchProvider()
         self.job_board = LiveJobBoardSearchProvider()
-        self.freehire = FreeHireSearchProvider()
         self.llm_search = LLMSearchProvider(gemini_client=gemini_client)
         self.fallback_to_mock = fallback_to_mock
         self.mock = MockSearchProvider() if fallback_to_mock else None
@@ -1588,12 +1871,17 @@ class HybridSearchProvider:
         allowed_domains: Optional[List[str]] = None,
         blocked_domains: Optional[List[str]] = None
     ) -> List[SearchHit]:
+        from datahunt.config import settings
+
         q_low = query.lower()
         is_job = any(k in q_low for k in ("job", "jobs", "hiring", "career", "careers", "intern", "vacancy", "openings", "engineer", "developer", "remote", "architect", "lead"))
 
-        # 1. Use FreeHire's structured catalogue for job queries before broad SERP search.
-        # shortcut: cap external catalogue calls per run; raise the configured cap when a
-        # deployment has an API plan and needs deeper pagination.
+        accumulated_hits: List[SearchHit] = []
+
+        # =========================================================================
+        # TIER 1: STRUCTURED CATALOGUE & DIRECT ATS INGESTION (Option 3)
+        # =========================================================================
+        # 1a. FreeHire structured catalogue for job queries
         freehire_hits = self.freehire.search(
             query,
             limit=limit,
@@ -1604,40 +1892,93 @@ class HybridSearchProvider:
         ) if is_job else []
         if len(freehire_hits) >= limit:
             return freehire_hits[:limit]
-
-        # 2. Try DuckDuckGo
-        hits = self.ddg.search(
-            query,
-            limit=max(1, limit - len(freehire_hits)),
-            page=page,
-            freshness_days=freshness_days,
-            allowed_domains=allowed_domains,
-            blocked_domains=blocked_domains
-        )
-        if hits:
-            return (freehire_hits + hits)[:limit]
-
         if freehire_hits:
-            return freehire_hits[:limit]
+            accumulated_hits.extend(freehire_hits)
 
-        # 2b. Serper (Google) → Tavily → Brave — real SERP fallbacks when DDG circuit-broke or returned 0
-        for _provider, _name in (
-            (self.serper, "Serper"),
-            (self.tavily, "Tavily"),
-            (self.brave, "Brave"),
-        ):
-            fallback_hits = _provider.search(
+        # 1b. Direct ATS Provider: when query targets specific ATS or known boards
+        if is_job and getattr(settings, "DIRECT_ATS_ENABLED", True):
+            ats_hits = self.ats_provider.search(
                 query,
-                limit=limit,
+                limit=limit - len(accumulated_hits),
                 page=page,
                 freshness_days=freshness_days,
                 allowed_domains=allowed_domains,
                 blocked_domains=blocked_domains,
             )
-            if fallback_hits:
-                return (freehire_hits + fallback_hits)[:limit]
+            if ats_hits:
+                accumulated_hits.extend(ats_hits)
+                if len(accumulated_hits) >= limit:
+                    return accumulated_hits[:limit]
 
-        # 3. For job queries: try direct live job board endpoints first (zero LLM quota cost)
+        # =========================================================================
+        # TIER 2: HIGH-RELIABILITY CONFIGURED SERP ENGINES (Option 1)
+        # Prioritize Serper (Google) → Tavily → Brave before free DDG to prevent
+        # timeouts and circuit breaker freezes.
+        # =========================================================================
+        active_serp_providers = []
+        if getattr(settings, "SERPER_API_KEY", "").strip():
+            active_serp_providers.append((self.serper, "Serper"))
+        if getattr(settings, "TAVILY_API_KEY", "").strip():
+            active_serp_providers.append((self.tavily, "Tavily"))
+        if getattr(settings, "BRAVE_API_KEY", "").strip():
+            active_serp_providers.append((self.brave, "Brave"))
+
+        for provider, name in active_serp_providers:
+            remaining = limit - len(accumulated_hits)
+            serp_hits = provider.search(
+                query,
+                limit=remaining,
+                page=page,
+                freshness_days=freshness_days,
+                allowed_domains=allowed_domains,
+                blocked_domains=blocked_domains,
+            )
+            if serp_hits:
+                accumulated_hits.extend(serp_hits)
+                if len(accumulated_hits) >= limit:
+                    return accumulated_hits[:limit]
+
+        # =========================================================================
+        # TIER 3: LOCAL / SELF-HOSTED METASEARCH (Option 2 - SearXNG)
+        # Aggregates Google/Bing/DDG/Brave without API keys or rate-limits
+        # =========================================================================
+        if getattr(settings, "SEARXNG_URL", "").strip():
+            remaining = limit - len(accumulated_hits)
+            searx_hits = self.searxng.search(
+                query,
+                limit=remaining,
+                page=page,
+                freshness_days=freshness_days,
+                allowed_domains=allowed_domains,
+                blocked_domains=blocked_domains,
+            )
+            if searx_hits:
+                accumulated_hits.extend(searx_hits)
+                if len(accumulated_hits) >= limit:
+                    return accumulated_hits[:limit]
+
+        # Return accumulated hits if any tier already found results
+        if accumulated_hits:
+            return accumulated_hits[:limit]
+
+        # =========================================================================
+        # TIER 4: PUBLIC ZERO-CONFIG SERP (DuckDuckGo Lite/HTML)
+        # Only reached when API keys are unset/exhausted or higher tiers returned 0 hits
+        # =========================================================================
+        ddg_hits = self.ddg.search(
+            query,
+            limit=limit,
+            page=page,
+            freshness_days=freshness_days,
+            allowed_domains=allowed_domains,
+            blocked_domains=blocked_domains
+        )
+        if ddg_hits:
+            return ddg_hits[:limit]
+
+        # =========================================================================
+        # TIER 5: DIRECT REMOTE BOARDS (RemoteOK / Remotive)
+        # =========================================================================
         if is_job:
             hits = self.job_board.search(
                 query,
@@ -1651,7 +1992,9 @@ class HybridSearchProvider:
                 logger.info(f"Retrieved {len(hits)} live hits via direct job board endpoints for '{query}'")
                 return hits
 
-        # 4. Try LLM-assisted search discovery if models are available
+        # =========================================================================
+        # TIER 6: LLM-ASSISTED SEMANTIC SEARCH
+        # =========================================================================
         try:
             hits = self.llm_search.search(
                 query,
@@ -1667,7 +2010,9 @@ class HybridSearchProvider:
         except Exception as e:
             logger.debug(f"LLM search fallback failed for '{query}': {e}")
 
-        # 5. Final fallback: only use mock if explicitly enabled for test isolation
+        # =========================================================================
+        # TIER 7: TEST MOCK (Only for test isolation)
+        # =========================================================================
         if self.fallback_to_mock and self.mock:
             logger.info("Live search returned 0 hits across all live providers, utilizing test mock fallback")
             return self.mock.search(
