@@ -1307,6 +1307,50 @@ class DiscoveryEngine:
                             location=region,
                         ))
 
+            # Round 7+: Continuous Frontier Expansion across taxonomy roles, ATS portals, and direct companies
+            elif round_num >= 7:
+                from datahunt.agent.policies import ROLE_TAXONOMY
+                role_low = role_clean.lower()
+                all_tax_titles = []
+                for fam_spec in ROLE_TAXONOMY.values():
+                    all_tax_titles.extend([t.title() for t in fam_spec.get("direct_titles", [])])
+                    all_tax_titles.extend([t.title() for t in fam_spec.get("related_roles", [])])
+                # Filter out exact current role
+                candidates = [t for t in all_tax_titles if t.lower() != role_low]
+                # Slice by round offset so each round investigates different roles
+                offset = (round_num - 7) * 4
+                slice_titles = candidates[offset : offset + 4]
+                if not slice_titles and candidates:
+                    # Loop back around if exhausted
+                    slice_titles = candidates[:4]
+
+                regions = requested_regions or [loc_str]
+                ats_platforms = ["boards.greenhouse.io", "jobs.lever.co", "jobs.ashbyhq.com", "apply.workable.com"]
+                chosen_ats = ats_platforms[(round_num - 7) % len(ats_platforms)]
+
+                for title in slice_titles:
+                    for reg in regions:
+                        q_tax = f'site:{chosen_ats} "{title}" "{reg}"'
+                        if q_tax not in discovery_state.executed_queries:
+                            tasks.append(SearchTask(
+                                id=f"r{round_num}_cont_{len(tasks)}",
+                                task_type=SearchTaskType.ATS_SEARCH,
+                                query=q_tax,
+                                source=chosen_ats,
+                                source_type=DiscoveredSourceType.ATS_PORTAL,
+                                priority=2,
+                                depth=4,
+                                round=round_num,
+                                metadata={
+                                    "lane": "ats_sweep",
+                                    "ats_platform": chosen_ats,
+                                    "role_title": title,
+                                    "requested_region": reg,
+                                },
+                                reason=f"Continuous frontier round {round_num}: {chosen_ats} search for '{title}' in {reg}",
+                                location=reg,
+                            ))
+
             if tasks:
                 discovery_state.current_round = round_num
                 return tasks
@@ -1370,45 +1414,48 @@ class DiscoveryEngine:
                 return False, StopReason.BUDGET_EXHAUSTED, ""
             return True, StopReason.BUDGET_EXHAUSTED, f"Max discovery rounds ({self.budget.max_expansion_rounds}) completed"
 
-        if state.mode in ("jobs", "job"):
+        is_job_mode = state.mode in ("jobs", "job")
+        if is_job_mode:
             effective_count = len(state.qualified_records)
         else:
             effective_count = len(state.verified_records)
 
-        # Target results reached
-        is_fast = getattr(state, "collection_mode", None) != "thorough"
-        if effective_count >= state.target_results:
-            has_pending = bool(
-                discovery_state.task_queue
-                or getattr(discovery_state, "pending_crawl_tasks", None)
-            )
-            if is_fast or not has_pending:
-                has_geo_coverage = True
-                if state.locations and len(state.locations) > 1:
-                    target_locs = [l.lower() for l in state.locations]
-                    found_locs = set()
-                    for rec in state.qualified_records:
-                        rec_loc = (rec.fields.get("location") or "").lower()
-                        for tl in target_locs:
-                            if tl in rec_loc or any(alias in rec_loc for alias in ("riyadh", "jeddah", "dammam") if tl == "saudi arabia") or any(alias in rec_loc for alias in ("dubai", "abu dhabi", "sharjah") if tl == "uae"):
-                                found_locs.add(tl)
-                    if len(found_locs) < len(target_locs) and discovery_state.current_round < 3:
-                        has_geo_coverage = False
+        # When continuous_time_governed is enabled, searches continue until the search deadline without stopping for target counts or diminishing returns.
+        if not getattr(self.budget, "continuous_time_governed", False):
+            # Target results reached
+            is_fast = getattr(state, "collection_mode", None) != "thorough"
+            if effective_count >= state.target_results:
+                has_pending = bool(
+                    discovery_state.task_queue
+                    or getattr(discovery_state, "pending_crawl_tasks", None)
+                )
+                if is_fast or not has_pending:
+                    has_geo_coverage = True
+                    if state.locations and len(state.locations) > 1:
+                        target_locs = [l.lower() for l in state.locations]
+                        found_locs = set()
+                        for rec in state.qualified_records:
+                            rec_loc = (rec.fields.get("location") or "").lower()
+                            for tl in target_locs:
+                                if tl in rec_loc or any(alias in rec_loc for alias in ("riyadh", "jeddah", "dammam") if tl == "saudi arabia") or any(alias in rec_loc for alias in ("dubai", "abu dhabi", "sharjah") if tl == "uae"):
+                                    found_locs.add(tl)
+                        if len(found_locs) < len(target_locs) and discovery_state.current_round < 3:
+                            has_geo_coverage = False
 
-                if has_geo_coverage and discovery_state.coverage_matrix.is_balanced(min_categories=2):
-                    return True, StopReason.TARGET_QUALIFIED_REACHED, f"Target results ({effective_count}/{state.target_results}) reached with balanced coverage"
-                elif discovery_state.current_round >= 3:
-                    return True, StopReason.TARGET_QUALIFIED_REACHED, f"Target results ({effective_count}/{state.target_results}) reached across {discovery_state.current_round} rounds"
+                    if has_geo_coverage and discovery_state.coverage_matrix.is_balanced(min_categories=2):
+                        return True, StopReason.TARGET_QUALIFIED_REACHED, f"Target results ({effective_count}/{state.target_results}) reached with balanced coverage"
+                    elif discovery_state.current_round >= 3:
+                        return True, StopReason.TARGET_QUALIFIED_REACHED, f"Target results ({effective_count}/{state.target_results}) reached across {discovery_state.current_round} rounds"
 
-        # Diminishing returns detection
-        if discovery_state.consecutive_low_yield_rounds >= 2:
-            has_pending = bool(
-                discovery_state.task_queue
-                or getattr(discovery_state, "pending_crawl_tasks", None)
-            )
-            if is_fast or not has_pending:
-                if effective_count > 0 and discovery_state.coverage_matrix.is_balanced(min_categories=2):
-                    return True, StopReason.DIMINISHING_RETURNS, f"Diminishing returns across 2 consecutive rounds; {effective_count} qualified jobs found"
+            # Diminishing returns detection
+            if discovery_state.consecutive_low_yield_rounds >= 2:
+                has_pending = bool(
+                    discovery_state.task_queue
+                    or getattr(discovery_state, "pending_crawl_tasks", None)
+                )
+                if is_fast or not has_pending:
+                    if effective_count > 0 and discovery_state.coverage_matrix.is_balanced(min_categories=2):
+                        return True, StopReason.DIMINISHING_RETURNS, f"Diminishing returns across 2 consecutive rounds; {effective_count} qualified jobs found"
 
         # No more tasks in queue
         if not discovery_state.task_queue and discovery_state.current_round > 1:

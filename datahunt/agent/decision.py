@@ -68,6 +68,7 @@ class DecisionEngine:
             return AgentAction.STOP, "Search Deadline reached; all existing candidates processed (no results qualified)"
 
         # If discovery engine is active, evaluate dynamic coverage and balanced universe stopping
+        # When continuous_time_governed is enabled, searches run for the full time budget (until search_deadline).
         if state.discovery_state:
             from datahunt.agent.discovery_engine import DiscoveryEngine
             engine = DiscoveryEngine(state.discovery_budget)

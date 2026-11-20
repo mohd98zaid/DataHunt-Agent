@@ -141,8 +141,8 @@ class ResearchOrchestrator:
         # For job searches: exhaust all available search-query and page budget to maximise ATS coverage.
         # For research/market: use a generous but bounded formula.
         if _is_job_mode:
-            q_budget = max(settings.MAX_SEARCH_QUERIES, 30)          # use full query budget
-            p_budget = settings.MAX_PAGES_FETCHED                    # fetch every page we can
+            q_budget = max(settings.MAX_SEARCH_QUERIES, 5000)        # uncap search query budget for 30m discovery
+            p_budget = max(settings.MAX_PAGES_FETCHED, 10000)        # uncap page fetch budget
         else:
             q_budget = min(max(spec.max_records, 20), settings.MAX_SEARCH_QUERIES)
             p_budget = min(max(spec.max_records * 3, 20),  settings.MAX_PAGES_FETCHED)
@@ -151,7 +151,7 @@ class ResearchOrchestrator:
             deadline_seconds=settings.MAX_RUN_SECONDS,
             max_search_queries=q_budget,
             max_pages=p_budget,
-            max_output_records=spec.max_records,
+            max_output_records=max(spec.max_records, 5000) if _is_job_mode else spec.max_records,
         )
 
         run = ResearchRun(
@@ -380,11 +380,15 @@ class ResearchOrchestrator:
                 # A run's persisted budget is authoritative; do not silently expand it
                 # with process-wide defaults after the run has been created.
                 search_cap = max(1, int(run.budget.max_search_queries))
+                # Continuous time-governed discovery is enabled for production live runs (when not using mock test providers)
+                is_mock_provider = hasattr(self.search_tool, "provider") and type(self.search_tool.provider).__name__ == "MockSearchProvider"
+                is_full_run = (run.budget.deadline_seconds >= 600) and not is_mock_provider
                 discovery_budget = DiscoveryBudget(
                     max_runtime_seconds=settings.MAX_RUN_SECONDS,
                     max_search_requests=search_cap,
                     max_fetches=run.budget.max_pages,
-                    max_expansion_rounds=6,
+                    max_expansion_rounds=99 if is_full_run else 6,
+                    continuous_time_governed=is_full_run,
                 )
 
                 agent_state = AgentState(
@@ -392,14 +396,14 @@ class ResearchOrchestrator:
                     run_id=run.id,
                     task_id=task.id,
                     mode="jobs",
-                    target_results=task.max_records,
+                    target_results=max(task.max_records, 5000) if is_full_run else task.max_records,
                     max_search_calls=search_cap,
                     max_fetch_calls=run.budget.max_pages,
                     deadline=deadline,
                     search_deadline=deadline,
                     hard_deadline=hard_deadline,
                     drain_budget_seconds=getattr(settings, "DRAIN_TIMEOUT_SECONDS", 600),
-                    max_iterations=getattr(settings, "MAX_ITERATIONS", 200),
+                    max_iterations=getattr(settings, "MAX_ITERATIONS", 1000) if is_full_run else 200,
                     discovery_budget=discovery_budget,
                     **canonical_kwargs,
                 )

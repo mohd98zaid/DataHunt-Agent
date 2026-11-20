@@ -181,6 +181,7 @@ class DiscoveryBudget:
     max_search_requests: int = 250
     max_expansion_rounds: int = 12
     max_llm_calls: int = 150
+    continuous_time_governed: bool = False
 
 
 @dataclass
