@@ -1101,6 +1101,14 @@ class CheckpointRepository:
                     """,
                     (ckpt_id, run_id, seq, state_json, now_str, now_str)
                 )
+                # Keep only the last 3 checkpoints per run to prevent multi-gigabyte DB growth
+                conn.execute(
+                    """
+                    DELETE FROM run_checkpoints
+                    WHERE run_id = ? AND checkpoint_seq < ? - 2;
+                    """,
+                    (run_id, seq)
+                )
                 return ckpt_id
         finally:
             conn.close()
