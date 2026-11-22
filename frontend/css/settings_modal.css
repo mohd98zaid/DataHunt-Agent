@@ -188,6 +188,14 @@
   background: rgba(0, 240, 255, 0.05);
 }
 
+.settings-input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  accent-color: #00f0ff;
+  margin: 4px 0;
+}
+
 .settings-select option {
   background: #0b0f19;
   color: #f8fafc;
