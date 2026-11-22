@@ -6,7 +6,7 @@
   <title>DataHunt // Job Intelligence Tracker & Pipeline</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
   <link rel="stylesheet" href="css/styles.css?v=7">
-  <link rel="stylesheet" href="css/jobs.css?v=7">
+  <link rel="stylesheet" href="css/jobs.css?v=8">
   <link rel="stylesheet" href="css/settings_modal.css?v=1">
   <!-- Markdown parser and sanitizer for clean formatted JDs -->
   <script async src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
@@ -157,9 +157,9 @@
             <span>✕ RESET FILTERS</span>
           </button>
           <div id="filtered-count-badge" class="filtered-count-badge">SHOWING 0 OF 0</div>
-          <div class="top-pagination-controls" id="top-pagination-controls" style="display: none; align-items: center; gap: 6px; margin-left: 6px;">
+          <div class="top-pagination-controls" id="top-pagination-controls" style="display: none;">
             <button type="button" class="page-nav-btn page-nav-sm" id="top-page-prev-btn" title="Previous Page">◀</button>
-            <span class="page-current-display" id="top-page-current-display" style="font-size: 11px; min-width: 52px; text-align: center;">1 / 1</span>
+            <span class="page-current-display" id="top-page-current-display">1 / 1</span>
             <button type="button" class="page-nav-btn page-nav-sm" id="top-page-next-btn" title="Next Page">▶</button>
           </div>
         </div>
@@ -172,17 +172,17 @@
         <table class="jobs-table" id="jobs-table">
           <thead>
             <tr>
-              <th style="width: 38px; text-align: center;">
+              <th style="width: 36px; text-align: center;">
                 <input type="checkbox" id="select-all-jobs" class="cyber-checkbox" title="Select / Deselect all visible jobs" onchange="toggleSelectAll(this.checked)" />
               </th>
-              <th style="width: 45px;">#</th>
+              <th style="width: 40px; text-align: center;">#</th>
               <th>JOB ROLE & COMPANY</th>
-              <th>LOCATION & SALARY</th>
-              <th style="width: 150px;">JOB POSTED</th>
-              <th style="width: 150px;">SCRAPED AT</th>
-              <th style="width: 160px;">APPLIED STATUS</th>
-              <th style="width: 170px;">INTERVIEW CALL</th>
-              <th style="width: 150px; text-align: center;">ACTIONS</th>
+              <th style="width: 190px;">LOCATION & SALARY</th>
+              <th style="width: 135px;">JOB POSTED</th>
+              <th style="width: 135px;">SCRAPED AT</th>
+              <th style="width: 140px;">APPLIED STATUS</th>
+              <th style="width: 145px;">INTERVIEW CALL</th>
+              <th style="width: 140px; text-align: center;">ACTIONS</th>
             </tr>
           </thead>
           <tbody id="jobs-table-body">
@@ -317,7 +317,7 @@
     </div>
   </div>
 
-  <script src="js/jobs.js?v=10"></script>
+  <script src="js/jobs.js?v=11"></script>
   <script src="js/settings_modal.js?v=1"></script>
 </body>
 </html>

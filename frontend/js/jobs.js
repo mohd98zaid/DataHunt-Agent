@@ -1044,7 +1044,7 @@ function renderTable(jobs) {
         <td style="text-align: center;" onclick="event.stopPropagation();">
           <input type="checkbox" class="cyber-checkbox job-select-checkbox" data-id="${job.id}" ${isSelected ? 'checked' : ''} onchange="toggleJobSelection('${job.id}', this.checked)" />
         </td>
-        <td style="font-family: 'Share Tech Mono', monospace; color: var(--text-muted);">${startIdx + idx + 1}</td>
+        <td style="font-family: 'Share Tech Mono', monospace; color: var(--text-muted); text-align: center;">${startIdx + idx + 1}</td>
         <td>
           <div class="table-job-title">
             <span>${escapeHtml(title)}</span>
@@ -1053,17 +1053,17 @@ function renderTable(jobs) {
           <div class="table-company">@ ${escapeHtml(company)}</div>
         </td>
         <td>
-          <div style="color: #c9ddf0;">📍 ${escapeHtml(location)}</div>
-          <div class="salary-tag" style="margin-top: 2px;">💰 ${escapeHtml(salary)}</div>
+          <div style="color: #c9ddf0; line-height: 1.25;">📍 ${escapeHtml(location)}</div>
+          <div class="salary-tag" style="margin-top: 1px;">💰 ${escapeHtml(salary)}</div>
         </td>
         <td>
-          <div style="font-family: 'Share Tech Mono', monospace; font-size: 11px; color: var(--neon-cyan); font-weight: 600;">
+          <div style="font-family: 'Share Tech Mono', monospace; font-size: 11px; color: var(--neon-cyan); font-weight: 600; line-height: 1.25;">
             📅 ${escapeHtml(postedDate)}
           </div>
           <div class="table-meta-sub">${escapeHtml(badge)}</div>
         </td>
         <td>
-          <div style="font-family: 'Share Tech Mono', monospace; font-size: 11px; color: #fff;">
+          <div style="font-family: 'Share Tech Mono', monospace; font-size: 11px; color: #fff; line-height: 1.25;">
             ⚡ ${escapeHtml(scrapedDate)}
           </div>
           <div class="table-meta-sub" style="font-size: 10px; color: var(--text-muted);">Realtime Ingest</div>
