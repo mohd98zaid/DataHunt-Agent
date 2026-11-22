@@ -166,6 +166,14 @@ def get_settings_endpoint():
             "help": "Primary LLM inference provider."
         },
         {
+            "key": "nvidia_api_key",
+            "label": "NVIDIA API Key",
+            "type": "text",
+            "value": settings.masked_nvidia_key(),
+            "category": "AI Models & Inference",
+            "help": "API key for NVIDIA NIM inference (e.g. nvapi-xxx)."
+        },
+        {
             "key": "nvidia_primary_model",
             "label": "NVIDIA Primary Model",
             "type": "text",
@@ -180,6 +188,14 @@ def get_settings_endpoint():
             "value": settings.NVIDIA_FALLBACK_MODEL,
             "category": "AI Models & Inference",
             "help": "Fallback model if primary encounters rate limit."
+        },
+        {
+            "key": "gemini_api_key",
+            "label": "Google Gemini API Key",
+            "type": "text",
+            "value": settings.masked_gemini_key(),
+            "category": "AI Models & Inference",
+            "help": "API key for Google Gemini inference (e.g. AIzaSy...)."
         },
         {
             "key": "gemini_model",
