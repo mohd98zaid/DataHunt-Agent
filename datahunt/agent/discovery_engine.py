@@ -1148,7 +1148,10 @@ class DiscoveryEngine:
         requested_regions = self._requested_regions(state)
         regional_scope = bool(requested_regions)
 
-        while round_num <= self.budget.max_expansion_rounds:
+        budget = getattr(state, "discovery_budget", None) or self.budget
+        max_expansion_rounds = getattr(budget, "max_expansion_rounds", 12) if budget else 12
+
+        while round_num <= max_expansion_rounds:
             tasks: List[SearchTask] = []
 
             # Round 2: Source Expansion & Pagination
@@ -1357,7 +1360,7 @@ class DiscoveryEngine:
 
             round_num += 1
 
-        discovery_state.current_round = min(round_num, self.budget.max_expansion_rounds)
+        discovery_state.current_round = min(round_num, max_expansion_rounds)
         return []
 
     def prioritize_tasks(self, tasks: List[SearchTask], discovery_state: DiscoveryState) -> List[SearchTask]:
@@ -1404,15 +1407,19 @@ class DiscoveryEngine:
                 return False, StopReason.DEADLINE_EXCEEDED, ""
             return True, StopReason.DEADLINE_EXCEEDED, "Search deadline reached; all discovered candidates processed"
 
-        if state.search_calls >= self.budget.max_search_requests:
-            if has_pending_work:
-                return False, StopReason.BUDGET_EXHAUSTED, ""
-            return True, StopReason.BUDGET_EXHAUSTED, f"Max search requests budget ({self.budget.max_search_requests}) reached"
+        budget = getattr(state, "discovery_budget", None) or self.budget
+        max_search_requests = getattr(budget, "max_search_requests", self.budget.max_search_requests)
+        max_expansion_rounds = getattr(budget, "max_expansion_rounds", self.budget.max_expansion_rounds)
 
-        if discovery_state.current_round > self.budget.max_expansion_rounds:
+        if state.search_calls >= max_search_requests:
             if has_pending_work:
                 return False, StopReason.BUDGET_EXHAUSTED, ""
-            return True, StopReason.BUDGET_EXHAUSTED, f"Max discovery rounds ({self.budget.max_expansion_rounds}) completed"
+            return True, StopReason.BUDGET_EXHAUSTED, f"Max search requests budget ({max_search_requests}) reached"
+
+        if discovery_state.current_round > max_expansion_rounds:
+            if has_pending_work:
+                return False, StopReason.BUDGET_EXHAUSTED, ""
+            return True, StopReason.BUDGET_EXHAUSTED, f"Max discovery rounds ({max_expansion_rounds}) completed"
 
         is_job_mode = state.mode in ("jobs", "job")
         if is_job_mode:
@@ -1421,7 +1428,7 @@ class DiscoveryEngine:
             effective_count = len(state.verified_records)
 
         # When continuous_time_governed is enabled, searches continue until the search deadline without stopping for target counts or diminishing returns.
-        if not getattr(self.budget, "continuous_time_governed", False):
+        if not getattr(budget, "continuous_time_governed", False):
             # Target results reached
             is_fast = getattr(state, "collection_mode", None) != "thorough"
             if effective_count >= state.target_results:
@@ -1470,7 +1477,7 @@ class DiscoveryEngine:
                 return False, StopReason.TARGET_QUALIFIED_REACHED, ""
 
             # Do not stop early if more rounds can be expanded
-            if discovery_state.current_round < self.budget.max_expansion_rounds:
+            if discovery_state.current_round < max_expansion_rounds:
                 return False, StopReason.TARGET_QUALIFIED_REACHED, ""
 
             if effective_count > 0:

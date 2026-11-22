@@ -571,3 +571,48 @@ def test_generic_company_linkedin_post_dedupe_isolation():
     # Both records must remain distinct because their URLs and document IDs are separate
     assert len(res.data["unique_records"]) == 2
     assert res.data["duplicates_count"] == 0
+
+
+def test_discovery_round_expansion_past_default_limit():
+    """Verify that rounds beyond default 12 do not get clamped to 12 or cause infinite loops."""
+    engine = DiscoveryEngine()
+    state = AgentState(
+        request="Find AI jobs in Saudi or UAE",
+        run_id="run_limit_test",
+        task_id="task_limit_test",
+        mode="jobs",
+    )
+    state.discovery_budget = DiscoveryBudget(
+        max_search_requests=150,
+        max_expansion_rounds=99,
+        continuous_time_governed=True,
+    )
+    discovery_state = DiscoveryState(
+        current_round=12,
+        coverage_matrix=SourceCoverageMatrix(target_regions=["Saudi Arabia", "UAE"]),
+    )
+
+    # Calling generate_next_round_tasks at round 12 must evaluate dynamically using state.discovery_budget (99)
+    tasks_r12 = engine.generate_next_round_tasks(discovery_state, None, state)
+    assert len(tasks_r12) > 0
+    assert discovery_state.current_round == 12
+    assert all(t.round == 12 for t in tasks_r12)
+
+    # Calling generate_next_round_tasks at round 13 (past default 12) must advance and generate round 13 tasks
+    discovery_state.current_round = 13
+    tasks_r13 = engine.generate_next_round_tasks(discovery_state, None, state)
+    assert len(tasks_r13) > 0
+    assert discovery_state.current_round == 13
+    assert all(t.round == 13 for t in tasks_r13)
+
+    # should_stop must not stop prematurely at round 12 when max_expansion_rounds is 99
+    discovery_state.current_round = 12
+    should_stop, reason, _ = engine.should_stop(discovery_state, state)
+    assert not should_stop or reason != StopReason.BUDGET_EXHAUSTED
+
+    # When round exceeds 99, it should stop
+    discovery_state.current_round = 100
+    should_stop, reason, _ = engine.should_stop(discovery_state, state)
+    assert should_stop
+    assert reason == StopReason.BUDGET_EXHAUSTED
+

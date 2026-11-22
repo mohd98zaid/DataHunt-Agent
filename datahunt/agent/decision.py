@@ -133,7 +133,7 @@ class DecisionEngine:
             return AgentAction.CRAWL_DIRECT, "Direct multi-source board/ATS crawl (pre-search)"
 
         # 5. Advance discovery round if task queue is empty and budget permits
-        max_rounds = getattr(state.discovery_budget, "max_expansion_rounds", 6) if state.discovery_budget else 6
+        max_rounds = getattr(state.discovery_budget, "max_expansion_rounds", 12) if state.discovery_budget else 12
         if (
             state.discovery_state is not None
             and not state.discovery_state.task_queue

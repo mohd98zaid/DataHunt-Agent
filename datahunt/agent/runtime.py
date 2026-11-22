@@ -178,6 +178,7 @@ class AgentRuntime:
                 max_search_requests=state.max_search_calls,
                 max_fetches=state.max_fetch_calls,
             )
+            self.discovery_engine.budget = state.discovery_budget
             if state.discovery_state is None:
                 target_geos = state.locations or ([state.explicit_location] if state.explicit_location else ["general"])
                 state.discovery_state = DiscoveryState(
@@ -787,6 +788,8 @@ class AgentRuntime:
                         prioritized = self.discovery_engine.prioritize_tasks(next_tasks, state.discovery_state)
                         state.discovery_state.task_queue.extend(prioritized)
                         break
+                    else:
+                        break
 
             if state.discovery_state.task_queue:
                 from .discovery_models import DiscoveryRoundTelemetry, SearchTaskType
@@ -997,6 +1000,8 @@ class AgentRuntime:
                             "message": f"Advancing to Discovery Round {state.discovery_state.current_round} ({len(prioritized)} tasks)",
                             "phase": "SEARCHING"
                         })
+                        break
+                    else:
                         break
                 return
 
