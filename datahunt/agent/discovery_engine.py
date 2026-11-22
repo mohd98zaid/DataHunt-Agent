@@ -1379,7 +1379,7 @@ class DiscoveryEngine:
                             if q_alt not in discovery_state.executed_queries:
                                 tasks.append(SearchTask(
                                     id=f"r{round_num}_cont_alt_{len(tasks)}",
-                                    task_type=SearchTaskType.MAJOR_BOARD_SEARCH,
+                                    task_type=SearchTaskType.BOARD_SEARCH,
                                     query=q_alt,
                                     source="organic_sweep",
                                     source_type=DiscoveredSourceType.MAJOR_BOARD,

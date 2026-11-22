@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from datahunt import APP_NAME, __version__
 from datahunt.config import settings
+from datahunt.logger import logger
 from datahunt.db import (
     get_connection, TaskRepository, RunRepository,
     RecordRepository, ExportRepository, JobTrackingRepository

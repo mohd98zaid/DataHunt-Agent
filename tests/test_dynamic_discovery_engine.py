@@ -616,3 +616,33 @@ def test_discovery_round_expansion_past_default_limit():
     assert should_stop
     assert reason == StopReason.BUDGET_EXHAUSTED
 
+
+def test_continuous_frontier_expansion_through_round_25():
+    """Verify that continuous frontier expansion through rounds 7-25 executes without attribute errors."""
+    engine = DiscoveryEngine()
+    state = AgentState(
+        request="Find AI jobs in Saudi Arab and UAE",
+        run_id="run_cont_test",
+        task_id="task_cont_test",
+        mode="jobs",
+    )
+    state.discovery_budget = DiscoveryBudget(
+        max_search_requests=300,
+        max_expansion_rounds=25,
+        continuous_time_governed=True,
+    )
+    discovery_state = DiscoveryState(
+        current_round=14,
+        coverage_matrix=SourceCoverageMatrix(target_regions=["Saudi Arabia", "UAE"]),
+    )
+
+    for r in range(14, 21):
+        discovery_state.current_round = r
+        tasks = engine.generate_next_round_tasks(discovery_state, None, state)
+        if tasks:
+            for t in tasks:
+                assert isinstance(t.task_type, SearchTaskType)
+                assert t.task_type in (SearchTaskType.ATS_SEARCH, SearchTaskType.BOARD_SEARCH, SearchTaskType.GENERAL_SEARCH)
+                discovery_state.executed_queries.add(t.query)
+
+

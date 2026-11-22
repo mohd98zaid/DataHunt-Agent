@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 class SearchTaskType(str, Enum):
     BOARD_SEARCH = "BOARD_SEARCH"
+    MAJOR_BOARD_SEARCH = "BOARD_SEARCH"
     REGIONAL_BOARD_SEARCH = "REGIONAL_BOARD_SEARCH"
     ATS_SEARCH = "ATS_SEARCH"
     COMPANY_SEARCH = "COMPANY_SEARCH"
