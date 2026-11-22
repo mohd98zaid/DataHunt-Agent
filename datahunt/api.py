@@ -20,7 +20,7 @@ from datahunt.db import (
 )
 from datahunt.models import RunStatus, VerificationStatus, ExportRecord
 from datahunt.orchestrator import ResearchOrchestrator
-from datahunt.tracing import query_project_runs
+from datahunt.tracing import query_project_runs, retrieve_run_details, query_project_threads
 
 frontend_dir = Path(__file__).resolve().parent.parent / "frontend"
 
@@ -739,13 +739,36 @@ async def websocket_agent_stream(websocket: WebSocket):
 
 @app.get("/telemetry/runs")
 async def get_langsmith_runs(limit: int = 20):
-    """Retrieve the latest telemetry runs from LangSmith using modern SmithDB client.runs.query()."""
+    """Retrieve the latest telemetry runs from LangSmith using modern SmithDB client.traces.query()."""
     runs = await query_project_runs(limit=limit)
     return {
         "status": "success",
         "project": settings.LANGSMITH_PROJECT,
         "count": len(runs),
         "runs": runs
+    }
+
+@app.get("/telemetry/runs/{run_id}")
+async def get_langsmith_run_details(run_id: str):
+    """Retrieve details for a single run using modern SmithDB client.runs.retrieve()."""
+    run = await retrieve_run_details(run_id=run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found in LangSmith")
+    return {
+        "status": "success",
+        "project": settings.LANGSMITH_PROJECT,
+        "run": run
+    }
+
+@app.get("/telemetry/threads")
+async def get_langsmith_threads(limit: int = 20):
+    """Retrieve the latest project threads from LangSmith using modern SmithDB client.threads.query()."""
+    threads = await query_project_threads(limit=limit)
+    return {
+        "status": "success",
+        "project": settings.LANGSMITH_PROJECT,
+        "count": len(threads),
+        "threads": threads
     }
 
 # ─────────────────────────────────────────────

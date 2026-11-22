@@ -16,7 +16,7 @@ python-dotenv>=1.0.0
 
 # LLM SDK & Observability
 google-genai>=0.1.0
-langsmith>=0.1.0
+langsmith>=0.10.15
 
 # Export Formats
 openpyxl>=3.1.0
