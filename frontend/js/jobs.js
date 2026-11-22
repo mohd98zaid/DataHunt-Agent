@@ -1234,6 +1234,61 @@ async function bulkDeleteJobs() {
 }
 window.bulkDeleteJobs = bulkDeleteJobs;
 
+async function resetAllData() {
+  const confirmed = confirm(
+    "⚠️ COMPLETE RESET WARNING:\n\n" +
+    "Are you sure you want to completely reset and purge the entire database?\n\n" +
+    "• All scraped jobs and tracking statuses will be permanently deleted\n" +
+    "• All cached source documents and research runs will be purged\n" +
+    "• All disk storage will be reclaimed (VACUUM)\n\n" +
+    "This action cannot be undone. Proceed with Complete Reset?"
+  );
+  if (!confirmed) return;
+
+  const resetBtn = document.getElementById("reset-all-data-btn");
+  const originalText = resetBtn ? resetBtn.innerHTML : "";
+  if (resetBtn) {
+    resetBtn.disabled = true;
+    resetBtn.innerHTML = `<span>⏳ PURGING DATABASE...</span>`;
+  }
+
+  try {
+    const res = await fetch("/api/jobs/reset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" }
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || `HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    selectedJobIds.clear();
+
+    const modal = document.getElementById("job-detail-modal");
+    if (modal) {
+      modal.style.display = "none";
+      activeJobId = null;
+    }
+
+    // Reload jobs from fresh empty DB
+    await loadJobs();
+
+    alert("✅ Complete Reset successful!\n\nAll scraped jobs, runs, documents, and temporary caches have been permanently purged and disk storage reclaimed.");
+  } catch (err) {
+    console.error("Reset data error:", err);
+    alert("Failed to reset database: " + err.message);
+  } finally {
+    if (resetBtn) {
+      resetBtn.disabled = false;
+      resetBtn.innerHTML = originalText;
+    }
+    updateBulkControls();
+  }
+}
+window.resetAllData = resetAllData;
+
 function formatPostedDate(val, fallback = "Recent") {
   if (!val) return fallback;
   const s = String(val).trim();

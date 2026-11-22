@@ -877,23 +877,32 @@ class JobTrackingRepository:
     def delete_jobs(self, record_ids: List[str]) -> int:
         """
         Permanently bulk delete multiple job records, including all historical clone snapshots
-        (matching identity_key, canonical_url, or normalized title + company) within a transaction.
+        (matching identity_key, canonical_url, or normalized title + company), orphaned source documents,
+        and empty research runs within a transaction, then vacuum to reclaim storage.
         """
         if not record_ids:
             return 0
         conn = self.conn_factory()
+        deleted_count = 0
         try:
             with conn:
-                # 1. Fetch metadata for the specified record_ids to find all clone snapshots
+                # 1. Fetch metadata for the specified record_ids to find all clone snapshots and affected runs
                 placeholders = ",".join(["?"] * len(record_ids))
                 rows = conn.execute(
-                    f"SELECT id, fields_json, canonical_url, identity_key FROM extracted_records WHERE id IN ({placeholders});",
+                    f"SELECT id, run_id, source_document_id, fields_json, canonical_url, identity_key FROM extracted_records WHERE id IN ({placeholders});",
                     record_ids
                 ).fetchall()
 
                 all_ids = set(record_ids)
+                affected_run_ids = set()
+                affected_doc_ids = set()
+
                 for row in rows:
                     all_ids.add(row["id"])
+                    if row["run_id"]:
+                        affected_run_ids.add(row["run_id"])
+                    if row["source_document_id"]:
+                        affected_doc_ids.add(row["source_document_id"])
                     try:
                         fields = json.loads(row["fields_json"] or "{}")
                     except Exception:
@@ -905,28 +914,40 @@ class JobTrackingRepository:
                     # Find all clone records with the same normalized (title, company)
                     if title and company and len(title) >= 3:
                         clones = conn.execute("""
-                            SELECT id FROM extracted_records
+                            SELECT id, run_id, source_document_id FROM extracted_records
                             WHERE LOWER(TRIM(COALESCE(JSON_EXTRACT(fields_json, '$.title'), JSON_EXTRACT(fields_json, '$.name'), ''))) = ?
                               AND LOWER(TRIM(COALESCE(JSON_EXTRACT(fields_json, '$.company'), JSON_EXTRACT(fields_json, '$.company_name'), ''))) = ?;
                         """, (title, company)).fetchall()
                         for c in clones:
                             all_ids.add(c["id"])
+                            if c["run_id"]:
+                                affected_run_ids.add(c["run_id"])
+                            if c["source_document_id"]:
+                                affected_doc_ids.add(c["source_document_id"])
 
                     # Find clone records with the same exact canonical_url (if not a generic root directory)
                     if url and len(url) > 12 and not any(board in url for board in ("/careers", "/jobs", "/search", "boards.greenhouse.io")):
                         url_clones = conn.execute(
-                            "SELECT id FROM extracted_records WHERE canonical_url = ?;", (url,)
+                            "SELECT id, run_id, source_document_id FROM extracted_records WHERE canonical_url = ?;", (url,)
                         ).fetchall()
                         for c in url_clones:
                             all_ids.add(c["id"])
+                            if c["run_id"]:
+                                affected_run_ids.add(c["run_id"])
+                            if c["source_document_id"]:
+                                affected_doc_ids.add(c["source_document_id"])
 
                     # Find clone records with the same identity_key if present
                     if row["identity_key"]:
                         id_clones = conn.execute(
-                            "SELECT id FROM extracted_records WHERE identity_key = ?;", (row["identity_key"],)
+                            "SELECT id, run_id, source_document_id FROM extracted_records WHERE identity_key = ?;", (row["identity_key"],)
                         ).fetchall()
                         for c in id_clones:
                             all_ids.add(c["id"])
+                            if c["run_id"]:
+                                affected_run_ids.add(c["run_id"])
+                            if c["source_document_id"]:
+                                affected_doc_ids.add(c["source_document_id"])
 
                 full_ids = list(all_ids)
                 full_placeholders = ",".join(["?"] * len(full_ids))
@@ -946,13 +967,117 @@ class JobTrackingRepository:
                         logger.debug(f"Aux table delete from {tbl}: {te}")
 
                 cur = conn.execute(f"DELETE FROM extracted_records WHERE id IN ({full_placeholders});", full_ids)
-                return cur.rowcount
+                deleted_count = cur.rowcount
+
+                # Clean up orphaned source documents that are no longer referenced by any extracted_records
+                if affected_doc_ids:
+                    doc_placeholders = ",".join(["?"] * len(affected_doc_ids))
+                    conn.execute(f"""
+                        DELETE FROM source_documents
+                        WHERE id IN ({doc_placeholders})
+                          AND id NOT IN (SELECT DISTINCT source_document_id FROM extracted_records WHERE source_document_id IS NOT NULL);
+                    """, list(affected_doc_ids))
+
+                # Clean up empty research runs and their associated tool events/tasks
+                for rid in affected_run_ids:
+                    remaining_cnt = conn.execute("SELECT count(*) FROM extracted_records WHERE run_id = ?;", (rid,)).fetchone()[0]
+                    if remaining_cnt == 0:
+                        conn.execute("DELETE FROM source_documents WHERE run_id = ?;", (rid,))
+                        conn.execute("DELETE FROM tool_events WHERE run_id = ?;", (rid,))
+                        conn.execute("DELETE FROM run_checkpoints WHERE run_id = ?;", (rid,))
+                        conn.execute("DELETE FROM exports WHERE run_id = ?;", (rid,))
+                        t_row = conn.execute("SELECT task_id FROM research_runs WHERE id = ?;", (rid,)).fetchone()
+                        conn.execute("DELETE FROM research_runs WHERE id = ?;", (rid,))
+                        if t_row and t_row[0]:
+                            t_id = t_row[0]
+                            r_cnt = conn.execute("SELECT count(*) FROM research_runs WHERE task_id = ?;", (t_id,)).fetchone()[0]
+                            if r_cnt == 0:
+                                conn.execute("DELETE FROM research_tasks WHERE id = ?;", (t_id,))
+
+                # If no records remain in extracted_records, perform full sweep of orphaned tables
+                remaining_total = conn.execute("SELECT count(*) FROM extracted_records;").fetchone()[0]
+                if remaining_total == 0:
+                    for tbl in (
+                        "source_documents", "record_evidence", "tool_events",
+                        "run_checkpoints", "exports", "research_runs", "research_tasks",
+                        "job_application_status", "interview_prep_sessions", "company_research_profiles",
+                        "job_change_events", "saved_jobs", "ignored_jobs"
+                    ):
+                        try:
+                            conn.execute(f"DELETE FROM {tbl};")
+                        except Exception:
+                            pass
+
+            # Reclaim storage outside the transaction
+            try:
+                conn.execute("VACUUM;")
+            except Exception as ve:
+                logger.debug(f"VACUUM during delete_jobs: {ve}")
+
+            return deleted_count
         finally:
             conn.close()
 
     def delete_job(self, record_id: str) -> bool:
         """Permanently delete a job record, all its duplicate snapshots, and tracking status."""
         return self.delete_jobs([record_id]) > 0
+
+    def purge_all_data(self) -> Dict[str, int]:
+        """
+        Complete reset: permanently purge all scraped jobs, source documents,
+        runs, tasks, evidence, tool events, checkpoints, and tracking records,
+        then run VACUUM to reclaim all disk space.
+        """
+        conn = self.conn_factory()
+        deleted_counts = {}
+        tables_to_purge = [
+            "record_evidence", "extracted_records", "source_documents",
+            "tool_events", "run_checkpoints", "job_application_status",
+            "interview_prep_sessions", "company_research_profiles",
+            "job_change_events", "saved_jobs", "ignored_jobs",
+            "exports", "research_runs", "research_tasks"
+        ]
+        try:
+            with conn:
+                for tbl in tables_to_purge:
+                    try:
+                        cur = conn.execute(f"DELETE FROM {tbl};")
+                        deleted_counts[tbl] = cur.rowcount
+                    except Exception as te:
+                        logger.debug(f"Purge error on {tbl}: {te}")
+                        deleted_counts[tbl] = 0
+            try:
+                conn.execute("VACUUM;")
+            except Exception as ve:
+                logger.warning(f"VACUUM failed during purge: {ve}")
+            return deleted_counts
+        finally:
+            conn.close()
+
+    def get_database_stats(self) -> Dict[str, Any]:
+        """Return counts and physical disk size of the database."""
+        conn = self.conn_factory()
+        try:
+            row_counts = {}
+            for tbl in ("extracted_records", "source_documents", "research_runs", "research_tasks", "job_application_status"):
+                try:
+                    row_counts[tbl] = conn.execute(f"SELECT count(*) FROM {tbl};").fetchone()[0]
+                except Exception:
+                    row_counts[tbl] = 0
+
+            import os
+            from datahunt.config import settings
+            db_path = str(settings.DATABASE_PATH)
+            size_bytes = os.path.getsize(db_path) if os.path.exists(db_path) else 0
+            size_mb = round(size_bytes / (1024 * 1024), 2)
+
+            return {
+                "size_bytes": size_bytes,
+                "size_mb": size_mb,
+                "counts": row_counts
+            }
+        finally:
+            conn.close()
 
 
 class ExportRepository:

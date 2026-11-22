@@ -1444,6 +1444,23 @@ document.addEventListener("DOMContentLoaded", () => {
   function handleAgentEvent(msg) {
     const { event, data } = msg;
 
+    if (event === "system.reset") {
+      updateCounters({
+        searches_planned: 0,
+        searches_executed: 0,
+        documents_fetched: 0,
+        records_extracted: 0,
+        records_verified: 0,
+        records_rejected: 0,
+        duplicates_skipped: 0
+      });
+      if (typeof window.resetToInputMode === "function") {
+        window.resetToInputMode();
+      }
+      hud.appendLog("SYSTEM", "Complete Reset: All database records and session telemetry purged");
+      return;
+    }
+
     if (event === "model.active") {
       const activeModel = data.model || "openai/gpt-oss-20b";
       const label = data.label || `Neural Core: ${activeModel}`;

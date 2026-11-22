@@ -1108,6 +1108,31 @@
   color: #fff;
 }
 
+/* Complete Reset All Data Button */
+.reset-all-data-btn {
+  background: rgba(255, 68, 68, 0.12);
+  border: 1px solid rgba(255, 68, 68, 0.5);
+  color: #ff5555;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 0 8px rgba(255, 68, 68, 0.2);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.reset-all-data-btn:hover {
+  background: rgba(255, 68, 68, 0.3);
+  box-shadow: 0 0 16px rgba(255, 68, 68, 0.5);
+  color: #ffffff;
+  border-color: #ff3333;
+}
+
 /* Row Actions Delete Button */
 .table-delete-btn {
   background: rgba(255, 0, 85, 0.1);

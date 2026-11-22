@@ -536,6 +536,33 @@ def bulk_delete_jobs(req: BulkDeleteJobsRequest):
     count = job_repo.delete_jobs(req.record_ids)
     return {"status": "deleted", "count": count, "record_ids": req.record_ids}
 
+@app.post("/api/jobs/reset")
+async def reset_all_job_data():
+    """
+    Perform a complete reset: purge all scraped jobs, runs, source documents,
+    evidence, and run checkpoints, then VACUUM SQLite database.
+    """
+    counts = job_repo.purge_all_data()
+    # Broadcast reset event to all connected cockpit WebSockets
+    if stream_clients:
+        msg = json.dumps({"event": "system.reset", "data": {"message": "Database completely reset"}})
+        for client in list(stream_clients):
+            try:
+                await client.send_text(msg)
+            except Exception:
+                pass
+    return {
+        "status": "success",
+        "message": "Complete reset successful. All jobs, runs, source documents, and tracking data purged.",
+        "counts": counts
+    }
+
+@app.get("/api/database/stats")
+def get_database_stats():
+    """Retrieve database disk size and row counts."""
+    stats = job_repo.get_database_stats()
+    return {"status": "success", "stats": stats}
+
 @app.get("/exports/{export_id}/download")
 def download_export(export_id: str):
     conn = get_connection()

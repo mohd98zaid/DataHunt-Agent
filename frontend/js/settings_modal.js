@@ -40,6 +40,9 @@
               <span>STORAGE: SQLITE WAL + .ENV DUAL-SYNC</span>
             </div>
             <div class="settings-action-btns">
+              <button type="button" id="dh-settings-purge-data-btn" class="settings-btn" style="background: rgba(255, 68, 68, 0.15); border: 1px solid rgba(255, 68, 68, 0.5); color: #ff5555;" title="Permanently delete all scraped jobs and purge database">
+                <span>🗑️ PURGE ALL DATA</span>
+              </button>
               <button type="button" id="dh-settings-reset-btn" class="settings-btn settings-btn-reset">
                 <span>↺ RESTORE DEFAULTS</span>
               </button>
@@ -73,6 +76,8 @@
 
     document.getElementById('dh-settings-save-btn').addEventListener('click', saveSettings);
     document.getElementById('dh-settings-reset-btn').addEventListener('click', resetSettings);
+    const purgeBtn = document.getElementById('dh-settings-purge-data-btn');
+    if (purgeBtn) purgeBtn.addEventListener('click', purgeAllData);
 
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
@@ -300,6 +305,36 @@
     } finally {
       resetBtn.disabled = false;
       resetBtn.innerHTML = originalText;
+    }
+  }
+
+  async function purgeAllData() {
+    if (!confirm('⚠️ COMPLETE RESET:\n\nAre you sure you want to permanently delete ALL scraped jobs, research runs, raw documents, and free all disk storage?')) {
+      return;
+    }
+
+    const purgeBtn = document.getElementById('dh-settings-purge-data-btn');
+    const originalText = purgeBtn ? purgeBtn.innerHTML : '';
+    if (purgeBtn) {
+      purgeBtn.disabled = true;
+      purgeBtn.innerHTML = '<span>PURGING...</span>';
+    }
+
+    try {
+      const resp = await fetch('/api/jobs/reset', { method: 'POST' });
+      if (!resp.ok) throw new Error('Failed to purge data');
+      showToast('✓ Complete reset successful. All database records and caches purged.');
+      if (typeof window.loadJobs === 'function') {
+        window.loadJobs();
+      }
+    } catch (err) {
+      console.error(err);
+      showToast(err.message, true);
+    } finally {
+      if (purgeBtn) {
+        purgeBtn.disabled = false;
+        purgeBtn.innerHTML = originalText;
+      }
     }
   }
 
