@@ -155,18 +155,18 @@ def test_nvidia_client_backward_compat_aliases():
 def test_nvidia_client_model_and_mode_properties():
     # Default auto
     client_auto = NvidiaClient(api_key="test-key", model="auto")
-    assert client_auto.model == "openai/gpt-oss-20b"
+    assert client_auto.model == "nvidia/nemotron-3.5-lightning-30b-a3b"
     assert client_auto.mode == "auto"
 
     # Primary alias
     client_primary = NvidiaClient(api_key="test-key", model="primary")
-    assert client_primary.model == "openai/gpt-oss-20b"
+    assert client_primary.model == "nvidia/nemotron-3.5-lightning-30b-a3b"
     assert client_primary.mode == "primary"
 
-    # Fallback / Nemotron alias
-    client_nemotron = NvidiaClient(api_key="test-key", model="nemotron")
-    assert client_nemotron.model == "nvidia/nemotron-3.5-lightning-30b-a3b"
-    assert client_nemotron.mode == "fallback"
+    # Fallback alias
+    client_fallback = NvidiaClient(api_key="test-key", model="fallback")
+    assert client_fallback.model == "mistralai/mistral-large-4-1t-a52b"
+    assert client_fallback.mode == "fallback"
 
 
 def test_nvidia_client_on_model_switch_callback():
@@ -188,13 +188,13 @@ def test_nvidia_client_on_model_switch_callback():
 
     client._client.chat.completions.create = MagicMock(return_value=MagicMock(choices=[choice]))
     # Force cooldown on primary model so fallback is used
-    record_nvidia_cooldown("openai/gpt-oss-20b", 30.0, "testing failover")
+    record_nvidia_cooldown(client.primary_model, 30.0, "testing failover")
     
     result = client._call_nvidia_json("test failover prompt")
     assert result == {"ok": True}
-    assert client.model == "nvidia/nemotron-3.5-lightning-30b-a3b"
+    assert client.model == client.fallback_model
     assert len(switches) >= 1
-    assert switches[0][0] == "nvidia/nemotron-3.5-lightning-30b-a3b"
+    assert switches[0][0] == client.fallback_model
 
 
 def test_nvidia_client_extract_from_document_offline_fallback():

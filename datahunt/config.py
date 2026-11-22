@@ -14,8 +14,8 @@ class Settings:
     # NVIDIA NIM Settings (Free Preview endpoints up to 40 RPM)
     NVIDIA_API_KEY: str = os.getenv("NVIDIA_API_KEY", "")
     NVIDIA_BASE_URL: str = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
-    NVIDIA_PRIMARY_MODEL: str = os.getenv("NVIDIA_PRIMARY_MODEL", "openai/gpt-oss-20b")
-    NVIDIA_FALLBACK_MODEL: str = os.getenv("NVIDIA_FALLBACK_MODEL", "nvidia/nemotron-3.5-lightning-30b-a3b")
+    NVIDIA_PRIMARY_MODEL: str = os.getenv("NVIDIA_PRIMARY_MODEL", "nvidia/nemotron-3.5-lightning-30b-a3b")
+    NVIDIA_FALLBACK_MODEL: str = os.getenv("NVIDIA_FALLBACK_MODEL", "mistralai/mistral-large-4-1t-a52b")
     NVIDIA_MAX_OUTPUT_TOKENS: int = int(os.getenv("NVIDIA_MAX_OUTPUT_TOKENS", "2048"))
     NVIDIA_TEMPERATURE: float = float(os.getenv("NVIDIA_TEMPERATURE", "0.1"))
     NVIDIA_RPM: int = int(os.getenv("NVIDIA_RPM", "40"))          # max NVIDIA API calls per minute
@@ -345,8 +345,8 @@ class Settings:
         self.MAX_PAGES_FETCHED = 300
         self.MAX_CONCURRENT_RUNS = 2
         self.LLM_PROVIDER = "nvidia"
-        self.NVIDIA_PRIMARY_MODEL = "openai/gpt-oss-20b"
-        self.NVIDIA_FALLBACK_MODEL = "nvidia/nemotron-3.5-lightning-30b-a3b"
+        self.NVIDIA_PRIMARY_MODEL = "nvidia/nemotron-3.5-lightning-30b-a3b"
+        self.NVIDIA_FALLBACK_MODEL = "mistralai/mistral-large-4-1t-a52b"
         self.NVIDIA_RPM = 40
         self.SEARCH_BATCH_SIZE = 20
         self.GEMINI_MODEL = "auto"

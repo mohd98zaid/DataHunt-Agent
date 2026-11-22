@@ -37,8 +37,8 @@ except ImportError:
 
 # Default NVIDIA Preview Endpoints
 DEFAULT_NVIDIA_BASE_URL = getattr(settings, "NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1") or "https://integrate.api.nvidia.com/v1"
-DEFAULT_PRIMARY_MODEL = getattr(settings, "NVIDIA_PRIMARY_MODEL", "openai/gpt-oss-20b") or "openai/gpt-oss-20b"
-DEFAULT_FALLBACK_MODEL = getattr(settings, "NVIDIA_FALLBACK_MODEL", "nvidia/nemotron-3.5-lightning-30b-a3b") or "nvidia/nemotron-3.5-lightning-30b-a3b"
+DEFAULT_PRIMARY_MODEL = getattr(settings, "NVIDIA_PRIMARY_MODEL", "nvidia/nemotron-3.5-lightning-30b-a3b") or "nvidia/nemotron-3.5-lightning-30b-a3b"
+DEFAULT_FALLBACK_MODEL = getattr(settings, "NVIDIA_FALLBACK_MODEL", "mistralai/mistral-large-4-1t-a52b") or "mistralai/mistral-large-4-1t-a52b"
 
 # Global cooldowns and pacing for NVIDIA NIM (40 RPM limit)
 _nvidia_cooldowns: Dict[str, float] = {}
@@ -142,11 +142,11 @@ class NvidiaClient:
             self.primary_model = default_primary
             self.fallback_model = fallback_model or default_fallback
             self._mode = "auto"
-        elif any(k in raw_model.lower() for k in ("primary", "gpt-oss", "lite")):
+        elif raw_model.lower() in ("primary", "lite"):
             self.primary_model = default_primary
             self.fallback_model = fallback_model or default_fallback
             self._mode = "primary"
-        elif any(k in raw_model.lower() for k in ("fallback", "nemotron", "flash", "3.8")):
+        elif raw_model.lower() in ("fallback", "flash"):
             self.primary_model = default_fallback
             self.fallback_model = default_primary
             self._mode = "fallback"

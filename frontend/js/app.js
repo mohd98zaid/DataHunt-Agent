@@ -231,14 +231,14 @@ window.setModel = function(mode) {
   let labelText = "🔄 MULTI-MODEL";
   let targetText = "TARGET: NVIDIA DUAL-CORE AUTO";
 
-  if (mode.includes("gpt-oss") || mode === "primary" || mode.includes("lite")) {
-    chipId = "model-chip-gpt-oss";
-    labelText = "⚡ GPT-OSS 20B";
-    targetText = "TARGET: OPENAI/GPT-OSS-20B";
-  } else if (mode.includes("nemotron") || mode === "fallback" || mode.includes("flash") || mode.includes("3.8")) {
+  if (mode.includes("nemotron") || mode === "primary" || mode.includes("gpt-oss") || mode.includes("lite")) {
     chipId = "model-chip-nemotron";
-    labelText = "🚀 NEMOTRON 30B";
+    labelText = "⚡ NEMOTRON 30B";
     targetText = "TARGET: NVIDIA NEMOTRON-30B";
+  } else if (mode.includes("mistral") || mode === "fallback" || mode.includes("flash") || mode.includes("3.8")) {
+    chipId = "model-chip-mistral";
+    labelText = "🚀 MISTRAL LARGE";
+    targetText = "TARGET: MISTRAL-LARGE-4";
   }
   const activeBtn = document.getElementById(chipId) || document.getElementById("model-chip-auto");
   if (activeBtn) activeBtn.classList.add("active");
@@ -1276,11 +1276,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Multi-Model Neural Core Buttons
   const modelAuto = document.getElementById("model-chip-auto");
-  const modelGptOss = document.getElementById("model-chip-gpt-oss") || document.getElementById("model-chip-lite");
-  const modelNemotron = document.getElementById("model-chip-nemotron") || document.getElementById("model-chip-flash");
+  const modelNemotron = document.getElementById("model-chip-nemotron") || document.getElementById("model-chip-gpt-oss");
+  const modelMistral = document.getElementById("model-chip-mistral");
   if (modelAuto) modelAuto.addEventListener("click", () => window.setModel("auto"));
-  if (modelGptOss) modelGptOss.addEventListener("click", () => window.setModel("openai/gpt-oss-20b"));
   if (modelNemotron) modelNemotron.addEventListener("click", () => window.setModel("nvidia/nemotron-3.5-lightning-30b-a3b"));
+  if (modelMistral) modelMistral.addEventListener("click", () => window.setModel("mistralai/mistral-large-4-1t-a52b"));
 
   // Query Presets Container (delegated click handling)
   const presetsContainer = document.getElementById("dynamic-presets-container");
