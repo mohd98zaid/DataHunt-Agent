@@ -11,8 +11,9 @@ from datahunt.llm import NvidiaClient, GeminiClient
 GEO_SYNONYMS = {
     "uae": ["uae", "united arab emirates", "dubai", "abu dhabi", "sharjah", "ajman", "al ain", "ras al khaimah", "middle east", "mena", "gcc", "ae", "الإمارات", "الامارات", "أبو ظبي", "أبوظبي", "ابوظبي", "دبي", "الشارقة", "عجمان", "رأس الخيمة", "الفجيرة"],
     "dubai": ["dubai", "uae", "united arab emirates", "abu dhabi", "sharjah", "ajman", "al ain", "ras al khaimah", "middle east", "mena", "gcc", "difc", "internet city", "silicon oasis", "business bay", "jlt", "ae", "دبي"],
-    "saudi": ["saudi", "saudi arabia", "ksa", "riyadh", "jeddah", "dammam", "khobar", "neom", "middle east", "mena", "gcc", "sa", "السعودية", "المملكة العربية السعودية", "الرياض", "جدة", "الدمام", "الخبر", "نيوم"],
-    "saudi arabia": ["saudi", "saudi arabia", "ksa", "riyadh", "jeddah", "dammam", "khobar", "neom", "middle east", "mena", "gcc", "sa", "السعودية", "المملكة العربية السعودية", "الرياض", "جدة", "الدمام", "الخبر", "نيوم"],
+    "saudi": ["saudi", "saudi arabia", "saudi arab", "ksa", "riyadh", "jeddah", "dammam", "khobar", "neom", "middle east", "mena", "gcc", "sa", "السعودية", "المملكة العربية السعودية", "الرياض", "جدة", "الدمام", "الخبر", "نيوم"],
+    "saudi arab": ["saudi", "saudi arabia", "saudi arab", "ksa", "riyadh", "jeddah", "dammam", "khobar", "neom", "middle east", "mena", "gcc", "sa", "السعودية", "المملكة العربية السعودية", "الرياض", "جدة", "الدمام", "الخبر", "نيوم"],
+    "saudi arabia": ["saudi", "saudi arabia", "saudi arab", "ksa", "riyadh", "jeddah", "dammam", "khobar", "neom", "middle east", "mena", "gcc", "sa", "السعودية", "المملكة العربية السعودية", "الرياض", "جدة", "الدمام", "الخبر", "نيوم"],
     "ksa": ["saudi", "saudi arabia", "ksa", "riyadh", "jeddah", "dammam", "khobar", "neom", "middle east", "mena", "gcc", "sa", "السعودية", "المملكة العربية السعودية", "الرياض", "جدة", "الدمام", "الخبر", "نيوم"],
     "india": ["india", "bangalore", "bengaluru", "mumbai", "delhi", "hyderabad", "pune", "chennai", "gurgaon", "noida", "in"],
     "uk": ["uk", "united kingdom", "london", "england", "scotland", "manchester", "birmingham", "gb"],

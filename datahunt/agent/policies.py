@@ -26,7 +26,7 @@ class TitleCategory(str, Enum):
 
 GEO_ALIAS_GROUPS: Dict[str, List[str]] = {
     "saudi": [
-        "saudi", "saudi arabia", "ksa", "riyadh", "jeddah", "dammam", "khobar", "dhahran",
+        "saudi", "saudi arabia", "saudi arab", "ksa", "riyadh", "jeddah", "dammam", "khobar", "dhahran",
         "neom", "mecca", "medina", "makkah", "jubail", "yanbu", "tabuk", "taif", "abha",
         "al khobar", "qassim", "hail", "jizan", "najran", "sa",
         "السعودية", "المملكة العربية السعودية", "الرياض", "جدة", "الدمام", "الخبر", "الظهران",
@@ -364,6 +364,17 @@ DISQUALIFYING_JOB_FAMILIES = [
 ]
 
 ROLE_TAXONOMY: Dict[str, Dict[str, Any]] = {
+    "ai_engineering": {
+        "keywords": ["ai", "artificial intelligence", "genai", "generative ai", "llm", "ai engineer", "ai developer", "ai architect", "ai specialist"],
+        "direct_titles": [
+            "ai engineer", "artificial intelligence engineer", "genai engineer", "generative ai engineer",
+            "llm engineer", "ai solution architect", "ai solutions architect", "ai architect",
+            "ai agent developer", "ai agent architect", "ai platform engineer", "applied ai engineer",
+            "ai software engineer", "ai technical lead", "ai specialist", "ai research engineer",
+            "ai product manager", "genai product manager", "machine learning engineer", "ml engineer"
+        ],
+        "related_roles": ["data scientist", "deep learning engineer", "mlops engineer", "applied scientist", "research scientist"],
+    },
     "cloud": {
         "keywords": ["cloud", "aws", "azure", "gcp", "google cloud", "multi-cloud"],
         "direct_titles": [
@@ -589,8 +600,8 @@ def match_title_relevance(
                             f"Title '{job_title}' belongs to unrelated family '{family_name}', not requested engineering role"
                         )
 
-    # 2. GenAI specific semantic matching
-    if any(k in req_t for k in ("genai", "generative ai")):
+    # 2. GenAI / AI specific semantic matching
+    if any(k in req_t for k in ("genai", "generative ai", "artificial intelligence")) or re.search(r'\bai\b', req_t):
         STRONG_GENAI_TERMS = [
             "genai", "gen ai", "generative ai", "generative-ai", "llm", "large language model",
             "large language models", "foundation model", "foundation models", "prompt engineer",
@@ -646,7 +657,7 @@ def match_title_relevance(
             ):
                 return MatchStatus.MATCH, 0.85, f"Title '{job_title}' supported by GenAI responsibilities in job description"
 
-        return MatchStatus.MISMATCH, 0.0, f"Title '{job_title}' does not match requested GenAI role"
+        return MatchStatus.MISMATCH, 0.0, f"Title '{job_title}' does not match requested AI / GenAI role"
 
     # 2.5 Generalized Role Family Semantic Matching
     # Maps any requested domain (Cloud, DevOps, Data Engineering, Cybersecurity, Backend, Frontend, Mobile, QA, Product, Solutions)

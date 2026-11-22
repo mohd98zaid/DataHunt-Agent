@@ -355,8 +355,19 @@ def _deterministic_parse(query: str) -> Dict[str, Any]:
     filler = re.sub(r'\b(preferably|mostly|mainly)?\s*fresh\b.*', '', filler, flags=re.IGNORECASE)
     title = re.sub(r'\s+', ' ', filler).strip()[:60] or query[:60]
     title = re.sub(r'^\s*\d+\s+', '', title).strip()
-    if title.lower() in ("genai", "gen ai", "generative ai"):
+    alt_titles: List[str] = []
+    if title.lower() in ("ai", "artificial intelligence"):
+        title = "AI Engineer"
+        alt_titles = [
+            "Generative AI Engineer", "Machine Learning Engineer", "AI/ML Engineer",
+            "AI Solutions Architect", "AI Agent Developer", "Applied AI Scientist"
+        ]
+    elif title.lower() in ("genai", "gen ai", "generative ai"):
         title = "GenAI Engineer"
+        alt_titles = ["Generative AI Engineer", "AI Engineer", "LLM Engineer", "AI Agent Architect"]
+    elif title.lower() in ("ml", "machine learning"):
+        title = "Machine Learning Engineer"
+        alt_titles = ["ML Engineer", "AI Engineer", "Deep Learning Engineer", "MLOps Engineer"]
 
     fresh_days = 30
     is_all_time = False
@@ -375,7 +386,7 @@ def _deterministic_parse(query: str) -> Dict[str, Any]:
     return {
         "raw_query": query,
         "job_title": title,
-        "alternative_titles": [],
+        "alternative_titles": alt_titles,
         "skills": list(explicit_skills),
         "explicit_skills": explicit_skills,
         "inferred_skills": inferred_skills,

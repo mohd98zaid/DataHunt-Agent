@@ -1402,7 +1402,7 @@ class FreeHireSearchProvider:
     def _query_filters(query: str) -> Dict[str, Any]:
         lower = (query or "").casefold()
         aliases = {
-            "saudi arabia": "sa", "saudi": "sa", "ksa": "sa",
+            "saudi arabia": "sa", "saudi": "sa", "saudi arab": "sa", "ksa": "sa",
             "united arab emirates": "ae", "uae": "ae",
             "qatar": "qa", "kuwait": "kw", "bahrain": "bh", "oman": "om",
             "india": "in", "united kingdom": "gb", "uk": "gb",
@@ -1614,7 +1614,7 @@ class LLMSearchProvider:
 class DirectATSSearchProvider:
     """
     Direct high-throughput public ATS provider querying structured APIs directly
-    (Greenhouse, Lever, SmartRecruiters) when queries target ATS domains or when
+    (Greenhouse, Lever, Ashby, SmartRecruiters) when queries target ATS domains or when
     search engines are throttled, rate-limited, or blocked.
     Includes thread-safe in-memory caching (TTL 10 min).
     """
@@ -1627,17 +1627,26 @@ class DirectATSSearchProvider:
         "tamara", "careem", "lucidmotors", "cognite", "andurilindustries",
         "bybit", "opswat", "fireblocks", "decimainternational", "ebury",
         "singlestore-linkedin", "cloudflare", "netskope", "udacity",
-        "monks", "bursonglobalcareers", "blackduck", "stackadapt", "aift"
+        "monks", "bursonglobalcareers", "blackduck", "stackadapt", "aift",
+        "binance", "okx", "canonical", "gitlab", "elastic", "mongodb",
+        "datadog", "scaleapi", "anthropic", "databricks", "snowflake",
+        "automattic", "instacart", "reddit", "stripe"
     ]
     KNOWN_LEVER_BOARDS = [
-        "tabby", "swvl", "talabat"
+        "spotify", "palantir", "figma", "atlassian", "canva", "deliveroo",
+        "anghami", "postman", "tabby", "swvl", "talabat", "getir"
+    ]
+    KNOWN_ASHBY_BOARDS = [
+        "openai", "perplexity", "cohere", "modal", "cursor", "anyscale",
+        "linear", "replicate", "characterai", "together"
     ]
 
     def _fetch_greenhouse_board(self, board_token: str) -> List[Dict[str, Any]]:
         now = time.time()
         with self._cache_lock:
-            if board_token in self._cache:
-                ts, data = self._cache[board_token]
+            key = f"gh_{board_token}"
+            if key in self._cache:
+                ts, data = self._cache[key]
                 if now - ts < self._CACHE_TTL:
                     return data
 
@@ -1648,10 +1657,55 @@ class DirectATSSearchProvider:
                 if resp.status_code == 200:
                     jobs = resp.json().get("jobs", [])
                     with self._cache_lock:
-                        self._cache[board_token] = (now, jobs)
+                        self._cache[f"gh_{board_token}"] = (now, jobs)
                     return jobs
         except Exception as e:
             logger.debug(f"Direct ATS Greenhouse fetch error for {board_token}: {e}")
+        return []
+
+    def _fetch_lever_board(self, board_token: str) -> List[Dict[str, Any]]:
+        now = time.time()
+        with self._cache_lock:
+            key = f"lever_{board_token}"
+            if key in self._cache:
+                ts, data = self._cache[key]
+                if now - ts < self._CACHE_TTL:
+                    return data
+
+        url = f"https://api.lever.co/v0/postings/{board_token}?mode=json"
+        try:
+            with httpx.Client(timeout=4.0) as client:
+                resp = client.get(url)
+                if resp.status_code == 200:
+                    postings = resp.json()
+                    if isinstance(postings, list):
+                        with self._cache_lock:
+                            self._cache[f"lever_{board_token}"] = (now, postings)
+                        return postings
+        except Exception as e:
+            logger.debug(f"Direct ATS Lever fetch error for {board_token}: {e}")
+        return []
+
+    def _fetch_ashby_board(self, board_token: str) -> List[Dict[str, Any]]:
+        now = time.time()
+        with self._cache_lock:
+            key = f"ashby_{board_token}"
+            if key in self._cache:
+                ts, data = self._cache[key]
+                if now - ts < self._CACHE_TTL:
+                    return data
+
+        url = f"https://api.ashbyhq.com/posting-api/job-board/{board_token}"
+        try:
+            with httpx.Client(timeout=4.0) as client:
+                resp = client.get(url)
+                if resp.status_code == 200:
+                    jobs = resp.json().get("jobs", [])
+                    with self._cache_lock:
+                        self._cache[f"ashby_{board_token}"] = (now, jobs)
+                    return jobs
+        except Exception as e:
+            logger.debug(f"Direct ATS Ashby fetch error for {board_token}: {e}")
         return []
 
     def search(
@@ -1668,32 +1722,62 @@ class DirectATSSearchProvider:
             return []
 
         q_low = query.lower()
-        # 1. Detect if query explicitly targets Greenhouse or Lever, or is an ATS job query
+        # 1. Detect target platforms
         is_greenhouse = "greenhouse.io" in q_low
         is_lever = "lever.co" in q_low
-        is_ats_query = is_greenhouse or is_lever or any(ats in q_low for ats in ("ashbyhq", "workable", "smartrecruiters"))
+        is_ashby = "ashbyhq" in q_low
+        is_ats_query = is_greenhouse or is_lever or is_ashby or any(ats in q_low for ats in ("workable", "smartrecruiters"))
 
         if not is_ats_query:
             return []
 
-        # 2. Extract company handle if present in URL (e.g. site:boards.greenhouse.io/tamara)
-        target_companies = []
-        company_url_match = re.search(r"(?:boards|job-boards)?\.greenhouse\.io/([a-zA-Z0-9_\-]+)", query)
-        if company_url_match:
-            target_companies.append(company_url_match.group(1).lower())
-        else:
-            # Check if any known board name appears in the query text
+        # 2. Extract company handle if present in URL
+        gh_targets = []
+        lever_targets = []
+        ashby_targets = []
+
+        gh_url_match = re.search(r"(?:boards|job-boards)?\.greenhouse\.io/([a-zA-Z0-9_\-]+)", query)
+        if gh_url_match:
+            gh_targets.append(gh_url_match.group(1).lower())
+        lever_url_match = re.search(r"jobs\.lever\.co/([a-zA-Z0-9_\-]+)", query)
+        if lever_url_match:
+            lever_targets.append(lever_url_match.group(1).lower())
+        ashby_url_match = re.search(r"jobs\.ashbyhq\.com/([a-zA-Z0-9_\-]+)", query)
+        if ashby_url_match:
+            ashby_targets.append(ashby_url_match.group(1).lower())
+
+        # If not in URL, check if known board names appear in query text
+        if not gh_targets and not lever_targets and not ashby_targets:
             for b in self.KNOWN_GREENHOUSE_BOARDS:
                 if re.search(r"\b" + re.escape(b) + r"\b", q_low):
-                    target_companies.append(b)
+                    gh_targets.append(b)
+            for b in self.KNOWN_LEVER_BOARDS:
+                if re.search(r"\b" + re.escape(b) + r"\b", q_low):
+                    lever_targets.append(b)
+            for b in self.KNOWN_ASHBY_BOARDS:
+                if re.search(r"\b" + re.escape(b) + r"\b", q_low):
+                    ashby_targets.append(b)
 
-        # If no specific company was named, query the relevant known boards for the ATS
-        if not target_companies and is_greenhouse:
-            target_companies = self.KNOWN_GREENHOUSE_BOARDS
+        # If no specific company was found, default to the relevant known boards for the ATS
+        if not gh_targets and not lever_targets and not ashby_targets:
+            if is_greenhouse:
+                gh_targets = list(self.KNOWN_GREENHOUSE_BOARDS)
+            elif is_lever:
+                lever_targets = list(self.KNOWN_LEVER_BOARDS)
+            elif is_ashby:
+                ashby_targets = list(self.KNOWN_ASHBY_BOARDS)
+            else:
+                gh_targets = list(self.KNOWN_GREENHOUSE_BOARDS)
+                lever_targets = list(self.KNOWN_LEVER_BOARDS)
+                ashby_targets = list(self.KNOWN_ASHBY_BOARDS)
 
         # 3. Extract keywords for filtering
         location_keywords = []
-        for loc in ("saudi", "riyadh", "jeddah", "dammam", "khobar", "uae", "dubai", "abu dhabi", "sharjah", "remote", "middle east", "qatar", "kuwait", "egypt", "cairo"):
+        for loc in (
+            "saudi", "saudi arabia", "saudi arab", "ksa", "riyadh", "jeddah", "dammam", "khobar",
+            "uae", "dubai", "abu dhabi", "sharjah", "middle east", "mena", "remote",
+            "qatar", "kuwait", "egypt", "cairo"
+        ):
             if loc in q_low:
                 location_keywords.append(loc)
 
@@ -1711,52 +1795,78 @@ class DirectATSSearchProvider:
             re.IGNORECASE
         )
 
+        all_target_comps = gh_targets + lever_targets + ashby_targets
         clean_q = re.sub(r"site:[^\s]+", " ", q_low)
         clean_q = re.sub(r"[^a-zA-Z0-9\s]", " ", clean_q)
         tokens = [w for w in clean_q.split() if len(w) >= 2 and w not in ("jobs", "job", "hiring", "apply", "careers", "career", "openings", "positions")]
-        role_tokens = [t for t in tokens if t not in location_keywords and t not in target_companies]
+        role_tokens = [t for t in tokens if t not in location_keywords and t not in all_target_comps]
 
-        hits: List[SearchHit] = []
-        for comp in target_companies:
-            jobs = self._fetch_greenhouse_board(comp)
-            for j in jobs:
+        # Gather job candidates across platforms
+        job_candidates: List[tuple[str, str, str, str]] = []
+        for comp in gh_targets:
+            for j in self._fetch_greenhouse_board(comp):
                 title = j.get("title", "")
                 loc_obj = j.get("location", {})
-                loc_name = loc_obj.get("name", "") if isinstance(loc_obj, dict) else str(loc_obj)
-                full_text = f"{title} {loc_name}".lower()
+                loc_name = loc_obj.get("name", "") if isinstance(loc_obj, dict) else str(loc_obj or "")
+                url = j.get("absolute_url", "")
+                job_candidates.append((title, loc_name, url, comp))
 
-                # Filter by location if specified
-                if location_keywords and not any(lk in full_text for lk in location_keywords):
+        for comp in lever_targets:
+            for j in self._fetch_lever_board(comp):
+                title = j.get("text", "")
+                loc_cats = j.get("categories", {})
+                loc_name = loc_cats.get("location", "") if isinstance(loc_cats, dict) else ""
+                if isinstance(loc_cats, dict) and loc_cats.get("allLocations"):
+                    loc_name += " " + " ".join(loc_cats["allLocations"])
+                url = j.get("hostedUrl", "")
+                job_candidates.append((title, loc_name, url, comp))
+
+        for comp in ashby_targets:
+            for j in self._fetch_ashby_board(comp):
+                title = j.get("title", "")
+                loc_name = j.get("location", "")
+                sec = j.get("secondaryLocations", [])
+                if sec:
+                    loc_name += " " + " ".join([l.get("location", "") if isinstance(l, dict) else str(l) for l in sec])
+                if j.get("isRemote"):
+                    loc_name += " Remote"
+                url = j.get("jobUrl", "")
+                job_candidates.append((title, loc_name, url, comp))
+
+        hits: List[SearchHit] = []
+        for title, loc_name, raw_url, comp in job_candidates:
+            full_text = f"{title} {loc_name}".lower()
+
+            # Filter by location if specified
+            if location_keywords and not any(lk in full_text for lk in location_keywords):
+                continue
+
+            # Strict role filtering: enforce AI title match for AI queries
+            if is_ai_query:
+                if not ai_role_regex.search(title):
+                    continue
+                if non_ai_disqualifying_regex.search(title) and not ai_role_regex.search(title):
+                    continue
+            elif role_tokens:
+                if not any(re.search(r"\b" + re.escape(rt) + r"\b", title.lower()) for rt in role_tokens):
                     continue
 
-                # Strict role filtering: enforce AI title match for AI queries
-                if is_ai_query:
-                    if not ai_role_regex.search(title):
-                        continue
-                    if non_ai_disqualifying_regex.search(title) and not ai_role_regex.search(title):
-                        continue
-                elif role_tokens:
-                    if not any(re.search(r"\b" + re.escape(rt) + r"\b", title.lower()) for rt in role_tokens):
-                        continue
+            url = canonicalize_url(raw_url)
+            if not url or is_ad_or_tracking_url(url):
+                continue
+            if allowed_domains and not any(d in url for d in allowed_domains):
+                continue
+            if blocked_domains and any(d in url for d in blocked_domains):
+                continue
 
-                url = canonicalize_url(j.get("absolute_url", ""))
-                if not url or is_ad_or_tracking_url(url):
-                    continue
-                if allowed_domains and not any(d in url for d in allowed_domains):
-                    continue
-                if blocked_domains and any(d in url for d in blocked_domains):
-                    continue
+            snippet = f"Official career posting for {title} at {comp.capitalize()} ({loc_name.strip()}). Direct ATS application."
+            hits.append(SearchHit(
+                url=url,
+                title=f"{title} - {comp.capitalize()}",
+                snippet=snippet,
+                source_domain=urlparse(url).netloc,
+            ))
 
-                snippet = f"Official career posting for {title} at {comp.capitalize()} ({loc_name}). Direct ATS application."
-                hits.append(SearchHit(
-                    url=url,
-                    title=f"{title} - {comp.capitalize()}",
-                    snippet=snippet,
-                    source_domain=urlparse(url).netloc,
-                ))
-
-                if len(hits) >= limit:
-                    break
             if len(hits) >= limit:
                 break
 

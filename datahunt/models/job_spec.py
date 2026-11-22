@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 GEO_CANONICAL_NAMES = {
     "sa": "Saudi Arabia",
     "saudi": "Saudi Arabia",
+    "saudi arab": "Saudi Arabia",
     "saudi arabia": "Saudi Arabia",
     "ksa": "Saudi Arabia",
     "riyadh": "Riyadh",

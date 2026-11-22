@@ -65,6 +65,15 @@ ATS_PLATFORMS = {
     },
 }
 
+def _format_role_title(title: str) -> str:
+    acronyms = {
+        "ai": "AI", "llm": "LLM", "ml": "ML", "genai": "GenAI",
+        "qa": "QA", "nlp": "NLP", "api": "API", "ui": "UI", "ux": "UX",
+        "mlops": "MLOps", "llmops": "LLMOps"
+    }
+    words = title.split()
+    return " ".join(acronyms.get(w.lower(), w.capitalize()) for w in words)
+
 IGNORED_COMPANIES = {
     "job", "jobs", "career", "careers", "hiring", "apply", "search", "post", "positions",
     "view", "index", "feed", "linkedin", "indeed", "glassdoor", "bayt", "baytcom", "bayt.com",
@@ -1257,7 +1266,7 @@ class DiscoveryEngine:
                 role_low = role_clean.lower()
                 for family_key, family_spec in ROLE_TAXONOMY.items():
                     if any(re.search(r'\b' + re.escape(k) + r'\b', role_low) for k in family_spec["keywords"]):
-                        fam_titles = [t.title() for t in family_spec["direct_titles"] if t.lower() != role_low]
+                        fam_titles = [_format_role_title(t) for t in family_spec["direct_titles"] if t.lower() != role_low]
                         if fam_titles:
                             synonyms = fam_titles
                         break
@@ -1314,18 +1323,29 @@ class DiscoveryEngine:
             elif round_num >= 7:
                 from datahunt.agent.policies import ROLE_TAXONOMY
                 role_low = role_clean.lower()
-                all_tax_titles = []
-                for fam_spec in ROLE_TAXONOMY.values():
-                    all_tax_titles.extend([t.title() for t in fam_spec.get("direct_titles", [])])
-                    all_tax_titles.extend([t.title() for t in fam_spec.get("related_roles", [])])
-                # Filter out exact current role
-                candidates = [t for t in all_tax_titles if t.lower() != role_low]
-                # Slice by round offset so each round investigates different roles
-                offset = (round_num - 7) * 4
+
+                # Priority: candidate titles from matching families first, then adjacent families
+                matching_fam_titles = []
+                other_titles = []
+                for fam_name, fam_spec in ROLE_TAXONOMY.items():
+                    fam_kws = fam_spec.get("keywords", [])
+                    is_matching_fam = any(re.search(r'\b' + re.escape(k) + r'\b', role_low) for k in fam_kws)
+                    fam_titles = [_format_role_title(t) for t in fam_spec.get("direct_titles", []) + fam_spec.get("related_roles", [])]
+                    if is_matching_fam:
+                        matching_fam_titles.extend(fam_titles)
+                    else:
+                        other_titles.extend(fam_titles)
+
+                ordered_candidates = matching_fam_titles + other_titles if matching_fam_titles else other_titles
+                candidates = [t for t in ordered_candidates if t.lower() != role_low]
+                if not candidates:
+                    candidates = [_format_role_title(role_clean)]
+
+                # Slice by round offset with modulo wrapping so search continues smoothly across rounds
+                offset = ((round_num - 7) * 4) % len(candidates)
                 slice_titles = candidates[offset : offset + 4]
-                if not slice_titles and candidates:
-                    # Loop back around if exhausted
-                    slice_titles = candidates[:4]
+                if len(slice_titles) < 4:
+                    slice_titles.extend(candidates[: 4 - len(slice_titles)])
 
                 regions = requested_regions or [loc_str]
                 ats_platforms = ["boards.greenhouse.io", "jobs.lever.co", "jobs.ashbyhq.com", "apply.workable.com"]
@@ -1353,6 +1373,27 @@ class DiscoveryEngine:
                                 reason=f"Continuous frontier round {round_num}: {chosen_ats} search for '{title}' in {reg}",
                                 location=reg,
                             ))
+                        else:
+                            # Secondary variation to maintain continuous flow without duplication
+                            q_alt = f'"{title}" "{reg}" careers apply 2026'
+                            if q_alt not in discovery_state.executed_queries:
+                                tasks.append(SearchTask(
+                                    id=f"r{round_num}_cont_alt_{len(tasks)}",
+                                    task_type=SearchTaskType.MAJOR_BOARD_SEARCH,
+                                    query=q_alt,
+                                    source="organic_sweep",
+                                    source_type=DiscoveredSourceType.MAJOR_BOARD,
+                                    priority=2,
+                                    depth=4,
+                                    round=round_num,
+                                    metadata={
+                                        "lane": "organic_sweep",
+                                        "role_title": title,
+                                        "requested_region": reg,
+                                    },
+                                    reason=f"Continuous frontier round {round_num}: organic sweep for '{title}' in {reg}",
+                                    location=reg,
+                                ))
 
             if tasks:
                 discovery_state.current_round = round_num

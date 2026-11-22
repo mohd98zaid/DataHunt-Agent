@@ -154,6 +154,7 @@ class AgentRuntime:
                 job_req = state.canonical_job_request
 
             state.explicit_titles = [job_req.job_title] if job_req.job_title else []
+            state.expanded_titles = list(job_req.alternative_titles or [])
             state.explicit_skills = job_req.explicit_skills
             state.inferred_skills = job_req.inferred_skills
             state.locations = job_req.locations
