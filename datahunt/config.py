@@ -137,6 +137,30 @@ class Settings:
             return "***"
         return f"{key[:8]}...{key[-6:]}"
 
+    def masked_serper_key(self) -> str:
+        key = self.SERPER_API_KEY.strip()
+        if not key:
+            return ""
+        if len(key) <= 8:
+            return "***"
+        return f"{key[:4]}...{key[-4:]}"
+
+    def masked_brave_key(self) -> str:
+        key = self.BRAVE_API_KEY.strip()
+        if not key:
+            return ""
+        if len(key) <= 8:
+            return "***"
+        return f"{key[:4]}...{key[-4:]}"
+
+    def masked_tavily_key(self) -> str:
+        key = self.TAVILY_API_KEY.strip()
+        if not key:
+            return ""
+        if len(key) <= 8:
+            return "***"
+        return f"{key[:4]}...{key[-4:]}"
+
     def to_safe_dict(self) -> dict:
         return {
             "app_name": self.APP_NAME,
@@ -175,8 +199,11 @@ class Settings:
             "primary_search_provider": self.PRIMARY_SEARCH_PROVIDER,
             "direct_ats_enabled": self.DIRECT_ATS_ENABLED,
             "serper_configured": bool(self.SERPER_API_KEY.strip()),
+            "serper_key_masked": self.masked_serper_key(),
             "tavily_configured": bool(self.TAVILY_API_KEY.strip()),
+            "tavily_key_masked": self.masked_tavily_key(),
             "brave_configured": bool(self.BRAVE_API_KEY.strip()),
+            "brave_key_masked": self.masked_brave_key(),
         }
 
     def load_from_db(self) -> None:
@@ -213,7 +240,7 @@ class Settings:
                 continue
 
             # Skip masked or empty API keys
-            if "KEY" in target_key and (not v or "***" in str(v) or "<unset>" in str(v)):
+            if "KEY" in target_key and (not v or "***" in str(v) or "..." in str(v) or "<unset>" in str(v)):
                 continue
 
             converter = EDITABLE_SETTINGS[target_key]

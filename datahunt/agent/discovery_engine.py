@@ -1336,8 +1336,14 @@ class DiscoveryEngine:
                     else:
                         other_titles.extend(fam_titles)
 
-                ordered_candidates = matching_fam_titles + other_titles if matching_fam_titles else other_titles
-                candidates = [t for t in ordered_candidates if t.lower() != role_low]
+                ordered_candidates = matching_fam_titles if matching_fam_titles else other_titles
+                candidates = []
+                seen = set()
+                for t in ordered_candidates:
+                    tl = t.lower()
+                    if tl not in seen and tl != role_low:
+                        seen.add(tl)
+                        candidates.append(t)
                 if not candidates:
                     candidates = [_format_role_title(role_clean)]
 

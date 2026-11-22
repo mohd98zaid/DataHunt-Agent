@@ -224,6 +224,46 @@ def get_settings_endpoint():
             "help": "Maximum FreeHire API requests allowed during one run."
         },
         {
+            "key": "serper_api_key",
+            "label": "Serper Google Search API Key",
+            "type": "text",
+            "value": settings.masked_serper_key(),
+            "category": "Web Search (SERP) Engines",
+            "help": "Free 2,500 queries at serper.dev. Direct Google search bypassing DuckDuckGo network blocks."
+        },
+        {
+            "key": "brave_api_key",
+            "label": "Brave Search API Key",
+            "type": "text",
+            "value": settings.masked_brave_key(),
+            "category": "Web Search (SERP) Engines",
+            "help": "Free 2,000 queries/month at brave.com/search/api. Comprehensive independent web index."
+        },
+        {
+            "key": "tavily_api_key",
+            "label": "Tavily Search API Key",
+            "type": "text",
+            "value": settings.masked_tavily_key(),
+            "category": "Web Search (SERP) Engines",
+            "help": "Free 1,000 queries at tavily.com. Agentic web search provider."
+        },
+        {
+            "key": "searxng_url",
+            "label": "SearXNG URL (Self-hosted)",
+            "type": "text",
+            "value": settings.SEARXNG_URL,
+            "category": "Web Search (SERP) Engines",
+            "help": "URL of self-hosted SearXNG metasearch instance (e.g. http://localhost:8080)."
+        },
+        {
+            "key": "direct_ats_enabled",
+            "label": "Enable Direct ATS Search",
+            "type": "boolean",
+            "value": settings.DIRECT_ATS_ENABLED,
+            "category": "Web Search (SERP) Engines",
+            "help": "Directly queries public ATS endpoints (Greenhouse, Lever, Ashby, Workable) without third-party search engines."
+        },
+        {
             "key": "max_concurrent_runs",
             "label": "Maximum Concurrent Runs",
             "type": "number",
