@@ -1045,8 +1045,13 @@ class SerperSearchProvider:
         if not api_key:
             return []
         payload: Dict[str, Any] = {"q": query, "num": min(limit, 10), "page": page}
-        if freshness_days and freshness_days <= 7:
-            payload["tbs"] = f"qdr:{'d' if freshness_days <= 1 else 'w'}"
+        if freshness_days:
+            if freshness_days <= 1:
+                payload["tbs"] = "qdr:d"
+            elif freshness_days <= 7:
+                payload["tbs"] = "qdr:w"
+            elif freshness_days <= 45:
+                payload["tbs"] = "qdr:m"
         try:
             resp = httpx.post(
                 self._API_URL,
@@ -1106,8 +1111,8 @@ class TavilySearchProvider:
             payload["include_domains"] = allowed_domains[:5]
         if blocked_domains:
             payload["exclude_domains"] = blocked_domains[:5]
-        if freshness_days and freshness_days <= 7:
-            payload["days"] = freshness_days
+        if freshness_days and freshness_days <= 30:
+            payload["days"] = max(1, freshness_days)
         try:
             resp = httpx.post(self._API_URL, json=payload, timeout=12.0)
             resp.raise_for_status()

@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 
 _fetch_cache: dict = {}
 _fetch_cache_lock = threading.Lock()
+_dead_ats_roots: set = set()
 _CACHE_TTL = 300  # 5 minutes within a run
 
 
@@ -409,6 +410,25 @@ class FetchTool:
             )
             return ToolResult(success=True, data=doc)
 
+        # Fast rejection for candidate URLs on known dead/closed ATS company boards
+        parsed_target = urlparse(url)
+        target_host = (parsed_target.hostname or "").lower()
+        target_path_parts = [p for p in (parsed_target.path or "").strip("/").split("/") if p]
+        if target_path_parts and any(ats in target_host for ats in ("greenhouse.io", "workable.com", "lever.co", "ashbyhq.com", "smartrecruiters.com")):
+            target_ats_root = f"{target_host}/{target_path_parts[0].lower()}"
+            with _fetch_cache_lock:
+                if target_ats_root in _dead_ats_roots:
+                    return ToolResult(
+                        success=False,
+                        error_code=ErrorCode.FETCH_BLOCKED.value,
+                        error_message="Job posting has expired or closed.",
+                        error=DataHuntError(
+                            ErrorCode.FETCH_BLOCKED,
+                            user_message="Job posting has expired or closed.",
+                            operator_message=f"Suppressed dead ATS root: {target_ats_root}"
+                        )
+                    )
+
         current_url = url
         redirect_count = 0
         policy_flags = []
@@ -501,6 +521,11 @@ class FetchTool:
                             or ("linkedin.com" in redir_host and redir_path.startswith("/jobs/search"))
                         ):
                             logger.info(f"Expired/closed job redirect detected: {current_url}")
+                            if any(ats in redir_host for ats in ("greenhouse.io", "workable.com", "lever.co", "ashbyhq.com", "smartrecruiters.com")):
+                                r_parts = [p for p in redir_path.strip("/").split("/") if p]
+                                if r_parts:
+                                    with _fetch_cache_lock:
+                                        _dead_ats_roots.add(f"{redir_host}/{r_parts[0].lower()}")
                             return ToolResult(
                                 success=False,
                                 error_code=ErrorCode.FETCH_BLOCKED.value,
@@ -667,6 +692,7 @@ class FetchTool:
 
 def clear_fetch_cache() -> None:
     """Clear the in-run fetch cache (useful for testing and between runs)."""
-    global _fetch_cache
+    global _fetch_cache, _dead_ats_roots
     with _fetch_cache_lock:
         _fetch_cache = {}
+        _dead_ats_roots = set()
