@@ -319,7 +319,7 @@ class Settings:
         except Exception:
             pass
 
-        # Clear synced overrides from .env if present
+        # Clear synced overrides from .env if present (preserve API keys and credentials)
         env_path = Path(".env")
         if env_path.exists():
             try:
@@ -327,7 +327,11 @@ class Settings:
                     lines = f.readlines()
                 new_lines = [
                     line for line in lines
-                    if not any(line.strip().startswith(f"{k}=") for k in EDITABLE_SETTINGS)
+                    if not any(
+                        line.strip().startswith(f"{k}=")
+                        for k in EDITABLE_SETTINGS
+                        if not any(sec in k for sec in ("KEY", "TOKEN", "SECRET", "URL"))
+                    )
                 ]
                 with open(env_path, "w", encoding="utf-8") as f:
                     f.writelines(new_lines)

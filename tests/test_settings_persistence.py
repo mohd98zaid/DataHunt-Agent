@@ -107,7 +107,9 @@ def test_settings_update_and_persist_lifecycle(tmp_path, monkeypatch):
     assert cold_s.DEFAULT_FRESHNESS == "24h"
     assert cold_s.DEFAULT_COLLECTION_MODE == "fast"
 
-def test_api_settings_endpoints():
+def test_api_settings_endpoints(monkeypatch, tmp_path):
+    fake_env = tmp_path / ".env"
+    monkeypatch.setattr(settings, "_sync_to_env_file", lambda updates: None)
     client = TestClient(app)
 
     # 1. GET /api/settings
