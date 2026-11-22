@@ -671,6 +671,7 @@ class JobTrackingRepository:
                         r.created_at as scraped_at,
                         s.applied_status, s.applied_at, s.interview_status, s.notes,
                         d.title as doc_title, d.domain,
+                        SUBSTR(d.extracted_text, 1, 4000) as doc_text,
                         -- Dedup key: lower-cased (title, company) pair
                         LOWER(TRIM(COALESCE(
                             JSON_EXTRACT(r.fields_json, '$.title'),
@@ -749,7 +750,8 @@ class JobTrackingRepository:
                     "interview_status": row["interview_status"] or "no_call",
                     "notes": row["notes"] or "",
                     "doc_title": row["doc_title"],
-                    "domain": row["domain"]
+                    "domain": row["domain"],
+                    "extracted_text": row["doc_text"] or ""
                 })
             return jobs
         finally:

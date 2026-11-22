@@ -530,6 +530,21 @@ class UpdateJobStatusRequest(BaseModel):
 class BulkDeleteJobsRequest(BaseModel):
     record_ids: List[str] = Field(..., min_length=1)
 
+class CVParseRequest(BaseModel):
+    path: Optional[str] = None
+    content: Optional[str] = None
+
+class CVMatchRequest(BaseModel):
+    path: Optional[str] = None
+    cv_data: Optional[Dict[str, Any]] = None
+    limit: int = 200
+    min_score: int = 40
+
+class CVTweakRequest(BaseModel):
+    record_id: str
+    cv_path: Optional[str] = None
+    cv_data: Optional[Dict[str, Any]] = None
+
 @app.get("/api/jobs")
 def list_jobs(
     response: Response,
@@ -978,6 +993,78 @@ def monitor_check_endpoint():
     from datahunt.agents.job_monitor import JobMonitor
     events = JobMonitor().check_saved_jobs()
     return {"status": "success", "detected_events_count": len(events), "events": events}
+
+@app.post("/api/cv/parse")
+def cv_parse_endpoint(req: CVParseRequest):
+    """Parse a candidate CV (.docx, .pdf, .txt, .md) into a structured profile."""
+    from datahunt.agent.cv_intelligence import extract_raw_text, parse_cv_heuristic, parse_cv_with_nvidia
+    from datahunt.llm import NvidiaClient
+    
+    cv_path = req.path or r"C:\Users\mohd9\OneDrive\Desktop\CV\Mohammad_Zaid_GenAI_Architect_CV_GCC_5.8yrs.docx"
+    try:
+        raw_text = req.content if req.content else extract_raw_text(cv_path)
+    except Exception as ex:
+        raise HTTPException(status_code=400, detail=f"Failed to read CV: {ex}")
+    
+    client = NvidiaClient()
+    profile = parse_cv_with_nvidia(raw_text, client) if client.is_live else parse_cv_heuristic(raw_text)
+    return {"status": "success", "profile": profile.to_dict()}
+
+@app.post("/api/cv/match")
+def cv_match_endpoint(req: CVMatchRequest):
+    """Rank discovered jobs against candidate CV with eligibility & confidence score breakdown."""
+    from datahunt.agent.cv_intelligence import extract_raw_text, parse_cv_heuristic, rank_jobs_for_cv, CVProfile
+    
+    cv_path = req.path or r"C:\Users\mohd9\OneDrive\Desktop\CV\Mohammad_Zaid_GenAI_Architect_CV_GCC_5.8yrs.docx"
+    if req.cv_data:
+        profile = CVProfile(**req.cv_data)
+    else:
+        try:
+            raw_text = extract_raw_text(cv_path)
+            profile = parse_cv_heuristic(raw_text)
+        except Exception as ex:
+            raise HTTPException(status_code=400, detail=f"Failed to load CV: {ex}")
+            
+    jobs = job_repo.list_jobs(limit=1000)
+    ranked = rank_jobs_for_cv(jobs, profile, min_score=req.min_score)
+    return {
+        "status": "success",
+        "candidate": profile.candidate_name,
+        "total_jobs_evaluated": len(jobs),
+        "total_matches_found": len(ranked),
+        "matches": ranked[:req.limit]
+    }
+
+@app.post("/api/cv/tweak")
+def cv_tweak_endpoint(req: CVTweakRequest):
+    """Generate tailored ATS bullet points and pitch for a specific target job."""
+    from datahunt.agent.cv_intelligence import extract_raw_text, parse_cv_heuristic, generate_tailored_cv_bullet_points, CVProfile
+    from datahunt.llm import NvidiaClient
+    
+    job = job_repo.get_job_detail(req.record_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job record {req.record_id} not found")
+        
+    cv_path = req.cv_path or r"C:\Users\mohd9\OneDrive\Desktop\CV\Mohammad_Zaid_GenAI_Architect_CV_GCC_5.8yrs.docx"
+    if req.cv_data:
+        profile = CVProfile(**req.cv_data)
+    else:
+        raw_text = extract_raw_text(cv_path)
+        profile = parse_cv_heuristic(raw_text)
+        
+    client = NvidiaClient()
+    tweaks = generate_tailored_cv_bullet_points(job, profile, client=client)
+    return {"status": "success", "tweaks": tweaks}
+
+@app.post("/api/cv/directives")
+def cv_directives_endpoint(req: CVParseRequest):
+    """Generate high-yield search directives from candidate CV."""
+    from datahunt.agent.cv_intelligence import extract_raw_text, parse_cv_heuristic, generate_search_directives_from_cv
+    cv_path = req.path or r"C:\Users\mohd9\OneDrive\Desktop\CV\Mohammad_Zaid_GenAI_Architect_CV_GCC_5.8yrs.docx"
+    raw_text = req.content if req.content else extract_raw_text(cv_path)
+    profile = parse_cv_heuristic(raw_text)
+    directives = generate_search_directives_from_cv(profile)
+    return {"status": "success", "directives": directives}
 
 # Mount frontend static directory if exists
 if frontend_dir.exists():
