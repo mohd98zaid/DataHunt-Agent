@@ -433,6 +433,14 @@ class FetchTool:
         redirect_count = 0
         policy_flags = []
 
+        try:
+            from datahunt.db.user_repositories import BlockedDomainsRepository
+            persisted_blocked = BlockedDomainsRepository().get_blocked_domain_strings()
+            if persisted_blocked:
+                blocked_domains = list(set((blocked_domains or []) + persisted_blocked))
+        except Exception:
+            pass
+
         # Check in-memory URL cache before making a live HTTP request
         cache_key = url
         with _fetch_cache_lock:

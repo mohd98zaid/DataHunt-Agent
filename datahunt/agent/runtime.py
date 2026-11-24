@@ -1632,6 +1632,8 @@ class AgentRuntime:
     def _build_spec(self, state: AgentState):
         """Build a minimal ResearchSpec for extraction."""
         from datahunt.models.task import ResearchSpec, SourcePolicy, Geography
+        from datahunt.db.user_repositories import BlockedDomainsRepository
+        blocked = BlockedDomainsRepository().get_blocked_domain_strings()
         fields = ["title", "company", "location", "application_url", "salary", "experience", "description"] \
             if state.mode in ("jobs", "job") else ["name", "description", "source"]
         return ResearchSpec(
@@ -1639,5 +1641,5 @@ class AgentRuntime:
             requested_fields=fields,
             max_records=state.target_results * 2,
             geography=Geography(name=state.explicit_location or ""),
-            source_policy=SourcePolicy(allowed_domains=[], blocked_domains=[]),
+            source_policy=SourcePolicy(allowed_domains=[], blocked_domains=blocked),
         )

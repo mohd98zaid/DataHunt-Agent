@@ -1095,6 +1095,9 @@ function renderTable(jobs) {
             <a href="${applyUrl}" target="_blank" rel="noopener noreferrer" class="table-apply-btn" onclick="handleApplyClick('${job.id}', event)" title="Open ATS Application Form">
               APPLY ➔
             </a>
+            <button class="table-block-btn" onclick="promptBlockAction('${job.id}', '${escapeHtml(job.domain || '')}', event)" title="Block this job or entire site" style="background: rgba(255, 68, 68, 0.15); border: 1px solid #ff4444; color: #ff8888; border-radius: 4px; padding: 4px 7px; cursor: pointer;">
+              🚫
+            </button>
             <button class="table-delete-btn" onclick="deleteJob('${job.id}', event)" title="Delete this job record">
               🗑️
             </button>
@@ -1472,6 +1475,26 @@ window.openJobDetail = async function(recordId) {
     };
   }
 
+  const targetDomain = job.domain || extractDomain(job.canonical_url || f.application_url) || "";
+  const blockSiteBtn = document.getElementById("modal-block-site-btn");
+  if (blockSiteBtn) {
+    blockSiteBtn.innerHTML = `<span>🚫 BLOCK SITE${targetDomain ? ` (${escapeHtml(targetDomain)})` : ''}</span>`;
+    blockSiteBtn.onclick = async function() {
+      if (!targetDomain) {
+        alert("No valid domain identified for this job.");
+        return;
+      }
+      await blockDomain(targetDomain, `Blocked for "${f.title || f.name || 'Job'}"`);
+    };
+  }
+
+  const blockJobBtn = document.getElementById("modal-block-job-btn");
+  if (blockJobBtn) {
+    blockJobBtn.onclick = async function() {
+      await blockJob(recordId, "Blocked from Job Detail");
+    };
+  }
+
   document.getElementById("modal-applied-select").value = job.applied_status || "not_applied";
   document.getElementById("modal-interview-select").value = job.interview_status || "no_call";
   document.getElementById("modal-notes-input").value = job.notes || "";
@@ -1583,3 +1606,232 @@ async function saveModalStatus() {
     alert("Error saving status: " + err.message);
   }
 }
+
+// ─────────────────────────────────────────────────────────────
+// Blocked Domains & Ignored Jobs Manager
+// ─────────────────────────────────────────────────────────────
+
+function extractDomain(url) {
+  if (!url || typeof url !== "string") return "";
+  try {
+    let u = url.trim();
+    if (!u.includes("://")) u = "https://" + u;
+    const parsed = new URL(u);
+    let host = parsed.hostname.toLowerCase();
+    if (host.startsWith("www.")) host = host.slice(4);
+    return host;
+  } catch(e) {
+    return "";
+  }
+}
+
+window.blockDomain = async function(domain, reason = "") {
+  if (!domain) return;
+  const normDomain = extractDomain(domain) || domain.trim();
+  const confirmed = confirm(`Are you sure you want to block the entire job site/domain "${normDomain}"?\n\nThis will hide all current jobs from this domain and skip it in future searches.`);
+  if (!confirmed) return;
+
+  try {
+    const res = await fetch("/api/blocked-domains", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ domain: normDomain, reason: reason || "User blocked" })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+
+    const detailModal = document.getElementById("job-detail-modal");
+    if (detailModal) detailModal.style.display = "none";
+
+    await loadJobs();
+    if (document.getElementById("blocked-domains-modal")?.style.display === "flex") {
+      await loadBlockedDomainsModalData();
+    }
+  } catch(err) {
+    console.error("Failed to block domain:", err);
+    alert("Failed to block domain: " + err.message);
+  }
+};
+
+window.unblockDomain = async function(domain) {
+  if (!domain) return;
+  const confirmed = confirm(`Unblock site "${domain}"?\n\nFuture searches and current jobs from this site will be restored.`);
+  if (!confirmed) return;
+
+  try {
+    const res = await fetch(`/api/blocked-domains/${encodeURIComponent(domain)}`, {
+      method: "DELETE"
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    await loadBlockedDomainsModalData();
+    await loadJobs();
+  } catch(err) {
+    console.error("Failed to unblock domain:", err);
+    alert("Failed to unblock domain: " + err.message);
+  }
+};
+
+window.blockJob = async function(recordId, reason = "") {
+  if (!recordId) return;
+  const confirmed = confirm("Are you sure you want to block/ignore this specific job?");
+  if (!confirmed) return;
+
+  try {
+    const res = await fetch(`/api/jobs/${recordId}/ignore`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: reason || "User blocked" })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+
+    const detailModal = document.getElementById("job-detail-modal");
+    if (detailModal && activeJobId === recordId) {
+      detailModal.style.display = "none";
+      activeJobId = null;
+    }
+
+    await loadJobs();
+    if (document.getElementById("blocked-domains-modal")?.style.display === "flex") {
+      await loadBlockedDomainsModalData();
+    }
+  } catch(err) {
+    console.error("Failed to block job:", err);
+    alert("Failed to block job: " + err.message);
+  }
+};
+
+window.unignoreJob = async function(recordId) {
+  if (!recordId) return;
+  try {
+    const res = await fetch(`/api/jobs/${recordId}/unignore`, {
+      method: "POST"
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    await loadBlockedDomainsModalData();
+    await loadJobs();
+  } catch(err) {
+    console.error("Failed to restore job:", err);
+    alert("Failed to restore job: " + err.message);
+  }
+};
+
+window.promptBlockAction = async function(recordId, domain, event) {
+  if (event) event.stopPropagation();
+  const job = allJobs.find(j => j.id === recordId) || {};
+  const f = job.fields || {};
+  const title = f.title || f.name || "this position";
+  const effectiveDomain = domain || extractDomain(job.canonical_url || f.application_url);
+
+  const msg = `🚫 BLOCKING OPTIONS for "${title}":\n\n` +
+    (effectiveDomain ? `1. Enter '1' (or 'site') to BLOCK ENTIRE SITE: "${effectiveDomain}"\n   (Hides all jobs from ${effectiveDomain} and skips during future crawls)\n\n` : '') +
+    `2. Enter '2' (or 'job') to BLOCK ONLY THIS JOB\n\n` +
+    `Enter 1 or 2 (or click Cancel):`;
+
+  const choice = prompt(msg, effectiveDomain ? "1" : "2");
+  if (!choice) return;
+  const c = choice.trim().toLowerCase();
+  if (c === "1" || c === "site") {
+    if (!effectiveDomain) {
+      alert("No valid domain identified for this job.");
+      return;
+    }
+    await blockDomain(effectiveDomain, `Blocked for "${title}"`);
+  } else if (c === "2" || c === "job") {
+    await blockJob(recordId, "Blocked by user");
+  }
+};
+
+window.openBlockedDomainsModal = async function() {
+  const modal = document.getElementById("blocked-domains-modal");
+  if (!modal) return;
+  modal.style.display = "flex";
+  await loadBlockedDomainsModalData();
+};
+
+window.closeBlockedDomainsModal = function() {
+  const modal = document.getElementById("blocked-domains-modal");
+  if (modal) modal.style.display = "none";
+};
+
+window.submitManualBlockDomain = async function() {
+  const input = document.getElementById("manual-block-domain-input");
+  if (!input) return;
+  const raw = input.value.trim();
+  if (!raw) {
+    alert("Please enter a domain or URL to block (e.g. jo.trabajo.org).");
+    return;
+  }
+  input.value = "";
+  await blockDomain(raw, "Manual user block");
+};
+
+window.loadBlockedDomainsModalData = async function() {
+  const domListEl = document.getElementById("modal-blocked-domains-list");
+  const domCountEl = document.getElementById("modal-blocked-domains-count");
+  const ignListEl = document.getElementById("modal-ignored-jobs-list");
+  const ignCountEl = document.getElementById("modal-ignored-jobs-count");
+
+  try {
+    const [bRes, iRes] = await Promise.all([
+      fetch("/api/blocked-domains"),
+      fetch("/api/jobs/ignored")
+    ]);
+    const bData = bRes.ok ? await bRes.json() : { blocked_domains: [] };
+    const iData = iRes.ok ? await iRes.json() : { ignored_jobs: [] };
+
+    const blocked = bData.blocked_domains || [];
+    const ignored = iData.ignored_jobs || [];
+
+    if (domCountEl) domCountEl.textContent = blocked.length;
+    if (ignCountEl) ignCountEl.textContent = ignored.length;
+
+    if (domListEl) {
+      if (blocked.length === 0) {
+        domListEl.innerHTML = `<div style="color: var(--text-muted); font-size: 12px; padding: 8px 0;">No sites currently blocked. Add one above or click 🚫 in any job row.</div>`;
+      } else {
+        domListEl.innerHTML = blocked.map(b => `
+          <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); padding: 8px 12px; border-radius: 6px;">
+            <div>
+              <div style="font-family: 'Share Tech Mono', monospace; font-size: 13px; color: #ff8888; font-weight: 700;">🌐 ${escapeHtml(b.domain)}</div>
+              ${b.reason ? `<div style="font-size: 11px; color: var(--text-muted);">${escapeHtml(b.reason)}</div>` : ''}
+            </div>
+            <button type="button" class="table-view-btn" onclick="unblockDomain('${escapeHtml(b.domain)}')" style="background: rgba(0, 240, 255, 0.15); border-color: var(--neon-cyan); color: var(--neon-cyan); font-size: 11px; padding: 4px 10px; cursor: pointer;">
+              UNBLOCK
+            </button>
+          </div>
+        `).join("");
+      }
+    }
+
+    if (ignListEl) {
+      if (ignored.length === 0) {
+        ignListEl.innerHTML = `<div style="color: var(--text-muted); font-size: 12px; padding: 8px 0;">No individual jobs currently ignored.</div>`;
+      } else {
+        ignListEl.innerHTML = ignored.map(j => `
+          <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); padding: 8px 12px; border-radius: 6px;">
+            <div style="max-width: 80%;">
+              <div style="font-size: 13px; color: #fff; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(j.title || 'Job Listing')}</div>
+              <div style="font-size: 11px; color: var(--text-muted);">@ ${escapeHtml(j.company || 'Unknown')} • ${escapeHtml(j.reason || 'Blocked')}</div>
+            </div>
+            <button type="button" class="table-view-btn" onclick="unignoreJob('${j.record_id}')" style="background: rgba(0, 240, 255, 0.15); border-color: var(--neon-cyan); color: var(--neon-cyan); font-size: 11px; padding: 4px 10px; cursor: pointer;">
+              RESTORE
+            </button>
+          </div>
+        `).join("");
+      }
+    }
+  } catch(err) {
+    console.error("Error loading blocked domains modal data:", err);
+  }
+};

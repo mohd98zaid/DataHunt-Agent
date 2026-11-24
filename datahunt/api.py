@@ -572,6 +572,13 @@ def get_applications_endpoint():
     from datahunt.db.user_repositories import ApplicationTrackingRepository
     return {"status": "success", "applications": ApplicationTrackingRepository().get_applications()}
 
+@app.get("/api/jobs/ignored")
+def list_ignored_jobs_endpoint():
+    """List all ignored jobs."""
+    from datahunt.db.user_repositories import UserPreferencesRepository
+    user_repo = UserPreferencesRepository()
+    return {"status": "success", "ignored_jobs": user_repo.get_ignored_jobs()}
+
 @app.get("/api/jobs/{record_id}")
 def get_job_detail(record_id: str):
     """Retrieve full job record including complete JD, timestamps, and evidence."""
@@ -879,6 +886,10 @@ class JobActionRequest(BaseModel):
     reason: Optional[str] = "other"
     cover_letter: Optional[str] = ""
 
+class BlockDomainRequest(BaseModel):
+    domain: str
+    reason: Optional[str] = ""
+
 class CompanyResearchRequest(BaseModel):
     company_name: str
     force_refresh: bool = False
@@ -911,19 +922,53 @@ def save_job_endpoint(record_id: str, req: JobActionRequest):
     return {"status": "success", "message": f"Job {record_id} saved.", "record_id": record_id}
 
 @app.post("/api/jobs/{record_id}/ignore")
-def ignore_job_endpoint(record_id: str, req: JobActionRequest):
+def ignore_job_endpoint(record_id: str, req: JobActionRequest = JobActionRequest()):
     """Step 45: Ignore job from recommendations and learn negative preference."""
     from datahunt.db.user_repositories import UserPreferencesRepository
     from datahunt.agents.learning_engine import LearningEngine
 
+    rec = rec_repo.get_record(record_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Job record not found")
+
     user_repo = UserPreferencesRepository()
     user_repo.ignore_job(record_id, reason=req.reason or "other")
 
-    rec = rec_repo.get_record(record_id)
-    if rec and rec.fields:
+    if rec.fields:
         LearningEngine(user_repo).record_ignore(rec.fields, reason=req.reason or "other")
 
     return {"status": "success", "message": f"Job {record_id} ignored.", "record_id": record_id}
+
+@app.post("/api/jobs/{record_id}/unignore")
+def unignore_job_endpoint(record_id: str):
+    """Restore previously ignored job."""
+    from datahunt.db.user_repositories import UserPreferencesRepository
+    user_repo = UserPreferencesRepository()
+    success = user_repo.unignore_job(record_id)
+    return {"status": "success", "unignored": success, "record_id": record_id}
+
+@app.get("/api/blocked-domains")
+def list_blocked_domains_endpoint():
+    """List all user-blocked domains/carrier sites."""
+    from datahunt.db.user_repositories import BlockedDomainsRepository
+    repo = BlockedDomainsRepository()
+    return {"blocked_domains": repo.list_blocked_domains()}
+
+@app.post("/api/blocked-domains")
+def block_domain_endpoint(req: BlockDomainRequest):
+    """Block a carrier site, job board, or domain."""
+    from datahunt.db.user_repositories import BlockedDomainsRepository
+    repo = BlockedDomainsRepository()
+    norm = repo.block_domain(req.domain, reason=req.reason or "")
+    return {"status": "success", "message": f"Domain '{norm}' blocked.", "domain": norm}
+
+@app.delete("/api/blocked-domains/{domain:path}")
+def unblock_domain_endpoint(domain: str):
+    """Unblock a carrier site or domain."""
+    from datahunt.db.user_repositories import BlockedDomainsRepository
+    repo = BlockedDomainsRepository()
+    success = repo.unblock_domain(domain)
+    return {"status": "success", "unblocked": success, "domain": domain}
 
 @app.post("/api/jobs/{record_id}/apply")
 def apply_job_endpoint(record_id: str, req: JobActionRequest):

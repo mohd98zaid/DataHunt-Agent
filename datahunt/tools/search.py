@@ -2162,6 +2162,13 @@ class SearchTool:
     ) -> ToolResult:
         if "max_results" in kwargs:
             limit = kwargs.pop("max_results")
+        try:
+            from datahunt.db.user_repositories import BlockedDomainsRepository
+            persisted_blocked = BlockedDomainsRepository().get_blocked_domain_strings()
+            if persisted_blocked:
+                blocked_domains = list(set((blocked_domains or []) + persisted_blocked))
+        except Exception:
+            pass
         now = time.time()
         allowed_str = ",".join(sorted(allowed_domains or []))
         blocked_str = ",".join(sorted(blocked_domains or []))

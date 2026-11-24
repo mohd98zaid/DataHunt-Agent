@@ -42,6 +42,9 @@
         <button class="cockpit-link-btn" id="open-settings-btn" title="Agent & Pipeline Settings" style="background: rgba(255, 170, 0, 0.12); border-color: #ffaa00; color: #ffaa00; cursor: pointer;">
           <span>⚙️ SETTINGS</span>
         </button>
+        <button class="cockpit-link-btn" id="open-blocked-domains-btn" title="Manage Blocked Job Sites & Ignored Jobs" style="background: rgba(255, 68, 68, 0.12); border-color: #ff4444; color: #ff8888; cursor: pointer;" onclick="openBlockedDomainsModal()">
+          <span>🚫 BLOCKED SITES</span>
+        </button>
         <a href="/" class="cockpit-link-btn" title="Back to Central Agent Hub" style="background: rgba(0, 240, 255, 0.1); border-color: var(--neon-cyan); color: var(--neon-cyan);">
           <span>← AGENT HUB</span>
         </a>
@@ -308,10 +311,17 @@
         </div>
       </div>
 
-      <div class="detail-modal-footer">
+      <div class="detail-modal-footer" style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
         <button class="modal-delete-btn" id="modal-delete-btn" title="Permanently delete job from database">
           <span>🗑️ DELETE RECORD</span>
         </button>
+        <button class="modal-action-btn" id="modal-block-job-btn" title="Block and ignore this specific job listing" style="background: rgba(255, 170, 0, 0.15); border: 1px solid #ffaa00; color: #ffaa00; padding: 0 16px; border-radius: 6px; font-weight: 700; cursor: pointer; height: 42px; display: inline-flex; align-items: center; gap: 6px;">
+          <span>🚫 BLOCK JOB</span>
+        </button>
+        <button class="modal-action-btn" id="modal-block-site-btn" title="Block entire carrier / job site domain" style="background: rgba(255, 68, 68, 0.15); border: 1px solid #ff4444; color: #ff8888; padding: 0 16px; border-radius: 6px; font-weight: 700; cursor: pointer; height: 42px; display: inline-flex; align-items: center; gap: 6px;">
+          <span>🚫 BLOCK SITE</span>
+        </button>
+        <div style="flex: 1;"></div>
         <a href="#" id="modal-direct-apply-link" target="_blank" rel="noopener noreferrer" class="direct-apply-big-btn">
           <span>APPLY DIRECTLY ON ATS PORTAL</span>
           <span>➔</span>
@@ -320,7 +330,62 @@
     </div>
   </div>
 
-  <script src="js/jobs.js?v=11"></script>
+  <!-- Blocked Sites & Ignored Jobs Manager Modal -->
+  <div class="detail-modal-backdrop" id="blocked-domains-modal" style="display: none;">
+    <div class="detail-modal-card glass-panel" style="max-width: 720px; width: 90%; max-height: 85vh; display: flex; flex-direction: column;">
+      <div class="detail-modal-header">
+        <div class="detail-title-wrap">
+          <span class="detail-role-title" style="color: #ff6666;">🚫 BLOCKED JOB SITES & IGNORED JOBS</span>
+          <span class="detail-company-sub">Filter out aggregators, unwanted job boards, or irrelevant positions</span>
+        </div>
+        <button class="close-modal-btn" id="blocked-domains-close-btn" onclick="closeBlockedDomainsModal()">✕</button>
+      </div>
+
+      <div class="detail-modal-body custom-scrollbar" style="padding: 20px; overflow-y: auto;">
+        <!-- Manual Domain Block Form -->
+        <div style="background: rgba(255, 68, 68, 0.08); border: 1px solid rgba(255, 68, 68, 0.3); border-radius: 8px; padding: 14px; margin-bottom: 20px;">
+          <div style="font-size: 11px; font-weight: 700; color: #ff8888; letter-spacing: 1px; margin-bottom: 8px;">
+            BLOCK A JOB BOARD OR CARRIER SITE
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <input type="text" id="manual-block-domain-input" class="tracker-search-input" placeholder="e.g. jo.trabajo.org or https://example.com" style="flex: 1; font-size: 13px;" />
+            <button type="button" class="table-apply-btn" id="manual-block-domain-btn" onclick="submitManualBlockDomain()" style="background: rgba(255, 68, 68, 0.25); border-color: #ff4444; color: #fff; cursor: pointer; white-space: nowrap;">
+              🚫 BLOCK SITE
+            </button>
+          </div>
+          <div style="font-size: 11px; color: var(--text-muted); margin-top: 6px;">
+            Jobs from blocked domains are immediately hidden from the table and skipped during future AI crawls.
+          </div>
+        </div>
+
+        <!-- Blocked Domains Section -->
+        <div style="margin-bottom: 24px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <span style="font-size: 12px; font-weight: 700; color: var(--neon-cyan); letter-spacing: 1px;">
+              BLOCKED DOMAINS (<span id="modal-blocked-domains-count">0</span>)
+            </span>
+          </div>
+          <div id="modal-blocked-domains-list" style="display: flex; flex-direction: column; gap: 8px; max-height: 200px; overflow-y: auto;">
+            <div style="color: var(--text-muted); font-size: 12px; font-style: italic;">Loading blocked domains...</div>
+          </div>
+        </div>
+
+        <!-- Ignored Jobs Section -->
+        <div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <span style="font-size: 12px; font-weight: 700; color: #ffaa00; letter-spacing: 1px;">
+              SPECIFIC IGNORED JOBS (<span id="modal-ignored-jobs-count">0</span>)
+            </span>
+          </div>
+          <div id="modal-ignored-jobs-list" style="display: flex; flex-direction: column; gap: 8px; max-height: 200px; overflow-y: auto;">
+            <div style="color: var(--text-muted); font-size: 12px; font-style: italic;">Loading ignored jobs...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/jobs.js?v=12"></script>
   <script src="js/settings_modal.js?v=3"></script>
 </body>
 </html>

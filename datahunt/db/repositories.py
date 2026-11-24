@@ -630,6 +630,8 @@ class JobTrackingRepository:
     def list_jobs(self, run_id: Optional[str] = None, limit: int = 200, offset: int = 0) -> List[Dict[str, Any]]:
         conn = self.conn_factory()
         try:
+            conn.execute("CREATE TABLE IF NOT EXISTS blocked_domains (domain TEXT PRIMARY KEY, reason TEXT DEFAULT '', blocked_at TEXT NOT NULL);")
+            conn.execute("CREATE TABLE IF NOT EXISTS ignored_jobs (record_id TEXT PRIMARY KEY, reason TEXT DEFAULT '', ignored_at TEXT NOT NULL);")
             # Inner query selects all candidate job records.
             # Outer query deduplicates by (normalized_title, company) using ROW_NUMBER so only the
             # most recent record per (title+company) pair is returned — even if duplicates reached DB.
@@ -648,6 +650,21 @@ class JobTrackingRepository:
                 AND r.verification_status IN ('verified', 'needs_review')
                 AND COALESCE(JSON_EXTRACT(r.fields_json, '$.score_breakdown.title.status'), '') != 'MISMATCH'
                 AND (r.confidence >= 0.5 OR r.confidence IS NULL)
+                AND r.id NOT IN (SELECT record_id FROM ignored_jobs)
+                AND NOT EXISTS (
+                    SELECT 1 FROM ignored_jobs ij
+                    JOIN extracted_records ir ON ij.record_id = ir.id
+                    WHERE LOWER(TRIM(COALESCE(JSON_EXTRACT(r.fields_json, '$.title'), JSON_EXTRACT(r.fields_json, '$.name'), ''))) =
+                          LOWER(TRIM(COALESCE(JSON_EXTRACT(ir.fields_json, '$.title'), JSON_EXTRACT(ir.fields_json, '$.name'), '')))
+                      AND LOWER(TRIM(COALESCE(JSON_EXTRACT(r.fields_json, '$.company'), JSON_EXTRACT(r.fields_json, '$.company_name'), ''))) =
+                          LOWER(TRIM(COALESCE(JSON_EXTRACT(ir.fields_json, '$.company'), JSON_EXTRACT(ir.fields_json, '$.company_name'), '')))
+                )
+                AND NOT EXISTS (
+                    SELECT 1 FROM blocked_domains bd
+                    WHERE r.canonical_url LIKE '%' || bd.domain || '%'
+                       OR (d.domain IS NOT NULL AND d.domain LIKE '%' || bd.domain || '%')
+                       OR JSON_EXTRACT(r.fields_json, '$.application_url') LIKE '%' || bd.domain || '%'
+                )
             """
             # Garbage-title exclusions at SQL level (belt-and-suspenders)
             garbage_filter = """
@@ -764,6 +781,8 @@ class JobTrackingRepository:
         """
         conn = self.conn_factory()
         try:
+            conn.execute("CREATE TABLE IF NOT EXISTS blocked_domains (domain TEXT PRIMARY KEY, reason TEXT DEFAULT '', blocked_at TEXT NOT NULL);")
+            conn.execute("CREATE TABLE IF NOT EXISTS ignored_jobs (record_id TEXT PRIMARY KEY, reason TEXT DEFAULT '', ignored_at TEXT NOT NULL);")
             base_filter = """
                 (
                     r.record_type = 'job_listing'
@@ -778,6 +797,21 @@ class JobTrackingRepository:
                 AND r.verification_status IN ('verified', 'needs_review')
                 AND COALESCE(JSON_EXTRACT(r.fields_json, '$.score_breakdown.title.status'), '') != 'MISMATCH'
                 AND (r.confidence >= 0.5 OR r.confidence IS NULL)
+                AND r.id NOT IN (SELECT record_id FROM ignored_jobs)
+                AND NOT EXISTS (
+                    SELECT 1 FROM ignored_jobs ij
+                    JOIN extracted_records ir ON ij.record_id = ir.id
+                    WHERE LOWER(TRIM(COALESCE(JSON_EXTRACT(r.fields_json, '$.title'), JSON_EXTRACT(r.fields_json, '$.name'), ''))) =
+                          LOWER(TRIM(COALESCE(JSON_EXTRACT(ir.fields_json, '$.title'), JSON_EXTRACT(ir.fields_json, '$.name'), '')))
+                      AND LOWER(TRIM(COALESCE(JSON_EXTRACT(r.fields_json, '$.company'), JSON_EXTRACT(r.fields_json, '$.company_name'), ''))) =
+                          LOWER(TRIM(COALESCE(JSON_EXTRACT(ir.fields_json, '$.company'), JSON_EXTRACT(ir.fields_json, '$.company_name'), '')))
+                )
+                AND NOT EXISTS (
+                    SELECT 1 FROM blocked_domains bd
+                    WHERE r.canonical_url LIKE '%' || bd.domain || '%'
+                       OR (d.domain IS NOT NULL AND d.domain LIKE '%' || bd.domain || '%')
+                       OR JSON_EXTRACT(r.fields_json, '$.application_url') LIKE '%' || bd.domain || '%'
+                )
             """
             garbage_filter = """
                 AND COALESCE(
